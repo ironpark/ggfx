@@ -57,7 +57,6 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/internal/ui"
-	"github.com/hajimehoshi/ebiten/v2/internal/vmguest"
 )
 
 // noReplacement is the sentinel value for [textInputState.ReplacementStartInBytes]
@@ -326,9 +325,6 @@ var theTextInputImpl = textInputImpl{events: &theTextInput.events}
 // backend when running as a VM guest, and the platform implementation
 // otherwise.
 func (t *textInput) backend() textInputBackend {
-	if vmguest.IsGuest() {
-		return &theVMGuestTextInput
-	}
 	return &theTextInputImpl
 }
 

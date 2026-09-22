@@ -219,7 +219,6 @@ type RunOptions struct {
 	InitWindowWidthInDIP     int
 	InitWindowHeightInDIP    int
 	WindowPositionSet        bool
-	VMGuestEndpoint          string
 }
 
 // InitialWindowPosition returns the position to place a window of size (ww, wh) in a monitor of size (mw, mh).

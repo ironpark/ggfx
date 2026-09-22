@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 
 	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
-	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
-	"github.com/hajimehoshi/ebiten/v2/internal/vmguest"
 )
 
 // uiBackend is the platform UI implementation for the desktop build.
@@ -129,11 +127,6 @@ func (u *UserInterface) init() error {
 }
 
 func (u *UserInterface) Run(game Game, options *RunOptions) error {
-	b := maybeNewVMGuestBackend(u, options)
-	vmguest.MarkGuest(b != nil)
-	if b != nil {
-		return b.run(game, options)
-	}
 	if b := maybeNewGLFWBackend(u); b != nil {
 		return b.run(game, options)
 	}
@@ -143,22 +136,6 @@ func (u *UserInterface) Run(game Game, options *RunOptions) error {
 		return fmt.Errorf("ui: no window system is available: %w", err)
 	}
 	return fb.run(game, options)
-}
-
-// maybeNewVMGuestBackend returns a remote (guest) backend when a host endpoint is configured, or nil
-// to keep the default backend.
-func maybeNewVMGuestBackend(u *UserInterface, options *RunOptions) uiBackend {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
-	ep := options.VMGuestEndpoint
-	if ep == "" {
-		ep = vmGuestEndpointFromEnv()
-	}
-	if ep == "" {
-		return nil
-	}
-	return newRemoteBackend(u, ep)
 }
 
 // setRunningBackend publishes the backend that serves the running game, or
@@ -245,10 +222,6 @@ func (u *UserInterface) IsFocused() bool {
 }
 
 func (u *UserInterface) IsFullscreen() bool {
-	if microsoftgdk.IsXbox() {
-		return false
-	}
-
 	if u.isTerminated() {
 		return false
 	}
@@ -260,10 +233,6 @@ func (u *UserInterface) IsFullscreen() bool {
 }
 
 func (u *UserInterface) SetFullscreen(fullscreen bool) {
-	if microsoftgdk.IsXbox() {
-		return
-	}
-
 	if u.isTerminated() {
 		return
 	}
@@ -351,9 +320,6 @@ func (u *UserInterface) SetCursorShape(shape CursorShape) {
 }
 
 func (u *UserInterface) Window() Window {
-	if microsoftgdk.IsXbox() {
-		return &nullWindow{}
-	}
 	return &u.desktopWindow
 }
 

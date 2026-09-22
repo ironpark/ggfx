@@ -36,7 +36,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
 	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/opengl"
 	"github.com/hajimehoshi/ebiten/v2/internal/hook"
-	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
 	"github.com/hajimehoshi/ebiten/v2/internal/thread"
 	"github.com/hajimehoshi/ebiten/v2/internal/windowsystem"
 )
@@ -292,10 +291,6 @@ func (u *glfwBackend) Monitor() *Monitor {
 
 // setWindowMonitor must be called on the main thread.
 func (u *glfwBackend) setWindowMonitor(monitor *Monitor) error {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
-
 	// Ignore if it is the same monitor.
 	m, err := u.currentMonitor()
 	if err != nil {
@@ -1583,11 +1578,6 @@ func windowSizeToRestore(capturedWidth, capturedHeight int, capturedMonitor *Mon
 
 // setWindowSize must be called from the main thread.
 func (u *glfwBackend) setWindowSizeInDIP(width, height int, callSetSize bool) error {
-	if microsoftgdk.IsXbox() {
-		// Do nothing. The size is always fixed.
-		return nil
-	}
-
 	width, height = u.desktopWindow.adjustWindowSizeBasedOnSizeLimitsInDIP(width, height)
 	m, err := u.minimumWindowWidth()
 	if err != nil {
@@ -1990,10 +1980,6 @@ func (u *glfwBackend) restoreWindow() error {
 
 // setWindowVisible must be called from the main thread.
 func (u *glfwBackend) setWindowVisible(visible bool) error {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
-
 	if visible {
 		return u.window.Show()
 	}
@@ -2002,10 +1988,6 @@ func (u *glfwBackend) setWindowVisible(visible bool) error {
 
 // setWindowDecorated must be called from the main thread.
 func (u *glfwBackend) setWindowDecorated(decorated bool) error {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
-
 	v := glfw.False
 	if decorated {
 		v = glfw.True
@@ -2026,10 +2008,6 @@ func (u *glfwBackend) setWindowDecorated(decorated bool) error {
 
 // setWindowFloating must be called from the main thread.
 func (u *glfwBackend) setWindowFloating(floating bool) error {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
-
 	v := glfw.False
 	if floating {
 		v = glfw.True
@@ -2043,10 +2021,6 @@ func (u *glfwBackend) setWindowFloating(floating bool) error {
 
 // setWindowResizingMode must be called from the main thread.
 func (u *glfwBackend) setWindowResizingMode(mode WindowResizingMode) error {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
-
 	v := glfw.False
 	if mode == WindowResizingModeEnabled {
 		v = glfw.True
@@ -2096,11 +2070,6 @@ func windowPositionInDIP(windowX, windowY int, xInDIP, yInDIP int, monitor *Moni
 //
 // setWindowPositionInDIP must be called from the main thread.
 func (u *glfwBackend) setWindowPositionInDIP(x, y int, monitor *Monitor, callSetPos bool) error {
-	if microsoftgdk.IsXbox() {
-		// Do nothing. The position is always fixed.
-		return nil
-	}
-
 	u.windowXInDIP = x
 	u.windowYInDIP = y
 
@@ -2151,10 +2120,6 @@ func (u *glfwBackend) isWindowMaximized() (bool, error) {
 
 // setWindowMousePassthrough must be called from the main thread.
 func (u *glfwBackend) setWindowMousePassthrough(enabled bool) error {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
-
 	v := glfw.False
 	if enabled {
 		v = glfw.True
