@@ -356,6 +356,11 @@ func (u *UserInterface) pumpEvents() error {
 			return glfw.PollEvents()
 		}
 	}
+	// A gamepad's buttons and axes are readable only by polling, so an app that asked for them
+	// cannot sleep until the window system has something to say.
+	if d := u.gamepadWaitTimeout(); d > 0 {
+		return glfw.WaitEventsTimeout(d)
+	}
 	return glfw.WaitEvents()
 }
 
@@ -639,14 +644,16 @@ func (u *UserInterface) updateFrame() error {
 			return
 		}
 
-		nativeWindow, e := u.windows[0].nativeWindow()
-		if e != nil {
-			err = e
-			return
-		}
-		if e := gamepad.Update(nativeWindow, nil); e != nil {
-			err = e
-			return
+		if u.gamepads != nil {
+			nativeWindow, e := u.windows[0].nativeWindow()
+			if e != nil {
+				err = e
+				return
+			}
+			if e := gamepad.Update(nativeWindow, nil); e != nil {
+				err = e
+				return
+			}
 		}
 	}); err != nil {
 		return err
@@ -662,6 +669,7 @@ func (u *UserInterface) updateFrame() error {
 	// monitor, keep expiring. The before-update hooks, like the text input's, run for the same
 	// reason.
 	u.incrementTick()
+	u.emitGamepadEvents()
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}

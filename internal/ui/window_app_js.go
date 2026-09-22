@@ -36,6 +36,9 @@ var _ AppWindow = (*jsWindow)(nil)
 func (u *UserInterface) RunApp(app App, options *RunOptions) error {
 	u.app = app
 	u.runOptions = options
+	if options.Gamepads {
+		u.gamepads = &gamepadTracker{}
+	}
 	return u.runLoop(options, func() error {
 		if err := app.HandleEvent(StartEvent{}); err != nil {
 			return err

@@ -166,6 +166,12 @@ Events. Every event but `StartEvent` has a `Window *Window` field.
 | `TouchEvent` | `ID TouchID`, `Phase`, `X, Y` | browser only for now |
 | `DropEvent` | `Files fs.FS` | |
 | `DragEvent` | `Phase DragPhase`, `X, Y float64`, `Files fs.FS` | macOS/Windows file drag entered, moved, exited or ended; Files can be nil |
+| `GamepadConnectEvent` | `ID`, `Name`, `SDLID string`, `Standard bool` | a gamepad appeared; no `Window` |
+| `GamepadDisconnectEvent` | `ID` | a gamepad went away; no `Window` |
+| `GamepadButtonEvent` | `ID`, `Button`, `Pressed bool` | a raw button changed; hats follow the real buttons |
+| `GamepadAxisEvent` | `ID`, `Axis`, `Value float64` | a raw axis moved |
+| `GamepadStandardButtonEvent` | `ID`, `Button`, `Pressed bool`, `Value float64` | a standard-layout button changed |
+| `GamepadStandardAxisEvent` | `ID`, `Axis`, `Value float64` | a standard-layout axis moved |
 
 Coordinates in input events are DIP relative to the window's client area;
 `FrameEvent.Screen` is in physical pixels and `Scale` converts between them.
@@ -213,6 +219,23 @@ selection conversion, Korean commit/next-mark ordering, replacement ranges,
 caret rectangle size, drag phases/coordinates and accessibility attachment.
 Use `-windows 1` with OpenGL or DirectX. The smoke injection is macOS-only.
 
+### Gamepads
+
+Gamepads are off unless `RunOptions.Gamepads` is set, because they cost an idle application its
+sleep. Buttons and axes can only be read by polling, so the loop wakes every 1/120 s while a
+gamepad is connected, and once a second to notice one arriving. Without the option no gamepad is
+polled and the loop sleeps until the window system wakes it.
+
+A gamepad belongs to the process, not to a window, so its events carry no `Window`. Each poll is
+compared with the previous one and only the differences are reported; a gamepad's first poll is its
+resting state and reports nothing beyond the connection. Axis moves below 1/64 are dropped, which
+is what keeps a resting stick from waking the loop forever. A gamepad with a standard layout gets
+both the raw and the standard events.
+
+macOS registers IOKit device callbacks and Linux watches the input directory with inotify, so on
+those platforms the one-second detection wake could be replaced by `PostEmptyEvent` from the
+backend. It is not wired yet.
+
 ## What the event path does not do
 
 - No ticks, no `TPS`, no `inpututil`. `KeyEvent.Repeat` replaces
@@ -222,7 +245,6 @@ Use `-windows 1` with OpenGL or DirectX. The smoke injection is macOS-only.
 - No composition events on X11 or the browser yet. Their `exp/textinput`
   backends remain available; macOS and Windows have per-window CompositionEvent.
 - One window on OpenGL, WebGL and DirectX.
-- Gamepads are not delivered as events.
 - `Monitor()` on the root package still means the primary window's monitor;
   use `Window.Monitor()`.
 

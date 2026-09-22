@@ -129,6 +129,13 @@ type RunOptions struct {
 	// The default (zero) value is false, which means that the press-and-hold feature is disabled.
 	ApplePressAndHoldEnabled bool
 
+	// Gamepads makes the loop poll gamepads and deliver them as events. Gamepad buttons and
+	// axes can only be polled, so an application that asks for them keeps the loop waking at a
+	// fixed interval instead of sleeping until the window system has something to report.
+	//
+	// The default (zero) value is false: no gamepad is reported.
+	Gamepads bool
+
 	// X11ClassName is a class name in the ICCCM WM_CLASS window property.
 	X11ClassName string
 
@@ -167,6 +174,7 @@ func toUIRunOptions(options *RunOptions) *ui.RunOptions {
 	}
 
 	return &ui.RunOptions{
+		Gamepads:                 options.Gamepads,
 		GraphicsLibrary:          ui.GraphicsLibrary(options.GraphicsLibrary),
 		InitUnfocused:            options.InitUnfocused,
 		ScreenTransparent:        options.ScreenTransparent,

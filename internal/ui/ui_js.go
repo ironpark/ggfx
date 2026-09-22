@@ -340,8 +340,10 @@ func (u *UserInterface) updateImpl(force bool) error {
 		return nil
 	}
 
-	if err := gamepad.Update(0, nil); err != nil {
-		return err
+	if u.gamepads != nil {
+		if err := gamepad.Update(0, nil); err != nil {
+			return err
+		}
 	}
 
 	// TODO: If DeviceScaleFactor changes, call updateScreenSize.
@@ -352,6 +354,7 @@ func (u *UserInterface) updateImpl(force bool) error {
 		return RegularTermination
 	}
 	u.incrementTick()
+	u.emitGamepadEvents()
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}

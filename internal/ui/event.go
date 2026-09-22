@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/gamepad"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
@@ -223,6 +225,61 @@ type DropEvent struct {
 	Window AppWindow
 	Files  fs.FS
 }
+
+// Gamepad events are not window events: a gamepad belongs to the process, so they carry no
+// Window. They are emitted only when RunOptions.Gamepads is set.
+
+// GamepadConnectEvent reports a gamepad that appeared. Standard reports whether the gamepad has a
+// standard layout, and so whether the standard events are emitted for it.
+type GamepadConnectEvent struct {
+	ID       gamepad.ID
+	Name     string
+	SDLID    string
+	Standard bool
+}
+
+// GamepadDisconnectEvent reports a gamepad that went away.
+type GamepadDisconnectEvent struct {
+	ID gamepad.ID
+}
+
+// GamepadButtonEvent reports one raw button changing. Button indices at and above the real button
+// count are the hats' four directions.
+type GamepadButtonEvent struct {
+	ID      gamepad.ID
+	Button  int
+	Pressed bool
+}
+
+// GamepadAxisEvent reports one raw axis moving, in -1..1.
+type GamepadAxisEvent struct {
+	ID    gamepad.ID
+	Axis  int
+	Value float64
+}
+
+// GamepadStandardButtonEvent reports one standard-layout button changing. Value is 0..1 for an
+// analog button, such as a trigger.
+type GamepadStandardButtonEvent struct {
+	ID      gamepad.ID
+	Button  gamepaddb.StandardButton
+	Pressed bool
+	Value   float64
+}
+
+// GamepadStandardAxisEvent reports one standard-layout axis moving, in -1..1.
+type GamepadStandardAxisEvent struct {
+	ID    gamepad.ID
+	Axis  gamepaddb.StandardAxis
+	Value float64
+}
+
+func (GamepadConnectEvent) isEvent()        {}
+func (GamepadDisconnectEvent) isEvent()     {}
+func (GamepadButtonEvent) isEvent()         {}
+func (GamepadAxisEvent) isEvent()           {}
+func (GamepadStandardButtonEvent) isEvent() {}
+func (GamepadStandardAxisEvent) isEvent()   {}
 
 func (StartEvent) isEvent()       {}
 func (FrameEvent) isEvent()       {}

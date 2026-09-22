@@ -43,6 +43,9 @@ func (u *UserInterface) RunApp(app App, options *RunOptions) error {
 	}
 	u.app = app
 	u.runOptions = options
+	if options.Gamepads {
+		u.gamepads = &gamepadTracker{}
+	}
 	return u.runLoop(options, func() error {
 		return u.initGraphicsOnMainThread(options)
 	}, func() error {

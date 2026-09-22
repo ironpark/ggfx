@@ -114,12 +114,81 @@ func eventFromUI(ev ui.Event) Event {
 		return TouchEvent{Window: windowFromUI(ev.Window), ID: TouchID(ev.ID), Phase: TouchPhase(ev.Phase), X: ev.X, Y: ev.Y}
 	case ui.DropEvent:
 		return DropEvent{Window: windowFromUI(ev.Window), Files: ev.Files}
+	case ui.GamepadConnectEvent:
+		return GamepadConnectEvent{ID: GamepadID(ev.ID), Name: ev.Name, SDLID: ev.SDLID, Standard: ev.Standard}
+	case ui.GamepadDisconnectEvent:
+		return GamepadDisconnectEvent{ID: GamepadID(ev.ID)}
+	case ui.GamepadButtonEvent:
+		return GamepadButtonEvent{ID: GamepadID(ev.ID), Button: GamepadButton(ev.Button), Pressed: ev.Pressed}
+	case ui.GamepadAxisEvent:
+		return GamepadAxisEvent{ID: GamepadID(ev.ID), Axis: GamepadAxisType(ev.Axis), Value: ev.Value}
+	case ui.GamepadStandardButtonEvent:
+		return GamepadStandardButtonEvent{ID: GamepadID(ev.ID), Button: StandardGamepadButton(ev.Button), Pressed: ev.Pressed, Value: ev.Value}
+	case ui.GamepadStandardAxisEvent:
+		return GamepadStandardAxisEvent{ID: GamepadID(ev.ID), Axis: StandardGamepadAxis(ev.Axis), Value: ev.Value}
 	default:
 		panic("ggfx: unknown ui event")
 	}
 }
 
-// Event is what a Handler receives. Every event but StartEvent belongs to a Window.
+// Gamepad events are delivered only when [RunOptions.Gamepads] is set. A gamepad belongs to the
+// process rather than to a window, so they carry no Window.
+
+// GamepadConnectEvent reports a gamepad that appeared. Standard reports whether it has a standard
+// layout, and so whether GamepadStandardButtonEvent and GamepadStandardAxisEvent are delivered for
+// it.
+type GamepadConnectEvent struct {
+	ID       GamepadID
+	Name     string
+	SDLID    string
+	Standard bool
+}
+
+// GamepadDisconnectEvent reports a gamepad that went away.
+type GamepadDisconnectEvent struct {
+	ID GamepadID
+}
+
+// GamepadButtonEvent reports one of a gamepad's raw buttons changing. Buttons at and above the real
+// button count are the hats' four directions.
+type GamepadButtonEvent struct {
+	ID      GamepadID
+	Button  GamepadButton
+	Pressed bool
+}
+
+// GamepadAxisEvent reports one of a gamepad's raw axes moving, in -1..1.
+type GamepadAxisEvent struct {
+	ID    GamepadID
+	Axis  GamepadAxisType
+	Value float64
+}
+
+// GamepadStandardButtonEvent reports a standard-layout button changing. Value is 0..1 for an analog
+// button such as a trigger, and Pressed is whether it is above zero.
+type GamepadStandardButtonEvent struct {
+	ID      GamepadID
+	Button  StandardGamepadButton
+	Pressed bool
+	Value   float64
+}
+
+// GamepadStandardAxisEvent reports a standard-layout axis moving, in -1..1.
+type GamepadStandardAxisEvent struct {
+	ID    GamepadID
+	Axis  StandardGamepadAxis
+	Value float64
+}
+
+func (GamepadConnectEvent) isEvent()        {}
+func (GamepadDisconnectEvent) isEvent()     {}
+func (GamepadButtonEvent) isEvent()         {}
+func (GamepadAxisEvent) isEvent()           {}
+func (GamepadStandardButtonEvent) isEvent() {}
+func (GamepadStandardAxisEvent) isEvent()   {}
+
+// Event is what a Handler receives. Every event but StartEvent and the gamepad events belongs to a
+// Window.
 type Event interface {
 	isEvent()
 }

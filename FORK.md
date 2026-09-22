@@ -128,7 +128,10 @@ WebGL feels.
 - Runtime validation of Windows native hooks (OLE drag-over, IMM composition,
   WM_GETOBJECT); they are implemented and cross-built. macOS native hooks have
   a two-window smoke test in `examples/nativehooks`.
-- Deciding whether gamepad support stays.
+- Waking the loop from the macOS and Linux gamepad connection callbacks, instead
+  of the one-second detection poll (`docs/window.md`).
+- Removing the polling input API (`input.go`, `inpututil`, `internal/inputstate`)
+  now that gamepads are events and nothing fills the input state.
 - The `!android && !ios && !js && !nintendosdk && !playstation5` build
   constraint is still spelled out across `internal/ui`, where `!js` would do.
 - The deprecated v2.1 key aliases (`KeyDown`, `Key0`, ...) that `genkeys.go`
