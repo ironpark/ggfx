@@ -122,7 +122,6 @@ type glfwBackend struct {
 
 	fpsModeInited bool
 
-	input         glfwInput
 	backendWindow glfwWindow
 
 	closeCallback                  glfw.CloseCallback
@@ -171,7 +170,6 @@ func newGLFWBackend(u *UserInterface) *glfwBackend {
 	}
 	b.windowToRestore.pos = image.Pt(invalidPos, invalidPos)
 	b.windowToRestore.size = image.Pt(invalidSize, invalidSize)
-	b.input.clearSavedCursorPos()
 	b.backendWindow.ui = b
 	return b
 }
@@ -621,8 +619,6 @@ func (u *glfwBackend) createWindow() error {
 func (u *glfwBackend) registerWindowCloseCallback() error {
 	if u.closeCallback == nil {
 		u.closeCallback = func(_ *glfw.Window) {
-			u.input.setWindowBeingClosed()
-
 			if aw := u.appWindow(); aw != nil {
 				// The app decides: the window closes after the CloseEvent unless it is kept open.
 				u.pushEvent(CloseEvent{Window: aw})
@@ -820,7 +816,6 @@ func (u *glfwBackend) registerDropCallback() error {
 			if aw := u.appWindow(); aw != nil {
 				u.pushEvent(DropEvent{Window: aw, Files: fs})
 			}
-			u.input.setDroppedFiles(fs)
 		}
 	}
 	if _, err := u.window.SetDropCallback(u.dropCallback); err != nil {
@@ -1234,14 +1229,6 @@ func (u *glfwBackend) setFullscreen(fullscreen bool) error {
 		return nil
 	}
 
-	im, err := u.window.GetInputMode(glfw.CursorMode)
-	if err != nil {
-		return err
-	}
-	if im == glfw.CursorDisabled {
-		u.input.saveCursorPos()
-	}
-
 	// Enter the fullscreen.
 	if fullscreen {
 		if err := u.disableWindowSizeLimits(); err != nil {
@@ -1438,10 +1425,6 @@ func (u *glfwBackend) currentMonitorImpl() (*Monitor, error) {
 	// The primiary monitor might be missing even after the initialization (#3094, #3241).
 	// The reason is still unknown. As a workaround, return the initial monitor.
 	return u.getInitMonitor(), nil
-}
-
-func (u *glfwBackend) readInputState(inputState *InputState) {
-	u.input.read(inputState)
 }
 
 func (u *glfwBackend) Window() backendWindow {

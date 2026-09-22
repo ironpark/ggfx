@@ -323,47 +323,6 @@ var (
 	sel_windowWillExitFullScreen      = objc.RegisterName("windowWillExitFullScreen:")
 )
 
-// syncModKeysFromOS reconciles modifier key state to the current OS state.
-// On macOS some system flows (the screenshot tool's Cmd+Shift+4, and others)
-// absorb modifier key-up events globally without changing window focus, so the
-// matching releases never reach the app. Polling +[NSEvent modifierFlags] each
-// tick ensures stuck modifiers eventually clear. Must be called on the main
-// thread.
-func (u *glfwBackend) syncModKeysFromOS() {
-	flags := objc.Send[uint](objc.ID(class_NSEvent), sel_modifierFlags)
-	const (
-		nsEventModifierFlagShift   = 1 << 17
-		nsEventModifierFlagControl = 1 << 18
-		nsEventModifierFlagOption  = 1 << 19
-		nsEventModifierFlagCommand = 1 << 20
-	)
-	var mods glfw.ModifierKey
-	if flags&nsEventModifierFlagShift != 0 {
-		mods |= glfw.ModShift
-	}
-	if flags&nsEventModifierFlagControl != 0 {
-		mods |= glfw.ModControl
-	}
-	if flags&nsEventModifierFlagOption != 0 {
-		mods |= glfw.ModAlt
-	}
-	if flags&nsEventModifierFlagCommand != 0 {
-		mods |= glfw.ModSuper
-	}
-	u.input.syncModKeys(mods, u.InputTime())
-}
-
-// syncLockKeysFromOS updates the lock key state to the current OS state.
-// Must be called on the main thread.
-func (u *glfwBackend) syncLockKeysFromOS() {
-	flags := objc.Send[uint](objc.ID(class_NSEvent), sel_modifierFlags)
-	const nsEventModifierFlagCapsLock = 1 << 16
-
-	caps := NewLockKeyStateFromBool(flags&nsEventModifierFlagCapsLock != 0)
-	// macOS has no Num Lock: the numeric keypad always produces digits.
-	u.input.setLockKeys(caps, LockKeyStateOn)
-}
-
 func currentMouseLocation() (x, y int) {
 	point := objc.Send[cocoa.NSPoint](objc.ID(class_NSEvent), sel_mouseLocation)
 

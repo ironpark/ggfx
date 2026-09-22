@@ -313,25 +313,3 @@ func (u *glfwBackend) setWindowColorModeImpl(mode colormode.ColorMode) error {
 	x11SetWindowThemeVariant(display, window, themeVariant)
 	return nil
 }
-
-func (u *glfwBackend) syncModKeysFromOS() {}
-
-// syncLockKeysFromOS updates the lock key state to the current OS state.
-// Must be called on the main thread.
-func (u *glfwBackend) syncLockKeysFromOS() {
-	if !ensureX11() {
-		return
-	}
-	display, err := glfw.GetX11Display()
-	if err != nil || display == 0 {
-		return
-	}
-	_, _, mask, ok := x11QueryPointer(display)
-	if !ok {
-		return
-	}
-
-	caps := NewLockKeyStateFromBool(mask&xLockMask != 0)
-	num := NewLockKeyStateFromBool(mask&xMod2Mask != 0)
-	u.input.setLockKeys(caps, num)
-}

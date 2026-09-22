@@ -356,19 +356,3 @@ func (u *glfwBackend) setWindowColorModeImpl(mode colormode.ColorMode) error {
 
 	return nil
 }
-
-func (u *glfwBackend) syncModKeysFromOS() {}
-
-// syncLockKeysFromOS updates the lock key state to the current OS state.
-// Must be called on the main thread.
-func (u *glfwBackend) syncLockKeysFromOS() {
-	if microsoftgdk.IsXbox() {
-		return
-	}
-
-	// The low-order bit of GetKeyState is the toggle state.
-	caps := _GetKeyState(_VK_CAPITAL)&1 != 0
-	num := _GetKeyState(_VK_NUMLOCK)&1 != 0
-
-	u.input.setLockKeys(NewLockKeyStateFromBool(caps), NewLockKeyStateFromBool(num))
-}

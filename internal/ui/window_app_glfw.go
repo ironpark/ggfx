@@ -112,7 +112,6 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 	}
 	b.windowToRestore.pos = image.Pt(invalidPos, invalidPos)
 	b.windowToRestore.size = image.Pt(invalidSize, invalidSize)
-	b.input.clearSavedCursorPos()
 	b.backendWindow.ui = b
 	settings.backend.Store(b)
 

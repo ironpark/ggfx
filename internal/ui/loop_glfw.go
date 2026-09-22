@@ -484,9 +484,6 @@ func (u *glfwBackend) updateWindow() (outsideWidth, outsideHeight float64, scree
 		}
 	}
 
-	u.syncModKeysFromOS()
-	u.syncLockKeysFromOS()
-
 	return u.layoutSizes()
 }
 
@@ -634,15 +631,6 @@ func (u *UserInterface) updateFrame() error {
 				monitorChanged = true
 			}
 			w.lastFrameMonitor = m
-
-			// Pre-fetch cursor position to avoid a second mainThread.Call round-trip in
-			// updateInputStateForFrame.
-			cx, cy, e := w.window.GetCursorPos()
-			if e != nil {
-				err = e
-				return
-			}
-			w.input.setRawCursorPos(cx, cy)
 
 			frames = append(frames, windowFrame{
 				window:            w,

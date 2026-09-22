@@ -30,8 +30,6 @@ import (
 // userInterfaceImpl during its initialization. All the methods except run
 // are called only while the game runs.
 type uiBackend interface {
-	readInputState(inputState *InputState)
-	updateInputStateForFrame(deviceScaleFactor float64) error
 	updateIconIfNeeded() error
 	IsFocused() bool
 	IsFullscreen() bool
@@ -212,14 +210,6 @@ func (u *UserInterface) isRunnableOnUnfocused() bool {
 
 func (u *UserInterface) setRunnableOnUnfocused(runnableOnUnfocused bool) {
 	u.runnableOnUnfocused.Store(runnableOnUnfocused)
-}
-
-func (u *UserInterface) readInputState(inputState *InputState) {
-	u.runningBackend().readInputState(inputState)
-}
-
-func (u *UserInterface) updateInputStateForFrame(deviceScaleFactor float64) error {
-	return u.runningBackend().updateInputStateForFrame(deviceScaleFactor)
 }
 
 func (u *UserInterface) updateIconIfNeeded() error {

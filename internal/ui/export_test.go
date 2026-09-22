@@ -20,22 +20,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
-func (i *InputState) SetKeyPressed(key Key, t InputTime) {
-	i.setKeyPressed(key, t)
-}
-
-func (i *InputState) SetKeyReleased(key Key, t InputTime) {
-	i.setKeyReleased(key, t)
-}
-
-func (i *InputState) SetMouseButtonPressed(button MouseButton, t InputTime) {
-	i.setMouseButtonPressed(button, t)
-}
-
-func (i *InputState) SetMouseButtonReleased(button MouseButton, t InputTime) {
-	i.setMouseButtonReleased(button, t)
-}
-
 // VsyncIgnoredForTest reports whether the given successive frame times, measured on a display with
 // the given refresh interval, make the loop pace itself instead of relying on the vsync.
 func VsyncIgnoredForTest(frameTimes []time.Duration, refreshInterval time.Duration) bool {

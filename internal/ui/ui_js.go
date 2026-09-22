@@ -16,7 +16,6 @@ package ui
 
 import (
 	"errors"
-	"math"
 	"sync"
 	"sync/atomic"
 	"syscall/js"
@@ -100,21 +99,9 @@ type userInterfaceImpl struct {
 	lastCaptureExitTime time.Time
 	hiDPIEnabled        bool
 
-	context             frameDriver
-	surface             graphicsdriver.Surface
-	closeRequested      atomic.Bool
-	inputState          InputState
-	cursorXInClient     float64
-	cursorYInClient     float64
-	origCursorXInClient float64
-	origCursorYInClient float64
-	touchesInClient     []touchInClient
-
-	savedCursorX              float64
-	savedCursorY              float64
-	savedOutsideWidth         float64
-	savedOutsideHeight        float64
-	outsideSizeUnchangedCount int
+	context        frameDriver
+	surface        graphicsdriver.Surface
+	closeRequested atomic.Bool
 
 	keyboardLayoutMap js.Value
 
@@ -147,10 +134,6 @@ func (u *UserInterface) SetFullscreen(fullscreen bool) {
 	}
 	if fullscreen == u.IsFullscreen() {
 		return
-	}
-
-	if u.cursorMode == CursorModeCaptured {
-		u.saveCursorPosition()
 	}
 
 	if fullscreen {
@@ -492,8 +475,6 @@ func (u *UserInterface) loopFrames() error {
 func (u *UserInterface) init() error {
 	u.userInterfaceImpl = userInterfaceImpl{
 		runnableOnUnfocused: true,
-		savedCursorX:        math.NaN(),
-		savedCursorY:        math.NaN(),
 		hiDPIEnabled:        true,
 	}
 
@@ -561,7 +542,6 @@ func (u *UserInterface) init() error {
 		if u.cursorMode == CursorModeCaptured {
 			u.recoverCursorMode()
 		}
-		u.recoverCursorPosition()
 		return nil
 	}))
 	document.Call("addEventListener", "pointerlockerror", js.FuncOf(func(this js.Value, args []js.Value) any {
@@ -569,7 +549,6 @@ func (u *UserInterface) init() error {
 		if u.cursorMode == CursorModeCaptured {
 			u.recoverCursorMode()
 		}
-		u.recoverCursorPosition()
 		return nil
 	}))
 	document.Call("addEventListener", "fullscreenerror", js.FuncOf(func(this js.Value, args []js.Value) any {
@@ -780,7 +759,6 @@ func (u *UserInterface) setCanvasEventHandlers(v js.Value) {
 		return nil
 	}))
 	v.Call("addEventListener", "blur", js.FuncOf(func(this js.Value, args []js.Value) any {
-		u.inputState.releaseAllButtons(u.InputTime())
 		u.pushFocusEvent(false)
 		return nil
 	}))
@@ -805,7 +783,6 @@ func (u *UserInterface) appendDroppedFiles(data js.Value) {
 			u.setError(err)
 			return
 		}
-		u.inputState.DroppedFiles = fs
 		if aw := u.appWindow(); aw != nil {
 			u.pushEvent(DropEvent{Window: aw, Files: fs})
 			u.scheduleRendering()
@@ -906,11 +883,6 @@ func (u *UserInterface) updateScreenSize() {
 		canvas.Set("width", bw)
 		canvas.Set("height", bh)
 	}
-}
-
-func (u *UserInterface) readInputState(inputState *InputState) {
-	u.inputState.copyAndReset(inputState)
-	u.keyboardLayoutMap = js.Value{}
 }
 
 func (u *UserInterface) primaryFrameDriver() frameDriver {

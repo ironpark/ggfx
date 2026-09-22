@@ -56,6 +56,18 @@ monitor and window APIs. Everything outside that was dropped.
   functions, `DroppedFiles`, `inpututil` and `internal/inputstate`. Input
   arrives as events. What is left in `input.go` asks what a device is, not what
   it is doing. `exp/textinput`'s console backend went with the consoles.
+- `internal/ui.InputState` and everything that filled it: `glfwInput`, the
+  browser's `inputState`, `readInputState`, `updateInputStateForFrame`,
+  `InputTime`, `LockKeyState` and the per-backend `syncModKeysFromOS` and
+  `syncLockKeysFromOS`. Its only reader went with the Game frame driver, so
+  every write had been unobservable since. Three things went with it that had
+  therefore already stopped working, and are gaps rather than removals:
+  Caps/Num lock state, which no event carries; the cursor position restored
+  across a fullscreen transition with a disabled cursor; and the browser's
+  accumulated pointer-lock cursor movement, so a captured cursor there reports
+  the frozen `clientX`. The desktop frame loop also stopped asking the main
+  thread for the cursor position once per window per frame to feed the dead
+  path.
 - `audio`, `mobile`, `cmd` (ebitenmobile), `examples`, `misc`, `skills`,
   `ebitenutil`, `colorm`, old `text` v1, `vibrate`.
 - The deprecated color matrix and composite mode: `ColorM`, `ColorMDim`,
@@ -141,8 +153,6 @@ WebGL feels.
   a two-window smoke test in `examples/nativehooks`.
 - Waking the loop from the macOS and Linux gamepad connection callbacks, instead
   of the one-second detection poll (`docs/window.md`).
-- `internal/ui`'s `InputState` and the per-backend `readInputState` are now
-  unreachable; removing them touches the X11 and browser input files.
 - `RunOptions.ScreenTransparent` and `graphicsdriver.SetTransparent` are a
   process-wide knob for something every retained driver decides per surface, so
   `NewWindow` has to reject a transparent window when they disagree. The deeper
