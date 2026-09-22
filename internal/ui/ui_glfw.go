@@ -24,18 +24,14 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/ironpark/ggfx/internal/clock"
-	"github.com/ironpark/ggfx/internal/colormode"
 	"github.com/ironpark/ggfx/internal/file"
-	"github.com/ironpark/ggfx/internal/gamepad"
 	"github.com/ironpark/ggfx/internal/glfw"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
-	"github.com/ironpark/ggfx/internal/hook"
-	"github.com/ironpark/ggfx/internal/thread"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/windowsystem"
 )
 
@@ -52,10 +48,33 @@ func driverCursorModeToGLFWCursorMode(mode CursorMode) int {
 	}
 }
 
+// glfwBackend is one GLFW window: its handle, presentation surface, frame driver, input recorder and
+// the bookkeeping of its size, position and state. The process-level state (GLFW itself, the main
+// thread, the graphics driver, the loop) is on UserInterface.
 type glfwBackend struct {
 	*UserInterface
 
 	window *glfw.Window
+
+	// desktopWindow holds the settings of this window. For the primary window it is the
+	// settings on UserInterface, which can be set before the window exists.
+	desktopWindow *desktopWindow
+
+	// cursorShapeStore is where the cursor shape of this window is kept. For the primary window
+	// it is the process-level setting on UserInterface.
+	cursorShapeStore *atomic.Int32
+
+	// surface is the driver's presentation target for this window.
+	surface graphicsdriver.Surface
+
+	// context drives the frames of this window.
+	context frameDriver
+
+	// closed reports whether the window was destroyed.
+	closed bool
+
+	// primary reports whether this is the window that the process-level settings address.
+	primary bool
 
 	lastDeviceScaleFactor float64
 
@@ -67,14 +86,6 @@ type glfwBackend struct {
 	// lastFrameMonitor is the monitor the game was presented on at the previous frame.
 	// lastFrameMonitor must be accessed from the main thread.
 	lastFrameMonitor *Monitor
-
-	// pollingEvents reports whether the main thread is polling events for the game loop.
-	// pollingEvents must be accessed from the main thread.
-	pollingEvents bool
-
-	// forcingFrame reports whether a frame is being rendered from an event callback.
-	// forcingFrame must be accessed from the main thread.
-	forcingFrame bool
 
 	// windowToRestore is the window's position and size in GLFW pixels, captured on entering
 	// fullscreen and restored on leaving it. Its members are invalidPos and invalidSize when
@@ -109,8 +120,6 @@ type glfwBackend struct {
 
 	input         glfwInput
 	backendWindow glfwWindow
-
-	unfocusedNextWake time.Time
 
 	closeCallback                  glfw.CloseCallback
 	posCallback                    glfw.PosCallback
@@ -151,7 +160,10 @@ func maybeNewGLFWBackend(u *UserInterface) *glfwBackend {
 
 func newGLFWBackend(u *UserInterface) *glfwBackend {
 	b := &glfwBackend{
-		UserInterface: u,
+		UserInterface:    u,
+		desktopWindow:    &u.desktopWindow,
+		cursorShapeStore: &u.cursorShape,
+		primary:          true,
 	}
 	b.windowToRestore.pos = image.Pt(invalidPos, invalidPos)
 	b.windowToRestore.size = image.Pt(invalidSize, invalidSize)
@@ -161,6 +173,11 @@ func newGLFWBackend(u *UserInterface) *glfwBackend {
 }
 
 var glfwSystemCursors = map[CursorShape]*glfw.Cursor{}
+
+// getCursorShape returns the cursor shape of this window. It shadows the process-level one.
+func (u *glfwBackend) getCursorShape() CursorShape {
+	return CursorShape(u.cursorShapeStore.Load())
+}
 
 func (u *UserInterface) initializeGLFW() error {
 	if err := glfw.Init(); err != nil {
@@ -530,8 +547,10 @@ func (u *glfwBackend) createWindow() error {
 		return err
 	}
 	u.window = window
-	// Publish the backend and set the running state true just as a window is set (#2742).
-	u.setRunningBackend(u)
+	if u.primary {
+		// Publish the backend and set the running state true just as a window is set (#2742).
+		u.setRunningBackend(u)
+	}
 
 	// The position must be set before the size is set (#1982).
 	// setWindowSizeInDIP refers the current monitor's device scale.
@@ -846,194 +865,6 @@ event:
 	return nil
 }
 
-func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
-	if err := u.ensureGLFWInit(); err != nil {
-		return err
-	}
-
-	// Center the window on the monitor if the position was not explicitly set.
-	if !options.WindowPositionSet {
-		m := u.getInitMonitor()
-		if m != nil {
-			sw, sh := m.sizeInDIP()
-			x, y := InitialWindowPosition(int(sw), int(sh), options.InitWindowWidthInDIP, options.InitWindowHeightInDIP)
-			u.UserInterface.Window().SetPosition(x, y)
-		}
-	}
-
-	u.setApplePressAndHoldEnabled(options.ApplePressAndHoldEnabled)
-
-	if err := glfw.WindowHint(glfw.AutoIconify, glfw.False); err != nil {
-		return err
-	}
-
-	// Window is shown after the first buffer swap (#2725).
-	if err := glfw.WindowHint(glfw.Visible, glfw.False); err != nil {
-		return err
-	}
-
-	if err := glfw.WindowHintString(glfw.X11ClassName, options.X11ClassName); err != nil {
-		return err
-	}
-
-	if err := glfw.WindowHintString(glfw.X11InstanceName, options.X11InstanceName); err != nil {
-		return err
-	}
-
-	// On macOS, window decoration should be initialized once after buffers are swapped (#2600).
-	if runtime.GOOS != "darwin" {
-		decorated := glfw.False
-		if u.desktopWindow.isInitWindowDecorated() {
-			decorated = glfw.True
-		}
-		if err := glfw.WindowHint(glfw.Decorated, decorated); err != nil {
-			return err
-		}
-	}
-
-	glfwTransparent := glfw.False
-	if options.ScreenTransparent {
-		glfwTransparent = glfw.True
-	}
-	if err := glfw.WindowHint(glfw.TransparentFramebuffer, glfwTransparent); err != nil {
-		return err
-	}
-
-	g, lib, err := newGraphicsDriver(&graphicsDriverCreatorImpl{
-		transparent: options.ScreenTransparent,
-		colorSpace:  options.ColorSpace,
-	}, options.GraphicsLibrary)
-	if err != nil {
-		return err
-	}
-	u.graphicsDriver = g
-	u.setGraphicsLibrary(lib)
-	u.graphicsDriver.SetTransparent(options.ScreenTransparent)
-
-	// The OpenGL driver needs a window with a GL context, unlike the other drivers.
-	// Set the context-related hints before creating a window.
-	if lib == GraphicsLibraryOpenGL {
-		if err := u.setOpenGLWindowHints(); err != nil {
-			return err
-		}
-	}
-
-	// A window created without a redirection surface shows nothing unless its content is presented
-	// through DirectComposition, and only the graphics driver can tell whether that works (#3489).
-	noRedirectionBitmap := glfw.False
-	if d, ok := g.(interface{ SupportsDirectComposition() bool }); ok && d.SupportsDirectComposition() {
-		noRedirectionBitmap = glfw.True
-	}
-	if err := glfw.WindowHint(glfw.Win32NoRedirectionBitmap, noRedirectionBitmap); err != nil {
-		return err
-	}
-
-	// internal/glfw is customized and the default client API is NoAPI, not OpenGLAPI.
-	// Then, glfw.WindowHint(glfw.ClientAPI, glfw.NoAPI) doesn't have to be called.
-
-	// Before creating a window, set it unresizable no matter what u.isInitWindowResizable() is (#1987).
-	// Making the window resizable here doesn't work correctly when switching to enable resizing.
-	resizable := glfw.False
-	if WindowResizingMode(u.desktopWindow.windowResizingMode.Load()) == WindowResizingModeEnabled {
-		resizable = glfw.True
-	}
-	if err := glfw.WindowHint(glfw.Resizable, resizable); err != nil {
-		return err
-	}
-
-	floating := glfw.False
-	if u.desktopWindow.isInitWindowFloating() {
-		floating = glfw.True
-	}
-	if err := glfw.WindowHint(glfw.Floating, floating); err != nil {
-		return err
-	}
-
-	u.initUnfocused = options.InitUnfocused
-	focused := glfw.True
-	if options.InitUnfocused {
-		focused = glfw.False
-	}
-	if err := glfw.WindowHint(glfw.FocusOnShow, focused); err != nil {
-		return err
-	}
-
-	mousePassthrough := glfw.False
-	if u.desktopWindow.isInitWindowMousePassthrough() {
-		mousePassthrough = glfw.True
-	}
-	if err := glfw.WindowHint(glfw.MousePassthrough, mousePassthrough); err != nil {
-		return err
-	}
-
-	if err := u.createWindow(); err != nil {
-		return err
-	}
-
-	// createWindow has published the backend. A concurrent SetPreferredColorMode thus either
-	// applies the color mode by itself, or stores a value that is read here.
-	if m := u.PreferredColorMode(); m != colormode.Unknown {
-		if err := u.setWindowColorModeImpl(m); err != nil {
-			return err
-		}
-	}
-
-	// Maximizing a window requires a proper size and position. Call Maximize here (#1117).
-	if u.desktopWindow.isInitWindowMaximized() {
-		if err := u.window.Maximize(); err != nil {
-			return err
-		}
-	}
-
-	if err := u.setWindowResizingModeForOS(WindowResizingMode(u.desktopWindow.windowResizingMode.Load())); err != nil {
-		return err
-	}
-
-	if options.SkipTaskbar {
-		// Ignore the error.
-		_ = u.skipTaskbar()
-	}
-
-	if g, ok := u.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
-		g.SetMainThreadRunner(u.mainThread.Call)
-	}
-
-	// The OpenGL driver presents through the GLFW window; the others need the native handle.
-	var target any = u.window
-	if lib != GraphicsLibraryOpenGL {
-		w, err := u.nativeWindow()
-		if err != nil {
-			return err
-		}
-		target = w
-	}
-	surface, err := u.graphicsDriver.NewSurface(target)
-	if err != nil {
-		return err
-	}
-	u.context.surface = surface
-
-	// Register callbacks after the window initialization done.
-	// The callback might cause swapping frames, that assumes the window is already set (#2137).
-	if err := u.registerWindowCloseCallback(); err != nil {
-		return err
-	}
-	if err := u.registerWindowPosCallback(); err != nil {
-		return err
-	}
-	if err := u.registerWindowFramebufferSizeCallback(); err != nil {
-		return err
-	}
-	if err := u.registerInputCallbacks(); err != nil {
-		return err
-	}
-	if err := u.registerDropCallback(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // outsideSizeInDIP returns the size to give the game's Layout, in device-independent pixels.
 func outsideSizeInDIP(windowWidth, windowHeight int, requestedWidthInDIP, requestedHeightInDIP int, fullscreen bool, deviceScaleFactor float64) (float64, float64) {
 	// The requested size is a windowed size, unrelated to the size of a fullscreen window.
@@ -1139,191 +970,6 @@ func (u *glfwBackend) setFPSMode(fpsMode FPSModeType) error {
 	return nil
 }
 
-// update must be called from the main thread.
-func (u *glfwBackend) update() (outsideWidth, outsideHeight float64, screenWidth, screenHeight int, err error) {
-	if err := u.error(); err != nil {
-		return 0, 0, 0, 0, err
-	}
-
-	sc, err := u.window.ShouldClose()
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	if sc {
-		return 0, 0, 0, 0, RegularTermination
-	}
-
-	// On macOS, one swapping buffers seems required before entering fullscreen (#2599).
-	if u.isInitFullscreen() && (u.bufferOnceSwapped || runtime.GOOS != "darwin") {
-		if err := u.setFullscreen(true); err != nil {
-			return 0, 0, 0, 0, err
-		}
-		u.setInitFullscreen(false)
-	}
-
-	if runtime.GOOS == "darwin" && u.bufferOnceSwapped {
-		var err error
-		u.darwinInitOnce.Do(func() {
-			// On macOS, window decoration should be initialized once after buffers are swapped (#2600).
-			decorated := glfw.False
-			if u.desktopWindow.isInitWindowDecorated() {
-				decorated = glfw.True
-			}
-			if err = u.window.SetAttrib(glfw.Decorated, decorated); err != nil {
-				return
-			}
-		})
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-	}
-
-	// Showing the window (and the focus and size adjustments that go with it) is skipped when the window
-	// is initially invisible, so an application started with SetWindowVisible(false) never shows a window.
-	// A later SetWindowVisible(true) shows it through the regular path.
-	if u.bufferOnceSwapped && u.desktopWindow.isInitWindowVisible() {
-		var err error
-		u.showWindowOnce.Do(func() {
-			// Show the window after first buffer swap to avoid flash of white especially on Windows.
-			if err = u.window.Show(); err != nil {
-				return
-			}
-			if !u.initUnfocused {
-				if err = u.window.Focus(); err != nil {
-					return
-				}
-			}
-
-			if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-				return
-			}
-
-			// On Linux or UNIX, there is a problematic desktop environment like i3wm
-			// where an invisible window size cannot be initialized correctly (#2951).
-			// Call SetSize explicitly after the window becomes visible.
-
-			fullscreen, e := u.isFullscreen()
-			if e != nil {
-				err = e
-				return
-			}
-			if fullscreen {
-				return
-			}
-
-			m, e := u.currentMonitor()
-			if e != nil {
-				err = e
-				return
-			}
-			s := m.DeviceScaleFactor()
-			newW, newH := windowSizeInGLFWPixels(u.windowWidthInDIP, u.windowHeightInDIP, s)
-
-			// Even though a framebuffer callback is not called, waitForFramebufferSizeCallback returns by timeout,
-			// so it is safe to use this.
-			if err = u.waitForFramebufferSizeCallback(u.window, func() error {
-				return u.window.SetSize(newW, newH)
-			}); err != nil {
-				return
-			}
-		})
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-	}
-
-	// Initialize vsync after SetMonitor is called.
-	// Calling this inside setWindowSize didn't work (#1363).
-	if !u.fpsModeInited {
-		if err := u.setFPSMode(FPSModeType(u.fpsMode.Load())); err != nil {
-			return 0, 0, 0, 0, err
-		}
-	}
-
-	if FPSModeType(u.fpsMode.Load()) != FPSModeVsyncOffMinimum {
-		// TODO: Updating the input can be skipped when clock.Update returns 0 (#1367).
-		u.pollingEvents = true
-		err := glfw.PollEvents()
-		u.pollingEvents = false
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-	} else {
-		u.pollingEvents = true
-		err := glfw.WaitEvents()
-		u.pollingEvents = false
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-	}
-	u.syncModKeysFromOS()
-	u.syncLockKeysFromOS()
-
-	// If isRunnableOnUnfocused is false and the window is not focused, wait here.
-	// For the first update, skip this check as the window might not be seen yet in some environments like ChromeOS (#3091).
-	for !u.isRunnableOnUnfocused() && u.bufferOnceSwapped {
-		// In the initial state on macOS, the window is not shown (#2620).
-		visible, err := u.window.GetAttrib(glfw.Visible)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		if visible == glfw.False {
-			break
-		}
-
-		focused, err := u.window.GetAttrib(glfw.Focused)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		if focused != glfw.False {
-			break
-		}
-
-		shouldClose, err := u.window.ShouldClose()
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		if shouldClose {
-			break
-		}
-
-		if err := hook.SuspendAudio(); err != nil {
-			return 0, 0, 0, 0, err
-		}
-		// Wait for an arbitrary period to avoid busy loop.
-		time.Sleep(time.Second / 60)
-		if err := glfw.PollEvents(); err != nil {
-			return 0, 0, 0, 0, err
-		}
-	}
-
-	if err := hook.ResumeAudio(); err != nil {
-		return 0, 0, 0, 0, err
-	}
-
-	return u.layoutSizes()
-}
-
-func (u *glfwBackend) loopGame() (err error) {
-	defer func() {
-		graphicscommand.Terminate()
-		u.mainThread.Call(func() {
-			// Mark the termination before terminating GLFW so that a concurrent-safe API
-			// like ScheduleFrame stops touching GLFW's state before it is destroyed.
-			u.setTerminated()
-			if glfwErr := glfw.Terminate(); glfwErr != nil {
-				err = errors.Join(err, glfwErr)
-			}
-		})
-	}()
-
-	for {
-		if err := u.updateGame(); err != nil {
-			return err
-		}
-	}
-}
-
 // shouldPresentFrame reports whether a frame should be presented to the window.
 func shouldPresentFrame(windowOnScreen, bufferOnceSwapped, initWindowVisible bool) bool {
 	if windowOnScreen {
@@ -1341,106 +987,6 @@ func shouldPresentFrame(windowOnScreen, bufferOnceSwapped, initWindowVisible boo
 	// an occluded window waits for a display link that the OS throttles far below the refresh rate,
 	// and the tick rate would drop with it (#3405).
 	return false
-}
-
-func (u *glfwBackend) updateGame() error {
-	var unfocused bool
-	var present bool
-	var monitorChanged bool
-
-	var outsideWidth, outsideHeight float64
-	var screenWidth, screenHeight int
-	var deviceScaleFactor float64
-	var err error
-	if u.mainThread.Call(func() {
-		// On Windows, the focusing state might be always false (#987).
-		// On Windows, even if a window is in another workspace, vsync seems to work.
-		// Then let's assume the window is always 'focused' as a workaround.
-		if runtime.GOOS != "windows" {
-			a, e := u.window.GetAttrib(glfw.Focused)
-			if e != nil {
-				err = e
-				return
-			}
-			unfocused = a == glfw.False
-		}
-
-		visible, e := u.window.GetAttrib(glfw.Visible)
-		if e != nil {
-			err = e
-			return
-		}
-		occluded, e := u.isWindowOccluded()
-		if e != nil && !errors.Is(e, errors.ErrUnsupported) {
-			err = e
-			return
-		}
-		present = shouldPresentFrame(visible == glfw.True && !occluded, u.bufferOnceSwapped, u.desktopWindow.isInitWindowVisible())
-
-		outsideWidth, outsideHeight, screenWidth, screenHeight, err = u.update()
-		if err != nil {
-			return
-		}
-		var m *Monitor
-		m, err = u.currentMonitor()
-		if err != nil {
-			return
-		}
-		deviceScaleFactor = m.DeviceScaleFactor()
-		u.setRefreshRate(m.RefreshRate())
-		monitorChanged = m != u.lastFrameMonitor
-		u.lastFrameMonitor = m
-
-		// Pre-fetch cursor position and update gamepads to avoid
-		// a second mainThread.Call round-trip in updateInputStateForFrame.
-		var cx, cy float64
-		cx, cy, err = u.window.GetCursorPos()
-		if err != nil {
-			return
-		}
-		u.input.setRawCursorPos(cx, cy)
-		var nativeWindow uintptr
-		nativeWindow, err = u.nativeWindow()
-		if err != nil {
-			return
-		}
-		if err = gamepad.Update(nativeWindow, nil); err != nil {
-			return
-		}
-	}); err != nil {
-		return err
-	}
-
-	// Whether swapping buffers waits for the display can differ per monitor, e.g. when the monitors
-	// are driven by different GPUs. Measure it again on the new monitor.
-	if monitorChanged {
-		u.context.resetVsyncDetection()
-	}
-
-	if err := u.context.updateFrame(u.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.UserInterface, present); err != nil {
-		return err
-	}
-
-	u.bufferOnceSwappedOnce.Do(func() {
-		u.mainThread.Call(func() {
-			u.bufferOnceSwapped = true
-		})
-	})
-
-	// When a window is not focused or in another space, SwapBuffers might return immediately and CPU might be busy.
-	// Mitigate this by sleeping (#982, #2521).
-	if unfocused {
-		const wait = time.Second / 60
-		now := time.Now()
-		if next := u.unfocusedNextWake.Add(wait); next.After(now) {
-			u.unfocusedNextWake = next
-			time.Sleep(time.Until(next))
-		} else {
-			u.unfocusedNextWake = now
-		}
-	}
-
-	return nil
 }
 
 func (u *glfwBackend) updateIconIfNeeded() error {
@@ -2139,78 +1685,6 @@ func IsScreenTransparentAvailable() bool {
 
 func (u *glfwBackend) RunOnMainThread(f func()) {
 	u.mainThread.Call(f)
-}
-
-func (u *glfwBackend) run(game Game, options *RunOptions) error {
-	if options.SingleThread || buildTagSingleThread || runtime.GOOS == "js" {
-		return u.runSingleThread(game, options)
-	}
-	return u.runMultiThread(game, options)
-}
-
-func (u *glfwBackend) runMultiThread(game Game, options *RunOptions) error {
-	u.mainThread = thread.NewOSThread()
-	graphicscommand.SetOSThreadAsRenderThread()
-
-	u.context = newContext(game, options.ScreenTransparent)
-
-	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
-	defer cancel()
-
-	var wg errgroup.Group
-
-	// Run the render thread.
-	wg.Go(func() error {
-		defer cancel()
-
-		graphicscommand.LoopRenderThread(ctx)
-		return nil
-	})
-
-	// Run the game thread.
-	wg.Go(func() error {
-		defer cancel()
-
-		var err error
-		u.mainThread.Call(func() {
-			if mainErr := u.initOnMainThread(options); mainErr != nil {
-				err = mainErr
-			}
-		})
-		if err != nil {
-			return err
-		}
-
-		// The backend is published at the window creation in initOnMainThread.
-		defer u.setRunningBackend(nil)
-
-		return u.loopGame()
-	})
-
-	// Run the main thread. The loop is the thread's whole life, so a call arriving after
-	// it ends is a no-op rather than a block forever.
-	_ = u.mainThread.LoopAndStop(ctx)
-	return wg.Wait()
-}
-
-func (u *glfwBackend) runSingleThread(game Game, options *RunOptions) error {
-	// Initialize the main thread first so the thread is available at u.run (#809).
-	u.mainThread = thread.NewNoopThread()
-
-	// The backend is published at the window creation in initOnMainThread.
-	defer u.setRunningBackend(nil)
-
-	u.context = newContext(game, options.ScreenTransparent)
-
-	if err := u.initOnMainThread(options); err != nil {
-		return err
-	}
-
-	if err := u.loopGame(); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func dipToNativePixels(x float64, scale float64) float64 {

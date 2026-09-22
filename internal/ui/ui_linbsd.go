@@ -34,7 +34,7 @@ func (u *UserInterface) initializePlatform() error {
 	return nil
 }
 
-func (u *glfwBackend) setApplePressAndHoldEnabled(enabled bool) {
+func setApplePressAndHoldEnabled(enabled bool) {
 	// Do nothing.
 }
 

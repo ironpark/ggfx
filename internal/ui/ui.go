@@ -97,6 +97,12 @@ type UserInterface struct {
 
 	mainThread thread.Thread
 
+	// pacer paces the loop when a present does not wait for the display.
+	pacer framePacer
+
+	// funcsInFrameCh carries functions that must run inside a frame, like reading pixels.
+	funcsInFrameCh chan func()
+
 	userInterfaceImpl
 }
 
@@ -142,7 +148,9 @@ func (u *UserInterface) GraphicsColorSpace() color.ColorSpace {
 
 // newUserInterface must be called from the main thread.
 func newUserInterface() (*UserInterface, error) {
-	u := &UserInterface{}
+	u := &UserInterface{
+		funcsInFrameCh: make(chan func()),
+	}
 	u.isScreenClearedEveryFrame.Store(true)
 	u.graphicsLibrary.Store(int32(GraphicsLibraryUnknown))
 
@@ -180,7 +188,7 @@ func (u *UserInterface) readPixels(img *Image, pixels []byte, region image.Recta
 		// this might be possible (#1704).
 
 		var err error
-		u.context.runInFrame(func() {
+		u.runInFrame(func() {
 			ok, imgErr := img.readPixels(pixels, region)
 			if imgErr != nil {
 				err = imgErr
@@ -195,6 +203,36 @@ func (u *UserInterface) readPixels(img *Image, pixels []byte, region image.Recta
 	}
 
 	return nil
+}
+
+// runInFrame runs f inside a frame, on the goroutine running the frame, and waits for it.
+func (u *UserInterface) runInFrame(f func()) {
+	ch := make(chan struct{})
+	u.funcsInFrameCh <- func() {
+		defer close(ch)
+		f()
+	}
+	<-ch
+}
+
+// processFuncsInFrame runs the functions queued by runInFrame. It must be called inside a frame.
+func (u *UserInterface) processFuncsInFrame() error {
+	var processed bool
+	for {
+		select {
+		case f := <-u.funcsInFrameCh:
+			f()
+			processed = true
+		default:
+			if processed {
+				// Catch the error that happened at (*Image).At.
+				if err := u.error(); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
 }
 
 func (u *UserInterface) dumpScreenshot(mipmap *mipmap.Mipmap, name string, blackbg bool) (string, error) {

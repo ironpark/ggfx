@@ -20,8 +20,10 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/windowsystem"
 )
 
 // uiBackend is the platform UI implementation for the desktop build.
@@ -30,7 +32,6 @@ import (
 // userInterfaceImpl during its initialization. All the methods except run
 // are called only while the game runs.
 type uiBackend interface {
-	run(game Game, options *RunOptions) error
 	readInputState(inputState *InputState)
 	updateInputStateForFrame(deviceScaleFactor float64) error
 	updateIconIfNeeded() error
@@ -97,7 +98,24 @@ type userInterfaceImpl struct {
 	backend atomic.Pointer[uiBackend]
 
 	graphicsDriver graphicsdriver.Graphics
-	context        *context
+
+	// windows are the open windows, the primary window first. windows must be accessed from
+	// the main thread.
+	windows []*glfwBackend
+
+	// primary is the window the process-level settings and functions address. It is set once
+	// at the initialization and never cleared.
+	primary atomic.Pointer[glfwBackend]
+
+	// pollingEvents reports whether the main thread is polling events for the loop.
+	// pollingEvents must be accessed from the main thread.
+	pollingEvents bool
+
+	// forcingFrame reports whether a frame is being rendered from an event callback.
+	// forcingFrame must be accessed from the main thread.
+	forcingFrame bool
+
+	unfocusedNextWake time.Time
 
 	// The atomic fields below hold the settings that can be set before the
 	// backend exists. The backend consumes the init* fields at its
@@ -127,11 +145,10 @@ func (u *UserInterface) init() error {
 }
 
 func (u *UserInterface) Run(game Game, options *RunOptions) error {
-	b := maybeNewGLFWBackend(u)
-	if b == nil {
+	if !windowsystem.Available() {
 		return errors.New("ui: no window system is available")
 	}
-	return b.run(game, options)
+	return u.run(game, options)
 }
 
 // setRunningBackend publishes the backend that serves the running game, or
@@ -159,6 +176,15 @@ func (u *UserInterface) runningBackend() uiBackend {
 		return nil
 	}
 	return *b
+}
+
+// primaryFrameDriver returns the frame driver of the primary window, or a zero context before the
+// window exists.
+func (u *UserInterface) primaryFrameDriver() frameDriver {
+	if p := u.primary.Load(); p != nil {
+		return p.context
+	}
+	return &context{}
 }
 
 func (u *UserInterface) setInitMonitor(m *Monitor) {

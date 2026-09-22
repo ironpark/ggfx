@@ -63,7 +63,7 @@ func ScreenScaleAndOffsetsForTest(screenWidth, screenHeight int, offscreenWidth,
 // VsyncIgnoredForTest reports whether the given successive frame times, measured on a display with
 // the given refresh interval, make the loop pace itself instead of relying on the vsync.
 func VsyncIgnoredForTest(frameTimes []time.Duration, refreshInterval time.Duration) bool {
-	var c context
+	var c framePacer
 	var ignored bool
 	for _, frameTime := range frameTimes {
 		ignored = c.updateVsyncIgnored(frameTime, refreshInterval)
@@ -72,6 +72,6 @@ func VsyncIgnoredForTest(frameTimes []time.Duration, refreshInterval time.Durati
 }
 
 func FlushCommandsAndWaitForTesting(driver graphicsdriver.Graphics, present bool) error {
-	var c context
+	var c framePacer
 	return c.flushCommandsAndWait(present, driver, false, 60)
 }

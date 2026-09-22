@@ -431,3 +431,25 @@ func FinishForcedFrame(graphicsDriver graphicsdriver.Graphics) error {
 	}, true)
 	return err
 }
+
+// DisposeSurface disposes the surface on the rendering thread, after the commands queued so far.
+func DisposeSurface(surface graphicsdriver.Surface) {
+	theCommandQueueManager.enqueueCommand(&disposeSurfaceCommand{surface: surface})
+}
+
+type disposeSurfaceCommand struct {
+	surface graphicsdriver.Surface
+}
+
+func (c *disposeSurfaceCommand) String() string {
+	return "dispose-surface"
+}
+
+func (c *disposeSurfaceCommand) Exec(commandQueue *commandQueue, graphicsDriver graphicsdriver.Graphics, indexOffset int) error {
+	c.surface.Dispose()
+	return nil
+}
+
+func (c *disposeSurfaceCommand) NeedsSync() bool {
+	return true
+}

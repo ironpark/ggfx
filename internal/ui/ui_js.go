@@ -872,6 +872,13 @@ func (u *UserInterface) readInputState(inputState *InputState) {
 	u.keyboardLayoutMap = js.Value{}
 }
 
+func (u *UserInterface) primaryFrameDriver() frameDriver {
+	if u.context == nil {
+		return &context{}
+	}
+	return u.context
+}
+
 func (u *UserInterface) Window() Window {
 	return &nullWindow{}
 }

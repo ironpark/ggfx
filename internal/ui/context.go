@@ -42,6 +42,44 @@ type Game interface {
 	DrawFinalScreen(scale, offsetX, offsetY float64)
 }
 
+// frameDriver decides what a frame for one window does.
+type frameDriver interface {
+	// renderFrame runs one frame. present reports whether the window can be presented; force
+	// draws regardless of the draw-skipping states. It returns whether the surface must be
+	// presented, which the caller does by flushing the commands with a present.
+	renderFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present, force bool) (needsSwapBuffers bool, err error)
+
+	// forceUpdateFrame runs and presents one frame immediately, while the loop is blocked in an
+	// OS callback like a window resize.
+	forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error
+
+	// wantsFrame reports whether the window has a frame pending. A game window always has.
+	wantsFrame() bool
+
+	setSurface(surface graphicsdriver.Surface)
+
+	// dispose releases the images of the window. The surface is disposed by the caller.
+	dispose()
+
+	clientPositionToLogicalPosition(x, y float64, deviceScaleFactor float64) (float64, float64)
+	logicalPositionToClientPosition(x, y float64, deviceScaleFactor float64) (float64, float64)
+}
+
+// framePacer paces the loop when presenting does not wait for the display.
+type framePacer struct {
+	lastSwapBufferTime time.Time
+
+	// vsyncIgnored reports whether swapping buffers does not wait for the display even though vsync
+	// is enabled. The loop must then be paced explicitly.
+	vsyncIgnored bool
+
+	// vsyncIgnoredCount is the number of the successive frames that were swapped too early for the
+	// display to have shown them.
+	vsyncIgnoredCount int
+}
+
+// context is the frame driver of a game window: it runs the ticks, draws the game to an offscreen
+// image, and scales the offscreen to the screen.
 type context struct {
 	game Game
 
@@ -76,37 +114,42 @@ type context struct {
 	// the screen size changes, so this guards against presenting an empty (black) frame.
 	offscreenDrawn bool
 
-	lastSwapBufferTime time.Time
-
-	// vsyncIgnored reports whether swapping buffers does not wait for the display even though vsync
-	// is enabled. The loop must then be paced explicitly.
-	vsyncIgnored bool
-
-	// vsyncIgnoredCount is the number of the successive frames that were swapped too early for the
-	// display to have shown them.
-	vsyncIgnoredCount int
-
 	skipCount int
 
 	// presentationSkipped keeps a redraw pending until an ordinary frame can be presented.
 	presentationSkipped bool
-
-	funcsInFrameCh chan func()
 }
+
+var _ frameDriver = (*context)(nil)
 
 func newContext(game Game, screenTransparent bool) *context {
 	return &context{
 		game:              game,
 		screenTransparent: screenTransparent,
-		funcsInFrameCh:    make(chan func()),
 	}
 }
 
-// updateFrame runs one frame. present reports whether the frame should be shown on the screen; when it
-// is false (e.g. the window is hidden) the buffer swap is skipped, so the loop paces from
-// flushCommandsAndWait's no-swap path instead of a present that may block, and Update keeps running at the
-// target tick rate.
-func (c *context) updateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present bool) error {
+func (c *context) setSurface(surface graphicsdriver.Surface) {
+	c.surface = surface
+}
+
+func (c *context) wantsFrame() bool {
+	return true
+}
+
+func (c *context) dispose() {
+	if c.screen != nil {
+		c.screen.Deallocate()
+		c.screen = nil
+	}
+	if c.offscreen != nil {
+		c.offscreen.Deallocate()
+		c.offscreen = nil
+	}
+}
+
+// renderFrame implements frameDriver.
+func (c *context) renderFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present, force bool) (bool, error) {
 	if !present {
 		c.presentationSkipped = true
 	} else if c.presentationSkipped {
@@ -114,18 +157,27 @@ func (c *context) updateFrame(graphicsDriver graphicsdriver.Graphics, outsideWid
 		// Reset draw skipping so that its current content reaches the window.
 		c.skipCount = 0
 	}
-	// TODO: If updateCount is 0 and vsync is disabled, swapping buffers can be skipped.
-	needsSwapBuffers, err := c.updateFrameImpl(graphicsDriver, clock.UpdateFrame(), outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, false)
+	needsSwapBuffers, err := c.updateFrameImpl(graphicsDriver, clock.UpdateFrame(), outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, force)
 	if err != nil {
-		return err
-	}
-	if err := c.flushCommandsAndWait(needsSwapBuffers && present, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate()); err != nil {
-		return err
+		return false, err
 	}
 	if needsSwapBuffers && present {
 		c.presentationSkipped = false
+		return true, nil
 	}
-	return nil
+	return false, nil
+}
+
+// updateFrame runs one frame. present reports whether the frame should be shown on the screen; when it
+// is false (e.g. the window is hidden) the buffer swap is skipped, so the loop paces from
+// flushCommandsAndWait's no-swap path instead of a present that may block, and Update keeps running at the
+// target tick rate.
+func (c *context) updateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present bool) error {
+	needsSwapBuffers, err := c.renderFrame(graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, present, false)
+	if err != nil {
+		return err
+	}
+	return ui.pacer.flushCommandsAndWait(needsSwapBuffers, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate())
 }
 
 // forceUpdateFrame runs one frame with a forced draw, regardless of the draw-skipping states.
@@ -145,7 +197,7 @@ func (c *context) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, outsi
 		if err != nil {
 			return err
 		}
-		if err := c.flushCommandsAndWait(needsSwapBuffers, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate()); err != nil {
+		if err := ui.pacer.flushCommandsAndWait(needsSwapBuffers, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate()); err != nil {
 			return err
 		}
 	}
@@ -185,7 +237,7 @@ func (c *context) updateFrameImpl(graphicsDriver graphicsdriver.Graphics, update
 	}()
 
 	// Flush deferred functions, like reading pixels from GPU.
-	if err := c.processFuncsInFrame(ui); err != nil {
+	if err := ui.processFuncsInFrame(); err != nil {
 		return false, err
 	}
 
@@ -262,7 +314,7 @@ func (c *context) readInputStateForTick(ui *UserInterface) {
 	ui.advanceInputTimeToNextTick()
 }
 
-func (c *context) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver graphicsdriver.Graphics, vsyncEnabled bool, refreshRate int) error {
+func (c *framePacer) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver graphicsdriver.Graphics, vsyncEnabled bool, refreshRate int) error {
 	if err := atlas.FlushCommands(graphicsDriver, needsSwapBuffers); err != nil {
 		return err
 	}
@@ -315,14 +367,14 @@ func (c *context) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver gra
 }
 
 // resetVsyncDetection makes whether swapping buffers waits for the display measured again.
-func (c *context) resetVsyncDetection() {
+func (c *framePacer) resetVsyncDetection() {
 	c.vsyncIgnored = false
 	c.vsyncIgnoredCount = 0
 }
 
 // updateVsyncIgnored records how long one frame took, including swapping its buffers, and reports
 // whether swapping buffers turns out not to wait for the display.
-func (c *context) updateVsyncIgnored(frameTime, refreshInterval time.Duration) bool {
+func (c *framePacer) updateVsyncIgnored(frameTime, refreshInterval time.Duration) bool {
 	if c.vsyncIgnored {
 		return true
 	}
@@ -536,7 +588,7 @@ func (u *UserInterface) monitorDeviceScaleFactor() float64 {
 
 func (u *UserInterface) LogicalPositionToClientPositionInNativePixels(x, y float64) (float64, float64) {
 	s := u.monitorDeviceScaleFactor()
-	x, y = u.context.logicalPositionToClientPosition(x, y, s)
+	x, y = u.primaryFrameDriver().logicalPositionToClientPosition(x, y, s)
 	x = dipToNativePixels(x, s)
 	y = dipToNativePixels(y, s)
 	return x, y
@@ -545,33 +597,5 @@ func (u *UserInterface) LogicalPositionToClientPositionInNativePixels(x, y float
 // LogicalPositionToClientPositionInDIPs converts a logical position to a client-area position in
 // device-independent pixels, which mean the same lengths on every platform (unlike native pixels).
 func (u *UserInterface) LogicalPositionToClientPositionInDIPs(x, y float64) (float64, float64) {
-	return u.context.logicalPositionToClientPosition(x, y, u.monitorDeviceScaleFactor())
-}
-
-func (c *context) runInFrame(f func()) {
-	ch := make(chan struct{})
-	c.funcsInFrameCh <- func() {
-		defer close(ch)
-		f()
-	}
-	<-ch
-}
-
-func (c *context) processFuncsInFrame(ui *UserInterface) error {
-	var processed bool
-	for {
-		select {
-		case f := <-c.funcsInFrameCh:
-			f()
-			processed = true
-		default:
-			if processed {
-				// Catch the error that happened at (*Image).At.
-				if err := ui.error(); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
+	return u.primaryFrameDriver().logicalPositionToClientPosition(x, y, u.monitorDeviceScaleFactor())
 }
