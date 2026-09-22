@@ -20,14 +20,14 @@ commits to the retained packages can be cherry-picked.
 
 ## What was removed and why
 
-ggui targets desktop only and uses a small part of the engine: images and
+ggui targets desktop and the browser and uses a small part of the engine: images and
 shaders, `text/v2`, `vector`, `exp/textinput`, `inpututil`, input, cursor,
 monitor and window APIs. Everything outside that was dropped.
 
 - `audio`, `mobile`, `cmd` (ebitenmobile), `examples`, `misc`, `skills`,
   `ebitenutil`, `colorm`, old `text` v1, `vibrate`.
 - Console and mobile platforms: Nintendo Switch, PlayStation 5, Xbox GDK,
-  Android, iOS, and the browser (`js`/`wasm`) sources. `internal/microsoftgdk`
+  Android and iOS sources. The browser (`js`/`wasm`) target is kept. `internal/microsoftgdk`
   survives as a stub whose `IsXbox` is always false so the glfw and DirectX
   drivers stay untouched.
 - The VM guest/host remote rendering backend (`exp/vmhost`,
@@ -40,9 +40,9 @@ monitor and window APIs. Everything outside that was dropped.
   `internal/testresources`.
 
 Retained platforms: macOS (Metal, OpenGL), Windows (DirectX, OpenGL),
-Linux and the BSDs (OpenGL through glfw; cgo required). Only macOS was
-built and tested in the fork pass; Windows was cross-compiled; Linux and BSD
-were not built.
+Linux and the BSDs (OpenGL through glfw; cgo required), and the browser
+(WebGL through `js`/`wasm`). Only macOS was built and tested in the fork
+pass; Windows and wasm were cross-compiled; Linux and BSD were not built.
 
 ## Upstream policy
 
@@ -58,5 +58,5 @@ expected to merge.
 - Multiple windows. Ebitengine assumes one window and one game loop.
 - Replacing glfw with a purego Cocoa and Win32 layer shared with ggui.
 - Deciding whether gamepad support stays.
-- `genkeys.go` still generates key tables for the removed platforms.
+- `genkeys.go` still generates key tables for the removed mobile platforms.
 - The `ebiten:` prefix in error messages and documentation wording.
