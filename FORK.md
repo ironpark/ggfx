@@ -58,6 +58,12 @@ monitor and window APIs. Everything outside that was dropped.
   Android and iOS sources. The browser (`js`/`wasm`) target is kept. `internal/microsoftgdk`
   survives as a stub whose `IsXbox` is always false so the glfw and DirectX
   drivers stay untouched.
+- The legacy `Game`/`RunGame` API: `Game`, `LayoutFer`, `FinalScreen`,
+  `FinalScreenDrawer`, `RunGame`, `RunGameWithOptions`, `ScreenSize`, the TPS
+  and FPS-mode functions, the image dumper and its screenshot environment
+  variables, and the root-level window, cursor, fullscreen and monitor
+  functions that addressed the primary window. `Run`, `NewWindow` and
+  `*Window` replace them. `RunGameOptions` is now `RunOptions`.
 - The VM guest/host remote rendering backend (`exp/vmhost`,
   `internal/vmguest`, `internal/vmprotocol`, `internal/graphicsdriver/remote`)
   and the `RunGameOptions.VMGuestEndpoint` option.
@@ -86,10 +92,10 @@ windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 `Run`, `NewWindow`, `Window` and the event types in `app.go` are the API a
 GUI uses: any number of windows, frames on request, input as events. The
 design and the per-driver status are in [docs/window.md](docs/window.md).
-The test suite runs on `Run` too: `internal/testing.MainWithRunLoop` opens one
-window and runs the tests in its first frame. `Game`/`RunGame` still work, and
-internally a game is one window that asks for a frame every iteration, but
-nothing in ggfx or ggui calls it any more.
+The test suite runs on it too: `internal/testing.MainWithRunLoop` opens one
+window and runs the tests in its first frame. The legacy `Game`/`RunGame` API
+is gone from the public surface, along with the root-level functions that
+addressed the game's primary window; `*Window` carries them per window.
 
 ## Draw call merging
 

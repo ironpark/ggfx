@@ -1482,7 +1482,7 @@ func MaxImageSize() int {
 // For example, you should avoid to call NewImage every Update or Draw call.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
-// NewImage panics if RunGame already finishes.
+// NewImage panics once [Run] has finished.
 func NewImage(width, height int) *Image {
 	return newImage(image.Rect(0, 0, width, height), atlas.ImageTypeRegular)
 }
@@ -1513,7 +1513,7 @@ type NewImageOptions struct {
 // For example, you should avoid to call NewImageWithOptions every Update or Draw call.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
-// NewImageWithOptions panics if RunGame already finishes.
+// NewImageWithOptions panics once [Run] has finished.
 func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Image {
 	imageType := atlas.ImageTypeRegular
 	if options != nil && options.Unmanaged {
@@ -1532,8 +1532,8 @@ func newScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
 }
 
 func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
-	if isRunGameEnded() {
-		panic("ebiten: NewImage cannot be called after RunGame finishes")
+	if runEnded.Load() {
+		panic("ggfx: NewImage cannot be called after Run finishes")
 	}
 
 	width, height := bounds.Dx(), bounds.Dy()
@@ -1560,7 +1560,7 @@ func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
 // For example, you should avoid to call NewImageFromImage every Update or Draw call.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
-// NewImageFromImage panics if RunGame already finishes.
+// NewImageFromImage panics once [Run] has finished.
 //
 // The returned image's upper-left position is always (0, 0). The source's bounds are not respected.
 func NewImageFromImage(source image.Image) *Image {
@@ -1593,7 +1593,7 @@ type NewImageFromImageOptions struct {
 // For example, you should avoid to call NewImageFromImageWithOptions every Update or Draw call.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
-// NewImageFromImageWithOptions panics if RunGame already finishes.
+// NewImageFromImageWithOptions panics once [Run] has finished.
 func NewImageFromImageWithOptions(source image.Image, options *NewImageFromImageOptions) *Image {
 	if options == nil {
 		options = &NewImageFromImageOptions{}

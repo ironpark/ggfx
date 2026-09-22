@@ -43,32 +43,11 @@ func (m *MonitorType) DeviceScaleFactor() float64 {
 //
 // On mobiles, Size returns (0, 0) before the game starts e.g. in init functions.
 //
-// Size's use cases are limited. If you are making a fullscreen application, you can use RunGame and
-// the Game interface's Layout function instead. If you are making a not-fullscreen application but the application's
+// Size's use cases are limited. If you are making a fullscreen application, you can use a
+// fullscreen window instead. If you are making a not-fullscreen application but the application's
 // behavior depends on the monitor size, Size is useful.
 func (m *MonitorType) Size() (int, int) {
 	return (*ui.Monitor)(m).Size()
-}
-
-// Monitor returns the current monitor.
-//
-// Monitor can return nil when no monitor is available.
-//
-// Monitor must be called on the main thread before ebiten.RunGame, and is concurrent-safe after ebiten.RunGame.
-//
-// Monitor can return the current machine's monitor even when the game is a virtualization guest,
-// especially before the game starts, and this is a known issue (#3632).
-func Monitor() *MonitorType {
-	m := ui.Get().Monitor()
-	if m == nil {
-		return nil
-	}
-	return (*MonitorType)(m)
-}
-
-// SetMonitor sets the monitor that the window should be on. This can be called before or after RunGame.
-func SetMonitor(monitor *MonitorType) {
-	ui.Get().Window().SetMonitor((*ui.Monitor)(monitor))
 }
 
 // AppendMonitors returns the monitors reported by the system.
@@ -76,11 +55,8 @@ func SetMonitor(monitor *MonitorType) {
 // Nothing is appended when no monitor is available.
 // Any monitors added or removed will show up with subsequent calls to this function.
 //
-// AppendMonitors must be called on the main thread before ebiten.RunGame, and is concurrent-safe after
-// ebiten.RunGame.
-//
-// AppendMonitors can append the current machine's monitors even when the game is a virtualization guest,
-// especially before the game starts, and this is a known issue (#3632).
+// AppendMonitors must be called on the main thread before [Run], and is concurrent-safe once Run
+// has started.
 func AppendMonitors(monitors []*MonitorType) []*MonitorType {
 	// TODO: This is not an efficient operation. It would be best if we could directly pass monitors directly into `ui.AppendMonitors`.
 	for _, m := range ui.Get().AppendMonitors(nil) {

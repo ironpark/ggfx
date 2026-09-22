@@ -37,19 +37,15 @@ func (f HandlerFunc) HandleEvent(ev Event) error {
 	return f(ev)
 }
 
-// RunOptions are the options of Run. They are the same as RunGameOptions; the window-related
-// options apply to every window created by NewWindow.
-type RunOptions = RunGameOptions
-
 // Run starts the event loop and blocks until it ends. The handler receives StartEvent first and
 // creates its windows there with NewWindow. Run ends when the handler returns Termination or an
 // error, or when the last window closes.
 //
-// Run and RunGame are exclusive: a process calls one of them, once.
+// Run must be called on the main thread, and only once in a process.
 //
 // Run must be called on the main goroutine.
 func Run(h Handler, options *RunOptions) error {
-	defer isRunGameEnded_.Store(true)
+	defer runEnded.Store(true)
 
 	op := toUIRunOptions(options)
 	screenTransparent.Store(op.ScreenTransparent)

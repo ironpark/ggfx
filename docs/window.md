@@ -2,10 +2,9 @@
 
 ggfx drives a GUI, not a game. A GUI has any number of windows, redraws only
 when something changed, and reacts to input as events rather than by polling a
-per-tick snapshot. This document is the contract for that model. The legacy
-`Game`/`RunGame` path stays for now, implemented on top of the same machinery
-as one window that asks for a frame every iteration, but it has no callers
-left: the test suite opens a window through `Run`.
+per-tick snapshot. This document is the contract for that model. The legacy `Game`/`RunGame` API is
+gone; what is left of it inside `internal/ui` is unreachable and is being
+removed separately.
 
 ## Layers
 
@@ -229,9 +228,10 @@ Use `-windows 1` with OpenGL or DirectX. The smoke injection is macOS-only.
 
 ## Migration
 
-The legacy `Game` path is unchanged for callers. Internally it is one window
-with a `gameContext` and a frame every iteration. `ScreenSize`, `Monitor`,
-`SetWindowTitle` and the other root-level window functions address that
-primary window and are not available to `Run` handlers, which use `*Window`.
-`ScreenSize` in particular reports the size `Game.Layout` returned, so under
-`Run` it stays zero; ask the window with `Window.Size()`.
+`Game`, `RunGame` and `RunGameWithOptions` are gone. So are the root-level
+functions that addressed the game's primary window: `ScreenSize`,
+`ScreenSizeInFullscreen`, `Monitor`, `SetMonitor`, `SetWindowTitle`,
+`SetWindowSize` and the rest of `window.go`, the cursor, fullscreen, focus and
+vsync functions, and the TPS and FPS-mode API. Use `Window.Size()`,
+`Window.Monitor()`, `Window.SetTitle()` and the other `*Window` methods, and
+`RunOptions` instead of `RunGameOptions`.

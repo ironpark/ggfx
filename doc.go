@@ -12,62 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ebiten provides graphics and input API to develop a 2D game.
+// Package ggfx provides the graphics, windowing and input API that ggui is built on.
 //
-// You can start the game by calling the function RunGame.
-//
-//	// Game implements ebiten.Game interface.
-//	type Game struct{}
-//
-//	// Update proceeds the game state.
-//	// Update is called every tick (1/60 [s] by default).
-//	func (g *Game) Update() error {
-//	    // Write your game's logical update.
-//	    return nil
-//	}
-//
-//	// Draw draws the game screen.
-//	// Draw is called every frame (typically 1/60[s] for 60Hz display).
-//	func (g *Game) Draw(screen *ebiten.Image) {
-//	    // Write your game's rendering.
-//	}
-//
-//	// Layout takes the outside size (e.g., the window size) and returns the (logical) screen size.
-//	// If you don't have to adjust the screen size with the outside size, just return a fixed size.
-//	func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
-//	    return 320, 240
-//	}
+// An application starts with [Run], which drives a handler with events. The handler creates its
+// windows on [StartEvent] and draws on [FrameEvent]; frames are delivered on request rather than
+// on a tick.
 //
 //	func main() {
-//	    game := &Game{}
-//	    // Specify the window size as you like. Here, a doubled size is specified.
-//	    ebiten.SetWindowSize(640, 480)
-//	    ebiten.SetWindowTitle("Your game's title")
-//	    // Call ebiten.RunGame to start your game loop.
-//	    if err := ebiten.RunGame(game); err != nil {
+//	    var window *ggfx.Window
+//	    err := ggfx.Run(ggfx.HandlerFunc(func(ev ggfx.Event) error {
+//	        switch ev := ev.(type) {
+//	        case ggfx.StartEvent:
+//	            w, err := ggfx.NewWindow(&ggfx.WindowOptions{Title: "Title", Width: 640, Height: 480})
+//	            if err != nil {
+//	                return err
+//	            }
+//	            window = w
+//	        case ggfx.FrameEvent:
+//	            // Draw ev.Screen.
+//	        }
+//	        return nil
+//	    }), nil)
+//	    if err != nil {
 //	        log.Fatal(err)
 //	    }
 //	}
 //
+// The window model and the event contract are documented in docs/window.md.
+//
 // In the API document, 'the main thread' means the goroutine in init(), main() and their callees without 'go'
 // statement. It is assured that 'the main thread' runs on the OS main thread. There are some Ebitengine functions (e.g.,
-// DeviceScaleFactor) that must be called on the main thread under some conditions (typically, before ebiten.RunGame
-// is called).
+// AppendMonitors) that must be called on the main thread under some conditions (typically, before
+// Run is called).
 //
 // # Environment variables
 //
 // `EBITENGINE_SCREENSHOT_KEY` environment variable specifies the key
-// to take a screenshot. For example, if you run your game with
-// `EBITENGINE_SCREENSHOT_KEY=q`, you can take a game screen's screenshot
-// by pressing Q key. This works only on desktops and browsers.
-//
-// `EBITENGINE_INTERNAL_IMAGES_KEY` environment variable specifies the key
-// to dump all the internal images. This is valid only when the build tag
-// 'ebitenginedebug' is specified. This works only on desktops and browsers.
-//
 // `EBITENGINE_GRAPHICS_LIBRARY` environment variable specifies the graphics library.
-// If the specified graphics library is not available, RunGame returns an error.
-// This environment variable works when RunGame is called or RunGameWithOptions is called with GraphicsLibraryAuto.
+// If the specified graphics library is not available, Run returns an error.
+// This environment variable works when Run is called with GraphicsLibraryAuto.
 // This can take one of the following value:
 //
 //	"auto":         Ebitengine chooses the graphics library automatically. This is the default value.
@@ -107,9 +90,9 @@
 //
 // `ebitenginesinglethread` disables Ebitengine's thread safety to unlock maximum performance. If you use this you will have
 // to manage threads yourself. Functions like `SetWindowSize` will no longer be concurrent-safe with this build tag.
-// They must be called from the main thread or the same goroutine as the given game's callback functions like Update.
-// `ebitenginesinglethread` works only with desktops and consoles.
-// `ebitenginesinglethread` was deprecated as of v2.7. Use RunGameOptions.SingleThread instead.
+// They must be called from the main thread or the same goroutine as the event handler.
+// `ebitenginesinglethread` works only with desktops.
+// `ebitenginesinglethread` is deprecated; use RunOptions.SingleThread instead.
 //
 // `nintendosdk` is for NintendoSDK (e.g. Nintendo Switch).
 //

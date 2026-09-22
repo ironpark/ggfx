@@ -17,7 +17,6 @@ package ggfx_test
 import (
 	"testing"
 
-	"github.com/ironpark/ggfx"
 	etesting "github.com/ironpark/ggfx/internal/testing"
 )
 
@@ -32,9 +31,9 @@ func TestWindowSize(t *testing.T) {
 	}
 }
 
-func TestScreenSizeInFullscreen(t *testing.T) {
-	// Just call ScreenSizeInFullscreen. There was a crash bug on browsers (#2975).
-	w, h := ggfx.ScreenSizeInFullscreen()
+func TestWindowMonitorSize(t *testing.T) {
+	// Just ask the monitor for its size. There was a crash bug on browsers (#2975).
+	w, h := etesting.Window().Monitor().Size()
 	if w <= 0 {
 		t.Errorf("w must be positive but not: %d", w)
 	}
