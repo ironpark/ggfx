@@ -26,12 +26,9 @@ func TestImageDrawTrianglesWithStencilBufferOnEmptyDestination(t *testing.T) {
 	src := ggfx.NewImage(1, 1)
 	src.Fill(color.White)
 
-	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return color
+	shader, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return v.color;
 }
 `))
 	if err != nil {
@@ -80,12 +77,9 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 
 func TestImageDrawTrianglesWithStencilBufferOnEmptyDestinationValidatesIndices(t *testing.T) {
 	src := ggfx.NewImage(1, 1)
-	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return color
+	shader, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return v.color;
 }
 `))
 	if err != nil {
@@ -126,12 +120,9 @@ func TestImageDrawTrianglesWithStencilBufferOnSubImage(t *testing.T) {
 	whiteImage.Fill(color.White)
 	whiteSubImage := whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ggfx.Image)
 
-	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return vec4(1, 0, 0, 1)
+	shader, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return vec4f(1.0, 0.0, 0.0, 1.0);
 }
 `))
 	if err != nil {
@@ -284,12 +275,9 @@ func TestImageDrawTrianglesWithStencilBufferWithEmptyIndices(t *testing.T) {
 	src := ggfx.NewImage(3, 3)
 	src.Fill(color.White)
 
-	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return color
+	shader, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return v.color;
 }
 `))
 	if err != nil {
@@ -343,12 +331,9 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 }
 
 func TestImageDrawTrianglesWithStencilBufferWithEmptyIndicesStateChecks(t *testing.T) {
-	disposedShader, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return color
+	disposedShader, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return v.color;
 }
 `))
 	if err != nil {
@@ -395,12 +380,9 @@ func TestImageDrawTrianglesWithStencilBufferOnDisposedDestination(t *testing.T) 
 	src := ggfx.NewImage(3, 3)
 	src.Fill(color.White)
 
-	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return color
+	shader, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return v.color;
 }
 `))
 	if err != nil {

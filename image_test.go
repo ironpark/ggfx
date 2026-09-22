@@ -2340,9 +2340,8 @@ func TestImageDrawTrianglesShaderInterpolatesValues(t *testing.T) {
 	}
 	is := []uint16{0, 1, 2, 1, 2, 3}
 	shader, err := ggfx.NewShader([]byte(`
-		package main
-		func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-			return color
+		fn fragment(v: Vertex) -> vec4f {
+			return v.color;
 		}
 	`))
 	if err != nil {
@@ -4574,9 +4573,8 @@ func TestImageDrawTrianglesShaderWithGreaterIndexThanVerticesCount(t *testing.T)
 	vs := make([]ggfx.Vertex, 4)
 	is := []uint16{0, 1, 2, 1, 2, 4}
 	shader, err := ggfx.NewShader([]byte(`
-		package main
-		func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-			return color
+		fn fragment(v: Vertex) -> vec4f {
+			return v.color;
 		}
 	`))
 	if err != nil {
@@ -4614,9 +4612,8 @@ func TestImageDrawTrianglesShader32WithGreaterIndexThanVerticesCount(t *testing.
 	vs := make([]ggfx.Vertex, 4)
 	is := []uint32{0, 1, 2, 1, 2, math.MaxUint32}
 	shader, err := ggfx.NewShader([]byte(`
-		package main
-		func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-			return color
+		fn fragment(v: Vertex) -> vec4f {
+			return v.color;
 		}
 	`))
 	if err != nil {
@@ -4635,12 +4632,9 @@ func TestImageGeoMAfterDraw(t *testing.T) {
 		t.Errorf("got: (%0.2f, %0.2f), want: (0, 0)", x, y)
 	}
 
-	s, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return vec4(1)
+	s, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return vec4f(1.0);
 }
 `))
 	if err != nil {
@@ -4893,16 +4887,13 @@ func TestImageDrawTrianglesShader32(t *testing.T) {
 	}
 	is := []uint32{0, 1, 2, 1, 2, 3}
 	op := &ggfx.DrawTrianglesShaderOptions{}
-	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	// imageSrcNOrigin is actually not necessary here.
+	shader, err := ggfx.NewShader([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	// src0_origin is actually not necessary here.
 	// As no source image is bounded, the source's origin position is (0, 0).
 	// However, let's use this function for readability.
-	p := src0Pos - imageSrc0Origin()
-	return vec4(floor(p.x) / 16, floor(p.y) / 16, 1, 1)
+	let p = v.src_pos - src0_origin();
+	return vec4f(floor(p.x) / 16.0, floor(p.y) / 16.0, 1.0, 1.0);
 }
 `))
 	if err != nil {
@@ -5121,12 +5112,9 @@ func TestSubImageDrawImageInOppositeDirections(t *testing.T) {
 func TestImageDrawShaderWithDisposedArgumentOnDisposedDestination(t *testing.T) {
 	const w, h = 16, 16
 
-	src := []byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return imageSrc0At(src0Pos)
+	src := []byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return src0_at(v.src_pos);
 }
 `)
 

@@ -18,6 +18,32 @@ The module path is `github.com/ironpark/ggfx` and the root package is
 `ggfx`. Everything else keeps its upstream file layout so that upstream
 commits to the retained packages can be cherry-picked.
 
+## Shaders: WGSL through naga instead of Kage
+
+The Kage shader language and its compiler (`internal/shader`,
+`internal/shaderir` and the MSL, HLSL and GLSL backends, `legacyshader`,
+`shaderprecomp`) are replaced by WGSL compiled with
+[gogpu/naga](https://github.com/gogpu/naga). See `docs/shaders.md` for the
+shader contract. What changed for the drivers:
+
+- `internal/shader` now parses, validates and reflects WGSL. Uniform values
+  are packed on the host in WGSL's uniform layout and uploaded verbatim; the
+  per-driver layout adjusters are gone.
+- Every draw binds two uniform blocks: the internal block (texture sizes,
+  regions, projection) and the user's block.
+- Metal: naga's MSL uses `[[stage_in]]`, so `mtl` gained
+  `MTLVertexDescriptor` support.
+- OpenGL: uniforms moved from `glUniform*` to uniform buffer objects; the
+  `gl` binding gained `BindBufferBase`, `GetUniformBlockIndex` and
+  `UniformBlockBinding`. Desktop GL targets GLSL 3.30, WebGL GLSL ES 3.00.
+- DirectX: shader model 5.0 (`vs_5_0`/`ps_5_0`), so feature level 11.0 is
+  required; feature levels 10.x are dropped. Vertex semantics are `LOC0..3`.
+- The built-in, ColorM, vector stencil and test shaders are rewritten in
+  WGSL. The texel unit (`//kage:unit texels`) is gone; all positions are
+  pixels.
+- `vector/stencilshader.go` and `stencilbuffer.go` changed with it, so those
+  files no longer merge cleanly from upstream.
+
 ## What was removed and why
 
 ggui targets desktop and the browser and uses a small part of the engine: images and
@@ -47,15 +73,17 @@ pass; Windows and wasm were cross-compiled; Linux and BSD were not built.
 ## Upstream policy
 
 Do not merge upstream wholesale. Cherry-pick fixes to the layers that are
-kept as-is: `internal/graphicsdriver`, `internal/graphicscommand`,
-`internal/atlas`, `internal/restorable`, `internal/shader`,
-`internal/shaderir`, `text/v2`, `vector`. The windowing and run loop
-(`internal/ui`, `run.go`, `window.go`, `input.go`) will diverge and are not
-expected to merge.
+kept close to upstream: `internal/graphicsdriver` (except the shader files),
+`internal/graphicscommand`, `internal/atlas`, `internal/restorable`,
+`text/v2`, `vector` (except the stencil shaders). The shader stack, the
+windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
+`input.go`) diverge and are not expected to merge.
 
 ## Not done yet
 
 - Multiple windows. Ebitengine assumes one window and one game loop.
+- Only macOS Metal and OpenGL ran the test suite after the shader change;
+  DirectX and WebGL were cross-compiled only.
 - Replacing glfw with a purego Cocoa and Win32 layer shared with ggui.
 - Deciding whether gamepad support stays.
 - `genkeys.go` still generates key tables for the removed mobile platforms.
