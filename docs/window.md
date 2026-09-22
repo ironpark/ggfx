@@ -70,7 +70,7 @@ that decides what a frame for this window does.
 
 Two frame drivers exist:
 
-- `gameContext` is the legacy driver: offscreen image, letterboxing, ticks
+- `context` is the legacy driver: offscreen image, letterboxing, ticks
   and `Update`, draw skipping. It is created for the primary window of
   `Run(game)`.
 - `eventContext` is the GUI driver: it hands the screen image to the app as
@@ -84,7 +84,7 @@ One iteration of the loop, on the main thread:
    `WaitEvents` otherwise. `ScheduleFrame`/`RequestFrame` post an empty event
    so a wait wakes up.
 2. Drain recorded input into the app goroutine as events.
-3. For every window with a frame pending (or, for `gameContext`, always):
+3. For every window with a frame pending (or, for `context`, always):
    compute its outside size and pixel size, run its frame driver between
    `atlas.BeginFrame`/`EndFrame`.
 4. `atlas.FlushCommands(present)` once, which presents every drawn surface.
