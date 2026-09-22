@@ -83,7 +83,9 @@ windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 
 - Multiple windows. Ebitengine assumes one window and one game loop.
 - Only macOS Metal and OpenGL ran the test suite after the shader change;
-  DirectX and WebGL were cross-compiled only.
+  DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
+  to need shader model 5.0 without register spaces, but no D3D compiler or
+  debug layer has seen it.
 - Replacing glfw with a purego Cocoa and Win32 layer shared with ggui.
 - Deciding whether gamepad support stays.
 - `genkeys.go` still generates key tables for the removed mobile platforms.

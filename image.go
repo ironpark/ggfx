@@ -777,7 +777,7 @@ var _ [len(DrawTrianglesShaderOptions{}.Images) - graphics.ShaderSrcImageCount]s
 //
 // Vertex contains color values, which can be interpreted for any purpose by the shader.
 //
-// For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
+// For the details about shaders, see docs/shaders.md.
 //
 // the size of the image at index 0 of the specified images.
 // If the image at index 0 is nil, its size is treated as (0, 0) for this comparison.
@@ -812,7 +812,7 @@ func (i *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shader 
 //
 // Vertex contains color values, which can be interpreted for any purpose by the shader.
 //
-// For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
+// For the details about shaders, see docs/shaders.md.
 //
 // the size of the image at index 0 of the specified images.
 // If the image at index 0 is nil, its size is treated as (0, 0) for this comparison.
@@ -999,7 +999,7 @@ var _ [len(DrawRectShaderOptions{}.Images)]struct{} = [graphics.ShaderSrcImageCo
 
 // DrawRectShader draws a rectangle with the specified width and height with the specified shader.
 //
-// For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
+// For the details about shaders, see docs/shaders.md.
 //
 // When the given shader is disposed, DrawRectShader panics.
 // When one of the specified image is non-nil and its size is different from (width, height), DrawRectShader panics.

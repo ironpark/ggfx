@@ -75,7 +75,7 @@ func Compile(src []byte, textureCount int) (*Program, error) {
 
 	ast, err := naga.Parse(source)
 	if err != nil {
-		return nil, fmt.Errorf("shader: parse error: %w", adjustLines(err, preludeLines))
+		return nil, fmt.Errorf("shader: %w", adjustLines(err, preludeLines))
 	}
 	module, err := naga.LowerWithSource(ast, source)
 	if err != nil {

@@ -27,7 +27,7 @@ import (
 
 // Shader represents a compiled shader program.
 //
-// For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
+// For the details about shaders, see docs/shaders.md.
 type Shader struct {
 	shader *ui.Shader
 }

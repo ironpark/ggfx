@@ -185,9 +185,10 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		p.constantBufferMaps[frameIndex] = append(p.constantBufferMaps[frameIndex], 0)
 	}
 
-	// One upload buffer holds both uniform blocks, each at an aligned offset.
+	// One upload buffer holds both uniform blocks, each at an aligned offset. A shader without a
+	// user uniform block still gets a real, unused view rather than a null descriptor.
 	internalSize := alignUpConstantBuffer(internalConstantBufferSize)
-	userSize := alignUpConstantBuffer(shader.userConstantBufferSize)
+	userSize := max(alignUpConstantBuffer(shader.userConstantBufferSize), constantBufferAlignment)
 	bufferSize := internalSize + userSize
 
 	cb := p.constantBuffers[frameIndex][idx]
@@ -220,15 +221,10 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 			SizeInBytes:    internalSize,
 		}, h)
 		h.Offset(1, p.shaderDescriptorSize)
-		if userSize > 0 {
-			device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
-				BufferLocation: cb.GetGPUVirtualAddress() + _D3D12_GPU_VIRTUAL_ADDRESS(internalSize),
-				SizeInBytes:    userSize,
-			}, h)
-		} else {
-			// A null descriptor for a shader without a user uniform block.
-			device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{}, h)
-		}
+		device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
+			BufferLocation: cb.GetGPUVirtualAddress() + _D3D12_GPU_VIRTUAL_ADDRESS(internalSize),
+			SizeInBytes:    userSize,
+		}, h)
 
 		m, err = cb.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
 		if err != nil {
