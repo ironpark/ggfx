@@ -1,71 +1,21 @@
-# Ebitengine (v2)
+# ggfx
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/ironpark/ggfx.svg)](https://pkg.go.dev/github.com/ironpark/ggfx)
-[![Build Status](https://github.com/hajimehoshi/ebiten/actions/workflows/test.yml/badge.svg)](https://github.com/hajimehoshi/ebiten/actions?query=workflow%3Atest)
+ggfx is the rendering and windowing runtime for
+[ggui](https://github.com/ironpark/ggui). It is a desktop-only fork of
+[Ebitengine](https://ebitengine.org/) v2.10.2 that keeps the GPU pipeline,
+Kage shaders, `text/v2` and `vector`, and drops audio, mobile, console and
+browser support.
 
-**A dead simple 2D game engine for Go**
-
-Ebitengine (formerly known as Ebiten) is an open source game engine for the Go programming language. Ebitengine's simple API allows you to quickly and easily develop 2D games that can be deployed across multiple platforms.
-
-* [Website (ebitengine.org)](https://ebitengine.org)
-* [API Reference](https://pkg.go.dev/github.com/ironpark/ggfx)
-* [Cheat Sheet](https://ebitengine.org/en/documents/cheatsheet.html)
-* [Awesome Ebitengine](https://github.com/sedyh/awesome-ebitengine)
-
-![Overview](https://ebitengine.org/images/overview2.png)
+See [FORK.md](FORK.md) for what changed against upstream and how fixes are
+brought in.
 
 ## Platforms
 
-* [Windows](https://ebitengine.org/en/documents/install.html?os=windows)
-* [macOS](https://ebitengine.org/en/documents/install.html?os=darwin)
-* [Linux](https://ebitengine.org/en/documents/install.html?os=linux)
-* [FreeBSD](https://ebitengine.org/en/documents/install.html?os=freebsd)
-* [Android](https://ebitengine.org/en/documents/mobile.html) (Cgo required)
-* [iOS](https://ebitengine.org/en/documents/mobile.html) (Cgo required)
-* [WebAssembly](https://ebitengine.org/en/documents/webassembly.html)
-* Nintendo Switch (Cgo required)
-* Xbox (Cgo required) (Xbox support is limited and not available to everyone. Negotiations are currently underway to make it accessible to all.)
-
-For installation on desktops, see [the installation instruction](https://ebitengine.org/en/documents/install.html).
-
-## Features
-
-* 2D Graphics (Geometry and color transformation by matrices, Various composition modes, Offscreen rendering, Text rendering, Automatic batches, Automatic texture atlas, Custom shaders)
-* Input (Mouse, Keyboard, Gamepads, Touches)
-* Audio (Ogg/Vorbis, MP3, WAV, PCM)
-
-## Packages
-
-* [ebiten](https://pkg.go.dev/github.com/ironpark/ggfx)
-  * [audio](https://pkg.go.dev/github.com/ironpark/ggfx/audio)
-    * [mp3](https://pkg.go.dev/github.com/ironpark/ggfx/audio/mp3)
-    * [vorbis](https://pkg.go.dev/github.com/ironpark/ggfx/audio/vorbis)
-    * [wav](https://pkg.go.dev/github.com/ironpark/ggfx/audio/wav)
-  * [colorm](https://pkg.go.dev/github.com/ironpark/ggfx/colorm)
-  * [ebitenutil](https://pkg.go.dev/github.com/ironpark/ggfx/ebitenutil)
-  * [inpututil](https://pkg.go.dev/github.com/ironpark/ggfx/inpututil)
-  * [mobile](https://pkg.go.dev/github.com/ironpark/ggfx/mobile)
-  * [text/v2](https://pkg.go.dev/github.com/ironpark/ggfx/text/v2)
-  * [vector](https://pkg.go.dev/github.com/ironpark/ggfx/vector)
-  * [exp/shaderprecomp](https://pkg.go.dev/github.com/ironpark/ggfx/exp/shaderprecomp)
-  * [exp/textinput](https://pkg.go.dev/github.com/ironpark/ggfx/exp/textinput)
-  * [exp/vmhost](https://pkg.go.dev/github.com/ironpark/ggfx/exp/vmhost)
-
-## AI coding agents
-
-If you use an AI coding agent to write or modify Ebitengine code or applications, point it at the [`skills`](skills) directory, which holds skills for working with this repository.
-
-## Community
-
-- [Discord](https://discord.gg/3tVdM5H8cC)
-- `#ebitengine` channel in [Gophers Slack](https://blog.gopheracademy.com/gophers-slack-community/)
-- [GitHub Discussion](https://github.com/hajimehoshi/ebiten/discussions)
-- [`r/ebitengine` in Reddit](https://www.reddit.com/r/ebitengine/)
+- macOS: Metal, OpenGL
+- Windows: DirectX 11/12, OpenGL
+- Linux, FreeBSD, NetBSD, OpenBSD: OpenGL (requires cgo for glfw)
 
 ## License
 
-Ebitengine is licensed under Apache license version 2.0. See [LICENSE](LICENSE) file.
-
-[The Ebitengine logo](https://ebitengine.org/images/logo.png) by Hajime Hoshi is licensed under [the Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/).
-
-Ebitengine bundles third-party libraries. See [NOTICE.md](NOTICE.md) for their licenses.
+Apache-2.0, the same as Ebitengine. See [LICENSE](LICENSE) and
+[NOTICE.md](NOTICE.md).
