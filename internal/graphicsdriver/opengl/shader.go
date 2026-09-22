@@ -1,4 +1,4 @@
-// Copyright 2020 The Ebiten Authors
+// Copyright 2022 The Ebiten Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,34 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !playstation5
-
 package opengl
 
 import (
 	"fmt"
 	"runtime"
 
+	"github.com/gogpu/naga/glsl"
+
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
-	"github.com/ironpark/ggfx/internal/shaderir"
-	"github.com/ironpark/ggfx/internal/shaderir/glsl"
-	"github.com/ironpark/ggfx/internal/shaderprecomp"
+	ggshader "github.com/ironpark/ggfx/internal/shader"
+)
+
+// The uniform buffer binding points the shader's uniform blocks are bound at.
+const (
+	internalUniformBlockBinding = 0
+	userUniformBlockBinding     = 1
 )
 
 type Shader struct {
 	id       graphicsdriver.ShaderID
 	graphics *Graphics
 
-	ir *shaderir.Program
-	p  program
+	program *ggshader.Program
+	p       program
+
+	// textureNames are the names of the sampler uniforms for the source textures. An empty name
+	// means the fragment shader does not read that texture.
+	textureNames []string
 }
 
-func newShader(id graphicsdriver.ShaderID, graphics *Graphics, program *shaderir.Program) (*Shader, error) {
+func newShader(id graphicsdriver.ShaderID, graphics *Graphics, program *ggshader.Program) (*Shader, error) {
 	s := &Shader{
 		id:       id,
 		graphics: graphics,
-		ir:       program,
+		program:  program,
 	}
 	if err := s.compile(); err != nil {
 		return nil, err
@@ -56,14 +64,32 @@ func (s *Shader) Dispose() {
 	s.graphics.removeShader(s)
 }
 
+// glslOptions returns the options to translate entryPoint of the shader to GLSL.
+func glslOptions(version glsl.Version, entryPoint string) glsl.Options {
+	o := glsl.DefaultOptions()
+	o.LangVersion = version
+	o.EntryPoint = entryPoint
+	o.BoundsCheckPolicies.ImageLoad = glsl.BoundsCheckUnchecked
+	return o
+}
+
+// glslTextureName returns the name naga gives the sampler uniform of the source texture i in the
+// fragment stage.
+func glslTextureName(i int) string {
+	b := ggshader.TextureBinding(i)
+	return fmt.Sprintf("_group_%d_binding_%d_fs", b.Group, b.Binding)
+}
+
 func (s *Shader) compile() error {
 	version := s.graphics.context.glslVersion()
 
-	var vssrc, fssrc string
-	if vs, fs, ok := shaderprecomp.GLSL(s.ir.SourceID, version == glsl.GLSLVersionES300); ok {
-		vssrc, fssrc = string(vs), string(fs)
-	} else {
-		vssrc, fssrc = glsl.Compile(s.ir, version)
+	vssrc, vsinfo, err := glsl.Compile(s.program.Module, glslOptions(version, ggshader.VertexEntryPoint))
+	if err != nil {
+		return fmt.Errorf("opengl: translating the vertex shader to GLSL failed: %w", err)
+	}
+	fssrc, fsinfo, err := glsl.Compile(s.program.Module, glslOptions(version, ggshader.FragmentEntryPoint))
+	if err != nil {
+		return fmt.Errorf("opengl: translating the fragment shader to GLSL failed: %w", err)
 	}
 
 	vs, err := s.graphics.context.newShader(gl.VERTEX_SHADER, vssrc)
@@ -78,14 +104,11 @@ func (s *Shader) compile() error {
 	}
 	defer s.graphics.context.ctx.DeleteShader(uint32(fs))
 
-	p, err := s.graphics.context.newProgram([]shader{vs, fs}, theArrayBufferLayout.names())
+	p, err := s.graphics.context.newProgram([]shader{vs, fs})
 	if err != nil {
 		return err
 	}
 
-	// Check the shader compile status asynchronously if possible.
-	// The function 'compile' itself is still blocking, but at least this gives a chance to other goroutines to run
-	// while waiting for the shader compilation.
 	if s.graphics.context.hasParallelShaderCompile() {
 		for s.graphics.context.ctx.GetShaderi(uint32(vs), gl.COMPLETION_STATUS_KHR) != gl.TRUE ||
 			s.graphics.context.ctx.GetShaderi(uint32(fs), gl.COMPLETION_STATUS_KHR) != gl.TRUE {
@@ -93,8 +116,6 @@ func (s *Shader) compile() error {
 		}
 	}
 
-	// Check errors only after linking fails.
-	// See https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/WebGL_best_practices#dont_check_shader_compile_status_unless_linking_fails
 	if s.graphics.context.ctx.GetProgrami(uint32(p), gl.LINK_STATUS) == gl.FALSE {
 		programInfo := s.graphics.context.ctx.GetProgramInfoLog(uint32(p))
 		vertexShaderInfo := s.graphics.context.ctx.GetShaderInfoLog(uint32(vs))
@@ -102,6 +123,31 @@ func (s *Shader) compile() error {
 		s.graphics.deleteProgram(p)
 		return fmt.Errorf("opengl: program error: %s\nvertex shader error: %s\nvertex shader source: %s\nfragment shader error: %s\nfragment shader source: %s",
 			programInfo, vertexShaderInfo, vssrc, fragmentShaderInfo, fssrc)
+	}
+
+	// Attach the uniform blocks to their binding points. A block a stage does not read is not
+	// emitted, so bind whatever naga reports.
+	for _, info := range []glsl.TranslationInfo{vsinfo, fsinfo} {
+		for _, u := range info.Uniforms {
+			idx := s.graphics.context.ctx.GetUniformBlockIndex(uint32(p), u.BlockName)
+			if idx == gl.INVALID_INDEX {
+				continue
+			}
+			switch u.Binding {
+			case ggshader.InternalUniformBinding:
+				s.graphics.context.ctx.UniformBlockBinding(uint32(p), idx, internalUniformBlockBinding)
+			case ggshader.UserUniformBinding:
+				s.graphics.context.ctx.UniformBlockBinding(uint32(p), idx, userUniformBlockBinding)
+			}
+		}
+	}
+
+	s.textureNames = make([]string, s.program.TextureCount)
+	for i := range s.textureNames {
+		name := glslTextureName(i)
+		if s.graphics.context.ctx.GetUniformLocation(uint32(p), name) >= 0 {
+			s.textureNames[i] = name
+		}
 	}
 
 	s.p = p

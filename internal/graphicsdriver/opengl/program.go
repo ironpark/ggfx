@@ -23,7 +23,6 @@ import (
 
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
-	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 const floatSizeInBytes = 4
@@ -141,8 +140,13 @@ type openGLState struct {
 
 	elementArrayBufferSizeInBytes int
 
+	// uniformBuffers hold the internal and the user's uniform blocks, bound at the binding points
+	// internalUniformBlockBinding and userUniformBlockBinding.
+	uniformBuffers            [2]buffer
+	uniformBufferSizesInBytes [2]int
+	lastUniforms              [2][]uint32
+
 	lastProgram       program
-	lastUniforms      map[string][]uint32
 	lastActiveTexture int
 }
 
@@ -154,7 +158,7 @@ func (s *openGLState) reset(context *context) error {
 
 	s.lastProgram = 0
 	context.ctx.UseProgram(0)
-	clear(s.lastUniforms)
+	s.resetLastUniforms()
 
 	if s.arrayBuffer != 0 {
 		context.ctx.DeleteBuffer(uint32(s.arrayBuffer))
@@ -164,6 +168,13 @@ func (s *openGLState) reset(context *context) error {
 	}
 	if s.vertexArray != 0 {
 		context.ctx.DeleteVertexArray(s.vertexArray)
+	}
+	for i, b := range s.uniformBuffers {
+		if b != 0 {
+			context.ctx.DeleteBuffer(uint32(b))
+		}
+		s.uniformBuffers[i] = 0
+		s.uniformBufferSizesInBytes[i] = 0
 	}
 
 	s.arrayBuffer = 0
@@ -226,7 +237,38 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 }
 
 func (s *openGLState) resetLastUniforms() {
-	clear(s.lastUniforms)
+	for i := range s.lastUniforms {
+		s.lastUniforms[i] = s.lastUniforms[i][:0]
+	}
+}
+
+// setUniforms uploads the uniform blocks: the internal block, then the user's block, both laid
+// out as the shader expects. A block that has not changed since the last draw is not uploaded.
+func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
+	blocks := [2][]uint32{uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:]}
+	bindings := [2]uint32{internalUniformBlockBinding, userUniformBlockBinding}
+	for i, block := range blocks {
+		if len(block) == 0 {
+			continue
+		}
+		size := len(block) * int(unsafe.Sizeof(block[0]))
+		if s.uniformBufferSizesInBytes[i] < size {
+			if s.uniformBuffers[i] != 0 {
+				context.ctx.DeleteBuffer(uint32(s.uniformBuffers[i]))
+			}
+			newSize := pow2(size)
+			s.uniformBuffers[i] = context.newUniformBuffer(newSize)
+			s.uniformBufferSizesInBytes[i] = newSize
+			s.lastUniforms[i] = s.lastUniforms[i][:0]
+		}
+		context.ctx.BindBufferBase(gl.UNIFORM_BUFFER, bindings[i], uint32(s.uniformBuffers[i]))
+		if areSameUint32Array(s.lastUniforms[i], block) {
+			continue
+		}
+		bs := unsafe.Slice((*byte)(unsafe.Pointer(&block[0])), size)
+		context.ctx.BufferSubData(gl.UNIFORM_BUFFER, 0, bs)
+		s.lastUniforms[i] = append(s.lastUniforms[i][:0], block...)
+	}
 }
 
 // areSameUint32Array returns a boolean indicating if a and b are deeply equal.
@@ -242,27 +284,9 @@ func areSameUint32Array(a, b []uint32) bool {
 	return true
 }
 
-type uniformVariable struct {
-	name  string
-	value []uint32
-	typ   shaderir.Type
-}
-
 type textureVariable struct {
 	valid  bool
 	native textureNative
-}
-
-func (g *Graphics) textureVariableName(idx int) string {
-	if v, ok := g.textureVariableNameCache[idx]; ok {
-		return v
-	}
-	if g.textureVariableNameCache == nil {
-		g.textureVariableNameCache = map[int]string{}
-	}
-	name := fmt.Sprintf("T%d", idx)
-	g.textureVariableNameCache[idx] = name
-	return name
 }
 
 func (g *Graphics) deleteProgram(p program) {
@@ -275,38 +299,18 @@ func (g *Graphics) deleteProgram(p program) {
 }
 
 // useProgram uses the program (programTexture).
-func (g *Graphics) useProgram(program program, uniforms []uniformVariable, textures [graphics.ShaderSrcImageCount]textureVariable) error {
+func (g *Graphics) useProgram(s *Shader, uniforms []uint32, textures [graphics.ShaderSrcImageCount]textureVariable) error {
+	program := s.p
 	if g.state.lastProgram != program {
 		g.context.ctx.UseProgram(uint32(program))
 
 		g.state.lastProgram = program
-		clear(g.state.lastUniforms)
 		g.state.lastActiveTexture = 0
 		g.context.ctx.ActiveTexture(gl.TEXTURE0)
 		g.context.lastTexture = 0 // Make sure next bindTexture call actually does something.
 	}
 
-	for _, u := range uniforms {
-		if u.value == nil {
-			continue
-		}
-		if got, expected := len(u.value), u.typ.DwordCount(); got != expected {
-			// Copy a shaderir.Type value once. Do not pass u.typ directly to fmt.Errorf arguments, or
-			// the value u would be allocated on heap.
-			typ := u.typ
-			return fmt.Errorf("opengl: length of a uniform variables %s (%s) doesn't match: expected %d but %d", u.name, typ.String(), expected, got)
-		}
-
-		cached, ok := g.state.lastUniforms[u.name]
-		if ok && areSameUint32Array(cached, u.value) {
-			continue
-		}
-		g.context.uniforms(program, u.name, u.value, u.typ)
-		if g.state.lastUniforms == nil {
-			g.state.lastUniforms = map[string][]uint32{}
-		}
-		g.state.lastUniforms[u.name] = u.value
-	}
+	g.state.setUniforms(&g.context, uniforms)
 
 	var idx int
 loop:
@@ -317,9 +321,14 @@ loop:
 
 		// If the texture is already bound, set the texture variable to point to the texture.
 		// Rebinding the same texture seems problematic (#1193).
+		name := s.textureNames[i]
+		if name == "" {
+			continue
+		}
+
 		for _, at := range g.activatedTextures {
 			if t.native == at.textureNative {
-				g.context.uniformInt(program, g.textureVariableName(i), at.index)
+				g.context.uniformInt(program, name, at.index)
 				continue loop
 			}
 		}
@@ -328,7 +337,7 @@ loop:
 			textureNative: t.native,
 			index:         idx,
 		})
-		g.context.uniformInt(program, g.textureVariableName(i), idx)
+		g.context.uniformInt(program, name, idx)
 		if g.state.lastActiveTexture != idx {
 			g.context.ctx.ActiveTexture(uint32(gl.TEXTURE0 + idx))
 			g.state.lastActiveTexture = idx
@@ -347,12 +356,4 @@ loop:
 	g.activatedTextures = g.activatedTextures[:0]
 
 	return nil
-}
-
-func uint32sToFloat32s(s []uint32) []float32 {
-	return unsafe.Slice((*float32)(unsafe.Pointer(&s[0])), len(s))
-}
-
-func uint32sToInt32s(s []uint32) []int32 {
-	return unsafe.Slice((*int32)(unsafe.Pointer(&s[0])), len(s))
 }

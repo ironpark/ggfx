@@ -61,6 +61,14 @@ func (d *DebugContext) BindBuffer(arg0 uint32, arg1 uint32) {
 	}
 }
 
+func (d *DebugContext) BindBufferBase(arg0 uint32, arg1 uint32, arg2 uint32) {
+	d.Context.BindBufferBase(arg0, arg1, arg2)
+	fmt.Fprintln(os.Stderr, "BindBufferBase")
+	if e := d.Context.GetError(); e != NO_ERROR {
+		panic(fmt.Sprintf("gl: GetError() returned %d at BindBufferBase", e))
+	}
+}
+
 func (d *DebugContext) BindFramebuffer(arg0 uint32, arg1 uint32) {
 	d.Context.BindFramebuffer(arg0, arg1)
 	fmt.Fprintln(os.Stderr, "BindFramebuffer")
@@ -409,6 +417,15 @@ func (d *DebugContext) GetShaderi(arg0 uint32, arg1 uint32) int {
 	return out0
 }
 
+func (d *DebugContext) GetUniformBlockIndex(arg0 uint32, arg1 string) uint32 {
+	out0 := d.Context.GetUniformBlockIndex(arg0, arg1)
+	fmt.Fprintln(os.Stderr, "GetUniformBlockIndex")
+	if e := d.Context.GetError(); e != NO_ERROR {
+		panic(fmt.Sprintf("gl: GetError() returned %d at GetUniformBlockIndex", e))
+	}
+	return out0
+}
+
 func (d *DebugContext) GetUniformLocation(arg0 uint32, arg1 string) int32 {
 	out0 := d.Context.GetUniformLocation(arg0, arg1)
 	fmt.Fprintln(os.Stderr, "GetUniformLocation")
@@ -594,6 +611,14 @@ func (d *DebugContext) Uniform4iv(arg0 int32, arg1 []int32) {
 	fmt.Fprintln(os.Stderr, "Uniform4iv")
 	if e := d.Context.GetError(); e != NO_ERROR {
 		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform4iv", e))
+	}
+}
+
+func (d *DebugContext) UniformBlockBinding(arg0 uint32, arg1 uint32, arg2 uint32) {
+	d.Context.UniformBlockBinding(arg0, arg1, arg2)
+	fmt.Fprintln(os.Stderr, "UniformBlockBinding")
+	if e := d.Context.GetError(); e != NO_ERROR {
+		panic(fmt.Sprintf("gl: GetError() returned %d at UniformBlockBinding", e))
 	}
 }
 

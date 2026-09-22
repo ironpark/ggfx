@@ -24,7 +24,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
-	"github.com/ironpark/ggfx/internal/shaderir"
+	ggshader "github.com/ironpark/ggfx/internal/shader"
 )
 
 type activatedTexture struct {
@@ -55,10 +55,7 @@ type Graphics struct {
 	// drawCalled is true just after Draw is called. This holds true until WritePixels is called.
 	drawCalled bool
 
-	uniformVariableNameCache map[int]string
-	textureVariableNameCache map[int]string
-
-	uniformVars []uniformVariable
+	tmpUniforms []uint32
 
 	// activatedTextures is a set of activated textures.
 	// textureNative cannot be a map key unfortunately.
@@ -201,18 +198,6 @@ func (g *Graphics) SetVertices(vertices []float32, indices []uint32) error {
 	return nil
 }
 
-func (g *Graphics) uniformVariableName(idx int) string {
-	if v, ok := g.uniformVariableNameCache[idx]; ok {
-		return v
-	}
-	if g.uniformVariableNameCache == nil {
-		g.uniformVariableNameCache = map[int]string{}
-	}
-	name := fmt.Sprintf("U%d", idx)
-	g.uniformVariableNameCache[idx] = name
-	return name
-}
-
 func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.ShaderSrcImageCount]graphicsdriver.ImageID, shaderID graphicsdriver.ShaderID, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
 	if shaderID == graphicsdriver.InvalidShaderID {
 		return fmt.Errorf("opengl: shader ID is invalid")
@@ -228,32 +213,17 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 	g.context.blend(blend)
 
 	shader := g.shaders[shaderID]
-	program := shader.p
-
-	ulen := len(shader.ir.Uniforms)
-	if cap(g.uniformVars) < ulen {
-		g.uniformVars = make([]uniformVariable, ulen)
-	} else {
-		g.uniformVars = g.uniformVars[:ulen]
-	}
-
-	var idx int
-	for i, typ := range shader.ir.Uniforms {
-		n := typ.DwordCount()
-		g.uniformVars[i].name = g.uniformVariableName(i)
-		g.uniformVars[i].value = uniforms[idx : idx+n]
-		g.uniformVars[i].typ = typ
-		idx += n
-	}
 
 	// In OpenGL, the NDC's Y direction is upward, so flip the Y direction for the final framebuffer.
 	if destination.screen {
-		const idx = graphics.ProjectionMatrixUniformVariableIndex
+		g.tmpUniforms = append(g.tmpUniforms[:0], uniforms...)
+		uniforms = g.tmpUniforms
+		const p = graphics.ProjectionMatrixUniformDwordIndex
 		// Invert the sign bits as float32 values.
-		g.uniformVars[idx].value[1] ^= 1 << 31
-		g.uniformVars[idx].value[5] ^= 1 << 31
-		g.uniformVars[idx].value[9] ^= 1 << 31
-		g.uniformVars[idx].value[13] ^= 1 << 31
+		uniforms[p+1] ^= 1 << 31
+		uniforms[p+5] ^= 1 << 31
+		uniforms[p+9] ^= 1 << 31
+		uniforms[p+13] ^= 1 << 31
 	}
 
 	var imgs [graphics.ShaderSrcImageCount]textureVariable
@@ -265,14 +235,9 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 		imgs[i].native = g.images[srcID].texture
 	}
 
-	if err := g.useProgram(program, g.uniformVars, imgs); err != nil {
+	if err := g.useProgram(shader, uniforms, imgs); err != nil {
 		return err
 	}
-
-	for i := range g.uniformVars {
-		g.uniformVars[i] = uniformVariable{}
-	}
-	g.uniformVars = g.uniformVars[:0]
 
 	for _, dstRegion := range dstRegions {
 		g.context.ctx.Scissor(
@@ -300,7 +265,7 @@ func (g *Graphics) MaxImageSize() int {
 	return g.context.getMaxTextureSize()
 }
 
-func (g *Graphics) NewShader(program *shaderir.Program) (graphicsdriver.Shader, error) {
+func (g *Graphics) NewShader(program *ggshader.Program) (graphicsdriver.Shader, error) {
 	s, err := newShader(g.genNextShaderID(), g, program)
 	if err != nil {
 		return nil, err

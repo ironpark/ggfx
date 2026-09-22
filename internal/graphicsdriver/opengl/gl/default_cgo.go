@@ -48,6 +48,27 @@ package gl
 //   ((fn)(fnptr))(target, buffer);
 // }
 //
+// #cgo noescape glowBindBufferBase
+// #cgo nocallback glowBindBufferBase
+// static void glowBindBufferBase(uintptr_t fnptr, GLenum target, GLuint index, GLuint buffer) {
+//   typedef void (*fn)(GLenum target, GLuint index, GLuint buffer);
+//   ((fn)(fnptr))(target, index, buffer);
+// }
+//
+// #cgo noescape glowGetUniformBlockIndex
+// #cgo nocallback glowGetUniformBlockIndex
+// static GLuint glowGetUniformBlockIndex(uintptr_t fnptr, GLuint program, const GLchar* name) {
+//   typedef GLuint (*fn)(GLuint program, const GLchar* name);
+//   return ((fn)(fnptr))(program, name);
+// }
+//
+// #cgo noescape glowUniformBlockBinding
+// #cgo nocallback glowUniformBlockBinding
+// static void glowUniformBlockBinding(uintptr_t fnptr, GLuint program, GLuint index, GLuint binding) {
+//   typedef void (*fn)(GLuint program, GLuint index, GLuint binding);
+//   ((fn)(fnptr))(program, index, binding);
+// }
+//
 // #cgo noescape glowBindFramebuffer
 // #cgo nocallback glowBindFramebuffer
 // static void glowBindFramebuffer(uintptr_t fnptr, GLenum target, GLuint framebuffer) {
@@ -542,6 +563,9 @@ type defaultContext struct {
 	gpAttachShader             C.uintptr_t
 	gpBindAttribLocation       C.uintptr_t
 	gpBindBuffer               C.uintptr_t
+	gpBindBufferBase           C.uintptr_t
+	gpGetUniformBlockIndex     C.uintptr_t
+	gpUniformBlockBinding      C.uintptr_t
 	gpBindFramebuffer          C.uintptr_t
 	gpBindRenderbuffer         C.uintptr_t
 	gpBindTexture              C.uintptr_t
@@ -650,6 +674,21 @@ func (c *defaultContext) BindAttribLocation(program uint32, index uint32, name s
 
 func (c *defaultContext) BindBuffer(target uint32, buffer uint32) {
 	C.glowBindBuffer(c.gpBindBuffer, C.GLenum(target), C.GLuint(buffer))
+}
+
+func (c *defaultContext) BindBufferBase(target uint32, index uint32, buffer uint32) {
+	C.glowBindBufferBase(c.gpBindBufferBase, C.GLenum(target), C.GLuint(index), C.GLuint(buffer))
+}
+
+func (c *defaultContext) GetUniformBlockIndex(program uint32, name string) uint32 {
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	ret := C.glowGetUniformBlockIndex(c.gpGetUniformBlockIndex, C.GLuint(program), (*C.GLchar)(unsafe.Pointer(cname)))
+	return uint32(ret)
+}
+
+func (c *defaultContext) UniformBlockBinding(program uint32, index uint32, binding uint32) {
+	C.glowUniformBlockBinding(c.gpUniformBlockBinding, C.GLuint(program), C.GLuint(index), C.GLuint(binding))
 }
 
 func (c *defaultContext) BindFramebuffer(target uint32, framebuffer uint32) {
@@ -1000,6 +1039,9 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpAttachShader = C.uintptr_t(g.get("glAttachShader"))
 	c.gpBindAttribLocation = C.uintptr_t(g.get("glBindAttribLocation"))
 	c.gpBindBuffer = C.uintptr_t(g.get("glBindBuffer"))
+	c.gpBindBufferBase = C.uintptr_t(g.get("glBindBufferBase"))
+	c.gpGetUniformBlockIndex = C.uintptr_t(g.get("glGetUniformBlockIndex"))
+	c.gpUniformBlockBinding = C.uintptr_t(g.get("glUniformBlockBinding"))
 	c.gpBindFramebuffer = C.uintptr_t(g.get("glBindFramebuffer"))
 	c.gpBindRenderbuffer = C.uintptr_t(g.get("glBindRenderbuffer"))
 	c.gpBindTexture = C.uintptr_t(g.get("glBindTexture"))

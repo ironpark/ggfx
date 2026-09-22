@@ -28,6 +28,9 @@ type defaultContext struct {
 	gpAttachShader             uintptr
 	gpBindAttribLocation       uintptr
 	gpBindBuffer               uintptr
+	gpBindBufferBase           uintptr
+	gpGetUniformBlockIndex     uintptr
+	gpUniformBlockBinding      uintptr
 	gpBindFramebuffer          uintptr
 	gpBindRenderbuffer         uintptr
 	gpBindTexture              uintptr
@@ -136,6 +139,21 @@ func (c *defaultContext) BindAttribLocation(program uint32, index uint32, name s
 
 func (c *defaultContext) BindBuffer(target uint32, buffer uint32) {
 	purego.SyscallN(c.gpBindBuffer, uintptr(target), uintptr(buffer))
+}
+
+func (c *defaultContext) BindBufferBase(target uint32, index uint32, buffer uint32) {
+	purego.SyscallN(c.gpBindBufferBase, uintptr(target), uintptr(index), uintptr(buffer))
+}
+
+func (c *defaultContext) GetUniformBlockIndex(program uint32, name string) uint32 {
+	cname, free := cStr(name)
+	defer free()
+	ret, _, _ := purego.SyscallN(c.gpGetUniformBlockIndex, uintptr(program), uintptr(unsafe.Pointer(cname)))
+	return uint32(ret)
+}
+
+func (c *defaultContext) UniformBlockBinding(program uint32, index uint32, binding uint32) {
+	purego.SyscallN(c.gpUniformBlockBinding, uintptr(program), uintptr(index), uintptr(binding))
 }
 
 func (c *defaultContext) BindFramebuffer(target uint32, framebuffer uint32) {
@@ -486,6 +504,9 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpAttachShader = g.get("glAttachShader")
 	c.gpBindAttribLocation = g.get("glBindAttribLocation")
 	c.gpBindBuffer = g.get("glBindBuffer")
+	c.gpBindBufferBase = g.get("glBindBufferBase")
+	c.gpGetUniformBlockIndex = g.get("glGetUniformBlockIndex")
+	c.gpUniformBlockBinding = g.get("glUniformBlockBinding")
 	c.gpBindFramebuffer = g.get("glBindFramebuffer")
 	c.gpBindRenderbuffer = g.get("glBindRenderbuffer")
 	c.gpBindTexture = g.get("glBindTexture")

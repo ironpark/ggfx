@@ -19,6 +19,8 @@ package gl
 const (
 	ALWAYS                = 0x0207
 	ARRAY_BUFFER          = 0x8892
+	UNIFORM_BUFFER        = 0x8A11
+	INVALID_INDEX         = 0xFFFFFFFF
 	BACK                  = 0x0405
 	BLEND                 = 0x0BE2
 	CLAMP_TO_EDGE         = 0x812F

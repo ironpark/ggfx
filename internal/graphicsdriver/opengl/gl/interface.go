@@ -31,6 +31,7 @@ type Context interface {
 	AttachShader(program uint32, shader uint32)
 	BindAttribLocation(program uint32, index uint32, name string)
 	BindBuffer(target uint32, buffer uint32)
+	BindBufferBase(target uint32, index uint32, buffer uint32)
 	BindFramebuffer(target uint32, framebuffer uint32)
 	BindRenderbuffer(target uint32, renderbuffer uint32)
 	BindTexture(target uint32, texture uint32)
@@ -73,6 +74,7 @@ type Context interface {
 	GetProgrami(program uint32, pname uint32) int
 	GetShaderInfoLog(shader uint32) string
 	GetShaderi(shader uint32, pname uint32) int
+	GetUniformBlockIndex(program uint32, name string) uint32
 	GetUniformLocation(program uint32, name string) int32
 	IsProgram(program uint32) bool
 	LinkProgram(program uint32)
@@ -98,6 +100,7 @@ type Context interface {
 	UniformMatrix2fv(location int32, value []float32)
 	UniformMatrix3fv(location int32, value []float32)
 	UniformMatrix4fv(location int32, value []float32)
+	UniformBlockBinding(program uint32, index uint32, binding uint32)
 	UseProgram(program uint32)
 	VertexAttribPointer(index uint32, size int32, xtype uint32, normalized bool, stride int32, offset int)
 	Viewport(x int32, y int32, width int32, height int32)

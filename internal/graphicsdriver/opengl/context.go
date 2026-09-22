@@ -17,6 +17,8 @@
 package opengl
 
 import (
+	"github.com/gogpu/naga/glsl"
+
 	"errors"
 	"fmt"
 	"image"
@@ -25,8 +27,6 @@ import (
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
-	"github.com/ironpark/ggfx/internal/shaderir"
-	"github.com/ironpark/ggfx/internal/shaderir/glsl"
 )
 
 type blendFactor int
@@ -397,7 +397,7 @@ func (c *context) newShader(shaderType uint32, source string) (shader, error) {
 	return shader(s), nil
 }
 
-func (c *context) newProgram(shaders []shader, attributes []string) (program, error) {
+func (c *context) newProgram(shaders []shader) (program, error) {
 	p := c.ctx.CreateProgram()
 	if p == 0 {
 		return 0, errors.New("opengl: glCreateProgram failed")
@@ -405,10 +405,6 @@ func (c *context) newProgram(shaders []shader, attributes []string) (program, er
 
 	for _, shader := range shaders {
 		c.ctx.AttachShader(p, uint32(shader))
-	}
-
-	for i, name := range attributes {
-		c.ctx.BindAttribLocation(p, uint32(i), name)
 	}
 
 	c.ctx.LinkProgram(p)
@@ -429,48 +425,6 @@ func (c *context) uniformInt(p program, location string, v int) bool {
 	return true
 }
 
-func (c *context) uniforms(p program, location string, v []uint32, typ shaderir.Type) bool {
-	l := c.locationCache.GetUniformLocation(c, p, location)
-	if l == invalidUniform {
-		return false
-	}
-
-	base := typ.Main
-	if base == shaderir.Array {
-		base = typ.Sub[0].Main
-	}
-
-	switch base {
-	case shaderir.Bool:
-		c.ctx.Uniform1iv(int32(l), uint32sToInt32s(v))
-	case shaderir.Float:
-		c.ctx.Uniform1fv(int32(l), uint32sToFloat32s(v))
-	case shaderir.Int:
-		c.ctx.Uniform1iv(int32(l), uint32sToInt32s(v))
-	case shaderir.Vec2:
-		c.ctx.Uniform2fv(int32(l), uint32sToFloat32s(v))
-	case shaderir.Vec3:
-		c.ctx.Uniform3fv(int32(l), uint32sToFloat32s(v))
-	case shaderir.Vec4:
-		c.ctx.Uniform4fv(int32(l), uint32sToFloat32s(v))
-	case shaderir.IVec2:
-		c.ctx.Uniform2iv(int32(l), uint32sToInt32s(v))
-	case shaderir.IVec3:
-		c.ctx.Uniform3iv(int32(l), uint32sToInt32s(v))
-	case shaderir.IVec4:
-		c.ctx.Uniform4iv(int32(l), uint32sToInt32s(v))
-	case shaderir.Mat2:
-		c.ctx.UniformMatrix2fv(int32(l), uint32sToFloat32s(v))
-	case shaderir.Mat3:
-		c.ctx.UniformMatrix3fv(int32(l), uint32sToFloat32s(v))
-	case shaderir.Mat4:
-		c.ctx.UniformMatrix4fv(int32(l), uint32sToFloat32s(v))
-	default:
-		panic(fmt.Sprintf("opengl: unexpected type: %s", typ.String()))
-	}
-	return true
-}
-
 func (c *context) newArrayBuffer(size int) buffer {
 	b := c.ctx.CreateBuffer()
 	c.ctx.BindBuffer(gl.ARRAY_BUFFER, b)
@@ -485,11 +439,20 @@ func (c *context) newElementArrayBuffer(size int) buffer {
 	return buffer(b)
 }
 
-func (c *context) glslVersion() glsl.GLSLVersion {
+func (c *context) newUniformBuffer(size int) buffer {
+	b := c.ctx.CreateBuffer()
+	c.ctx.BindBuffer(gl.UNIFORM_BUFFER, b)
+	c.ctx.BufferInit(gl.UNIFORM_BUFFER, size, gl.DYNAMIC_DRAW)
+	return buffer(b)
+}
+
+// glslVersion returns the GLSL version to translate shaders to: GLSL ES 3.00 for OpenGL ES and
+// WebGL 2, and GLSL 3.30 for desktop OpenGL.
+func (c *context) glslVersion() glsl.Version {
 	if c.ctx.IsES() {
-		return glsl.GLSLVersionES300
+		return glsl.Version{Major: 3, Minor: 0, ES: true}
 	}
-	return glsl.GLSLVersionDefault
+	return glsl.Version330
 }
 
 func shouldCheckFramebufferStatus() bool {

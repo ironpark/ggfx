@@ -24,6 +24,9 @@ type defaultContext struct {
 	fnAttachShader             js.Value
 	fnBindAttribLocation       js.Value
 	fnBindBuffer               js.Value
+	fnBindBufferBase           js.Value
+	fnGetUniformBlockIndex     js.Value
+	fnUniformBlockBinding      js.Value
 	fnBindFramebuffer          js.Value
 	fnBindRenderbuffer         js.Value
 	fnBindTexture              js.Value
@@ -155,6 +158,9 @@ func NewDefaultContext(v js.Value) (Context, error) {
 		fnAttachShader:             v.Get("attachShader").Call("bind", v),
 		fnBindAttribLocation:       v.Get("bindAttribLocation").Call("bind", v),
 		fnBindBuffer:               v.Get("bindBuffer").Call("bind", v),
+		fnBindBufferBase:           v.Get("bindBufferBase").Call("bind", v),
+		fnGetUniformBlockIndex:     v.Get("getUniformBlockIndex").Call("bind", v),
+		fnUniformBlockBinding:      v.Get("uniformBlockBinding").Call("bind", v),
 		fnBindFramebuffer:          v.Get("bindFramebuffer").Call("bind", v),
 		fnBindRenderbuffer:         v.Get("bindRenderbuffer").Call("bind", v),
 		fnBindTexture:              v.Get("bindTexture").Call("bind", v),
@@ -260,6 +266,18 @@ func (c *defaultContext) BindAttribLocation(program uint32, index uint32, name s
 
 func (c *defaultContext) BindBuffer(target uint32, buffer uint32) {
 	c.fnBindBuffer.Invoke(target, c.buffers.get(buffer))
+}
+
+func (c *defaultContext) BindBufferBase(target uint32, index uint32, buffer uint32) {
+	c.fnBindBufferBase.Invoke(target, index, c.buffers.get(buffer))
+}
+
+func (c *defaultContext) GetUniformBlockIndex(program uint32, name string) uint32 {
+	return uint32(c.fnGetUniformBlockIndex.Invoke(c.programs.get(program), name).Int())
+}
+
+func (c *defaultContext) UniformBlockBinding(program uint32, index uint32, binding uint32) {
+	c.fnUniformBlockBinding.Invoke(c.programs.get(program), index, binding)
 }
 
 func (c *defaultContext) BindFramebuffer(target uint32, framebuffer uint32) {
