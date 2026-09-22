@@ -58,12 +58,13 @@ func (u *glfwBackend) registerNativeCallbacks() error {
 	u.window.SetTextInputEnabled(true)
 	u.window.SetTextCallback(func(text string, start, end int, replacement bool) {
 		u.pushEvent(TextEvent{Window: aw, Text: text, ReplacementStart: start, ReplacementEnd: end, HasReplacement: replacement})
-		u.context.(*eventContext).requestFrame()
+		aw.RequestFrame()
 	})
 	u.window.SetCompositionCallback(func(text string, start, end int, done bool) {
 		u.pushEvent(CompositionEvent{Window: aw, Text: text, Start: start, End: end, Done: done})
-		// Already on the main thread: do not enter RequestFrame's thread hop.
-		u.context.(*eventContext).requestFrame()
+		// Posting an empty event also wakes a native wait that is servicing a
+		// synchronous callback (notably OLE) without returning a queued message.
+		aw.RequestFrame()
 	})
 	return u.window.SetDragCallback(func(phase int, x, y float64, paths []string) {
 		x, y = u.cursorPositionInDIP(x, y)
@@ -77,7 +78,7 @@ func (u *glfwBackend) registerNativeCallbacks() error {
 			}
 		}
 		u.pushEvent(DragEvent{Window: aw, Phase: phase, X: x, Y: y, Files: files})
-		u.context.(*eventContext).requestFrame()
+		aw.RequestFrame()
 	})
 }
 
