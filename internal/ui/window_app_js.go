@@ -155,6 +155,14 @@ func (u *UserInterface) appWindow() AppWindow {
 	return nil
 }
 
+// pushFocusEvent queues a FocusEvent for the canvas, if an app runs.
+func (u *UserInterface) pushFocusEvent(focused bool) {
+	if aw := u.appWindow(); aw != nil {
+		u.pushEvent(FocusEvent{Window: aw, Focused: focused})
+		u.scheduleRendering()
+	}
+}
+
 // clientPositionInDIP converts a DOM client position to device-independent pixels of the canvas.
 // The canvas fills the page, so they are the same.
 func clientPositionInDIP(e js.Value) (float64, float64) {

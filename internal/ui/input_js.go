@@ -177,8 +177,74 @@ func (u *UserInterface) updateInputFromEvent(e js.Value) error {
 		u.inputState.NumLock = NewLockKeyStateFromBool(e.Call("getModifierState", stringNumLock).Bool())
 	}
 
+	u.pushInputEvent(e)
 	u.forceUpdateOnMinimumFPSMode()
 	return nil
+}
+
+// pushInputEvent queues the app event for a DOM input event. Positions are in
+// device-independent pixels; the canvas fills the page, so they are the client
+// coordinates. Wheel deltas are pixels, as the browser reports them, with the
+// sign of Wheel(): positive scrolls up.
+func (u *UserInterface) pushInputEvent(e js.Value) {
+	if u.app == nil {
+		return
+	}
+	aw := u.appWindow()
+	if aw == nil {
+		return
+	}
+	t := e.Get("type")
+	switch {
+	case t.Equal(stringKeydown), t.Equal(stringKeyup):
+		pressed := t.Equal(stringKeydown)
+		repeat := pressed && e.Get("repeat").Bool()
+		key0, key1 := eventToKeys(e)
+		for _, k := range [...]Key{key0, key1} {
+			if k >= 0 {
+				u.pushEvent(KeyEvent{Window: aw, Key: k, Pressed: pressed, Repeat: repeat})
+			}
+		}
+		if pressed {
+			if str := e.Get("key").String(); isKeyString(str) {
+				u.pushEvent(TextEvent{Window: aw, Text: str})
+			}
+		}
+	case t.Equal(stringMousedown), t.Equal(stringMouseup):
+		b, ok := codeToMouseButton[e.Get("button").Int()]
+		if !ok {
+			return
+		}
+		x, y := clientPositionInDIP(e)
+		u.pushEvent(MouseButtonEvent{Window: aw, Button: b, Pressed: t.Equal(stringMousedown), X: x, Y: y})
+	case t.Equal(stringMousemove):
+		x, y := clientPositionInDIP(e)
+		u.pushEvent(MouseMoveEvent{Window: aw, X: x, Y: y})
+	case t.Equal(stringWheel):
+		u.pushEvent(ScrollEvent{Window: aw, X: -e.Get("deltaX").Float(), Y: -e.Get("deltaY").Float()})
+	case t.Equal(stringTouchstart), t.Equal(stringTouchmove), t.Equal(stringTouchend):
+		phase := TouchPhaseMoved
+		switch {
+		case t.Equal(stringTouchstart):
+			phase = TouchPhaseBegan
+		case t.Equal(stringTouchend):
+			phase = TouchPhaseEnded
+		}
+		touches := e.Get("changedTouches")
+		for i := 0; i < touches.Length(); i++ {
+			touch := touches.Call("item", i)
+			u.pushEvent(TouchEvent{
+				Window: aw,
+				ID:     TouchID(touch.Get("identifier").Int()),
+				Phase:  phase,
+				X:      touch.Get("clientX").Float(),
+				Y:      touch.Get("clientY").Float(),
+			})
+		}
+	default:
+		return
+	}
+	u.scheduleRendering()
 }
 
 func (u *UserInterface) setMouseCursorFromEvent(e js.Value) {

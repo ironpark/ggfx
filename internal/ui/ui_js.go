@@ -786,9 +786,14 @@ func (u *UserInterface) setCanvasEventHandlers(v js.Value) {
 		return nil
 	}))
 
-	// Blur
+	// Focus
+	v.Call("addEventListener", "focus", js.FuncOf(func(this js.Value, args []js.Value) any {
+		u.pushFocusEvent(true)
+		return nil
+	}))
 	v.Call("addEventListener", "blur", js.FuncOf(func(this js.Value, args []js.Value) any {
 		u.inputState.releaseAllButtons(u.InputTime())
+		u.pushFocusEvent(false)
 		return nil
 	}))
 }
