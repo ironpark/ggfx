@@ -15,13 +15,11 @@
 package ggfx
 
 import (
-	"io/fs"
 	"runtime"
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/clock"
 	ecolor "github.com/ironpark/ggfx/internal/color"
-	"github.com/ironpark/ggfx/internal/inputstate"
 	"github.com/ironpark/ggfx/internal/ui"
 )
 
@@ -186,23 +184,6 @@ func toUIRunOptions(options *RunOptions) *ui.RunOptions {
 		X11ClassName:             options.X11ClassName,
 		X11InstanceName:          options.X11InstanceName,
 	}
-}
-
-// DroppedFiles returns a virtual file system that includes only dropped files and/or directories
-// at its root directory, at the time Update is called.
-//
-// DroppedFiles works on desktops and browsers.
-//
-// As of Ebitengine 2.9, the returned value also implements [io/fs.ReadDirFS].
-//
-// As of Ebitengine 2.10, the returned value also implements [io/fs.ReadFileFS].
-//
-// As of Ebitengine 2.10, on desktops, the directory entries and the files the returned value
-// provides also implement [AbsPather].
-//
-// DroppedFiles is concurrent-safe.
-func DroppedFiles() fs.FS {
-	return inputstate.Get().DroppedFiles()
 }
 
 // AbsPather is a directory entry or a file that has a path in the real file system.

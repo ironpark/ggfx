@@ -238,8 +238,10 @@ backend. It is not wired yet.
 
 ## What the event path does not do
 
-- No ticks, no `TPS`, no `inpututil`. `KeyEvent.Repeat` replaces
-  `KeyPressDuration`. Apps that need key state keep it from the events.
+- No ticks, no `TPS`, and no polling input at all: `inpututil`,
+  `internal/inputstate` and `input.go`'s state functions are gone.
+  `KeyEvent.Repeat` replaces `KeyPressDuration`. An application that needs key
+  state keeps it from the events.
   `Tick()` still advances once per loop iteration, and the before-update
   hooks run then, so `exp/textinput` keeps working when polled every frame.
 - No composition events on X11 or the browser yet. Their `exp/textinput`

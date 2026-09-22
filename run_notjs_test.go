@@ -26,8 +26,8 @@ import (
 	"github.com/ironpark/ggfx/internal/file"
 )
 
-// TestDroppedFilesAbsPather ensures that the file system [ggfx.DroppedFiles] returns on desktops
-// provides directory entries and files implementing [ggfx.AbsPather].
+// TestDroppedFilesAbsPather ensures that the file system a desktop DropEvent carries provides
+// directory entries and files implementing [ggfx.AbsPather].
 func TestDroppedFilesAbsPather(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")

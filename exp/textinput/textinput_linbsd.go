@@ -56,7 +56,6 @@ func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textI
 		ggfx.RunOnMainThread(func() {
 			ui.Get().SetX11TextInputHandlersOnMainThread(t.sendComposition, t.sendCommit, t.events.isOpen)
 		})
-		t.seedFromInputChars()
 	})
 
 	// Discarding an abandoned composition can make the input method report text
@@ -71,19 +70,6 @@ func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textI
 		t.events.clearQueue()
 	}
 	return t.events.start()
-}
-
-// seedFromInputChars reports the text of the current tick as a commit. Until
-// the handlers are registered the input method reports nowhere, so the input
-// characters are the only record of what the tick already delivered.
-//
-// seedFromInputChars is called from the game thread.
-func (t *textInputImpl) seedFromInputChars() {
-	rs := ggfx.AppendInputChars(nil)
-	if len(rs) == 0 {
-		return
-	}
-	t.sendCommit(string(rs))
 }
 
 // sendComposition reports a composition update from the input method.

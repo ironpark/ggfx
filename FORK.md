@@ -52,6 +52,10 @@ ggui targets desktop and the browser and uses a small part of the engine: images
 shaders, `text/v2`, `vector`, `exp/textinput`, `inpututil`, input, cursor,
 monitor and window APIs. Everything outside that was dropped.
 
+- The polling input API: `input.go`'s key, mouse, touch and gamepad state
+  functions, `DroppedFiles`, `inpututil` and `internal/inputstate`. Input
+  arrives as events. What is left in `input.go` asks what a device is, not what
+  it is doing. `exp/textinput`'s console backend went with the consoles.
 - `audio`, `mobile`, `cmd` (ebitenmobile), `examples`, `misc`, `skills`,
   `ebitenutil`, `colorm`, old `text` v1, `vibrate`.
 - Console and mobile platforms: Nintendo Switch, PlayStation 5, Xbox GDK,
@@ -130,8 +134,11 @@ WebGL feels.
   a two-window smoke test in `examples/nativehooks`.
 - Waking the loop from the macOS and Linux gamepad connection callbacks, instead
   of the one-second detection poll (`docs/window.md`).
-- Removing the polling input API (`input.go`, `inpututil`, `internal/inputstate`)
-  now that gamepads are events and nothing fills the input state.
+- `internal/ui`'s `InputState` and the per-backend `readInputState` are now
+  unreachable; removing them touches the X11 and browser input files.
+- X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which
+  had stopped reporting anything under `Run` anyway. It needs to take committed
+  text from `TextEvent` instead, which is the same gap as IME composition there.
 - The `!android && !ios && !js && !nintendosdk && !playstation5` build
   constraint is still spelled out across `internal/ui`, where `!js` would do.
 - The deprecated v2.1 key aliases (`KeyDown`, `Key0`, ...) that `genkeys.go`
