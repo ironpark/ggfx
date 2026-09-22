@@ -99,7 +99,9 @@ one window that asks for a frame every iteration.
   DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
   to need shader model 5.0 without register spaces, but no D3D compiler or
   debug layer has seen it.
-- Replacing glfw with a purego Cocoa and Win32 layer shared with ggui.
+- Exposing native window hooks (drag-over, IME composition, accessibility
+  attach points) so ggui stops reaching into the GLFW port's classes and
+  windows; see `docs/native-window-handoff.md`.
 - Deciding whether gamepad support stays.
 - `genkeys.go` still generates key tables for the removed mobile platforms.
 - The `ebiten:` prefix in error messages and documentation wording.
