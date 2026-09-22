@@ -382,14 +382,18 @@ func (c *eventContext) dispose() {
 	}
 }
 
-func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present, force bool) (needsSwapBuffers bool, err error) {
+// renderFrame runs one frame. render reports whether the frame should run at all and present
+// whether its result can reach the display; force draws regardless of the draw-skipping states.
+// It returns whether the surface must be presented, which the caller does by flushing the
+// commands with a present.
+func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, render, present, force bool) (needsSwapBuffers bool, err error) {
 	if screenWidth == 0 || screenHeight == 0 {
 		return false, nil
 	}
 	if !force && !c.frameRequested.Load() {
 		return false, nil
 	}
-	if !present {
+	if !render {
 		// Keep the request until the window can show the frame.
 		return false, nil
 	}
@@ -430,7 +434,7 @@ func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, scree
 	}); err != nil {
 		return false, err
 	}
-	return true, nil
+	return present, nil
 }
 
 func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error {
@@ -438,7 +442,7 @@ func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, 
 	if err := ui.dispatchEvents(); err != nil {
 		return err
 	}
-	needsSwapBuffers, err := c.renderFrame(graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, ui, true, true)
+	needsSwapBuffers, err := c.renderFrame(graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, ui, true, true, true)
 	if err != nil {
 		return err
 	}

@@ -547,6 +547,7 @@ func (u *UserInterface) waitWhileUnfocused() error {
 // windowFrame is what one window needs for a frame, gathered on the main thread.
 type windowFrame struct {
 	window            *glfwBackend
+	render            bool
 	present           bool
 	screenWidth       int
 	screenHeight      int
@@ -597,6 +598,10 @@ func (u *UserInterface) updateFrame() error {
 				return
 			}
 			present := shouldPresentFrame(visible == glfw.True && !occluded, w.bufferOnceSwapped, w.desktopWindow.isInitWindowVisible())
+			// A window the app asked to keep hidden is a rendering target, not a window
+			// waiting to be shown: run its frames and skip the buffer swap alone. A window
+			// the OS hid, by occluding or iconifying it, skips the frame altogether.
+			render := present || !w.desktopWindow.isInitWindowVisible()
 
 			sw, sh, e := w.updateWindow()
 			if errors.Is(e, errWindowClosed) {
@@ -630,6 +635,7 @@ func (u *UserInterface) updateFrame() error {
 
 			frames = append(frames, windowFrame{
 				window:            w,
+				render:            render,
 				present:           present,
 				screenWidth:       sw,
 				screenHeight:      sh,
@@ -686,7 +692,7 @@ func (u *UserInterface) updateFrame() error {
 		if !f.window.context.wantsFrame() {
 			continue
 		}
-		n, err := f.window.context.renderFrame(u.graphicsDriver, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, f.present, false)
+		n, err := f.window.context.renderFrame(u.graphicsDriver, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, f.render, f.present, false)
 		if err != nil {
 			return err
 		}

@@ -46,6 +46,18 @@ shader contract. What changed for the drivers:
 - `vector/stencilshader.go` and `stencilbuffer.go` changed with it, so those
   files no longer merge cleanly from upstream.
 
+## A hidden window renders
+
+`shouldPresentFrame` returns false both for a window the OS hid, by occluding or
+iconifying it, and for a window the app asked to keep hidden. Upstream skipped
+the frame in both cases, which made `WindowOptions.Hidden` a window that never
+draws. The two are now separate: a hidden-on-purpose window runs its frames and
+skips the buffer swap alone, so it is a rendering target for a screenshot dumper
+that should not show anything. `renderFrame` takes `render` and `present`
+rather than one flag, and returns `present` as whether the surface needs a swap.
+An occluded window still skips the frame, which is what keeps the loop off the
+GPU when nothing can be seen.
+
 ## What was removed and why
 
 ggui targets desktop and the browser and uses a small part of the engine: images and
@@ -174,16 +186,9 @@ WebGL feels.
   only Metal and OpenGL ran a transparent window.
 - The FPS-mode machinery in `internal/ui` can only hold `FPSModeVsyncOn` since
   the root-level setters went.
-- Rendering without a visible window, so that a screenshot dumper does not have
-  to open one. A driver with no window at all is not reachable: OpenGL makes its
-  context current through the window every frame, so it needs one either way.
-  What is missing is smaller. `WindowOptions.Hidden` already creates the window,
-  and the loop still collects a frame for it, but `shouldPresentFrame` returns
-  false for an invisible window and `renderFrame` returns before running the
-  frame whenever it cannot present. Hidden-on-purpose and occluded-by-the-OS both
-  arrive as `present == false`, and only the second should skip the frame: the
-  first should run it and skip the buffer swap alone. `isInitWindowVisible` is
-  the signal that separates them.
+- A rendering target with no window at all. OpenGL makes its context current
+  through the window every frame, so a driver without one is not reachable;
+  `WindowOptions.Hidden` is the way to render without showing anything.
 - X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which
   had stopped reporting anything under `Run` anyway. It needs to take committed
   text from `TextEvent` instead, which is the same gap as IME composition there.
