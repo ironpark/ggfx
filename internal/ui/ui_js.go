@@ -99,7 +99,7 @@ type userInterfaceImpl struct {
 	lastCaptureExitTime time.Time
 	hiDPIEnabled        bool
 
-	context        frameDriver
+	context        *eventContext
 	surface        graphicsdriver.Surface
 	closeRequested atomic.Bool
 
@@ -348,14 +348,13 @@ func (u *UserInterface) updateImpl(force bool) error {
 		return err
 	}
 
-	w, h := u.outsideSize()
 	sw, sh := u.screenSize()
 	if force {
-		if err := u.context.forceUpdateFrame(u.graphicsDriver, w, h, sw, sh, theMonitor.DeviceScaleFactor(), u); err != nil {
+		if err := u.context.forceUpdateFrame(u.graphicsDriver, sw, sh, theMonitor.DeviceScaleFactor(), u); err != nil {
 			return err
 		}
 	} else {
-		needsSwapBuffers, err := u.context.renderFrame(u.graphicsDriver, w, h, sw, sh, theMonitor.DeviceScaleFactor(), u, true, false)
+		needsSwapBuffers, err := u.context.renderFrame(u.graphicsDriver, sw, sh, theMonitor.DeviceScaleFactor(), u, true, false)
 		if err != nil {
 			return err
 		}
@@ -377,10 +376,10 @@ func (u *UserInterface) needsUpdate() bool {
 	if pending {
 		return true
 	}
-	if c, ok := u.context.(*eventContext); ok {
-		return c.wantsFrame()
+	if u.context == nil {
+		return false
 	}
-	return false
+	return u.context.wantsFrame()
 }
 
 func (u *UserInterface) loopFrames() error {
@@ -883,10 +882,6 @@ func (u *UserInterface) updateScreenSize() {
 		canvas.Set("width", bw)
 		canvas.Set("height", bh)
 	}
-}
-
-func (u *UserInterface) primaryFrameDriver() frameDriver {
-	return u.context
 }
 
 func (u *UserInterface) Window() Window {

@@ -68,7 +68,7 @@ type glfwBackend struct {
 	surface graphicsdriver.Surface
 
 	// context drives the frames of this window.
-	context frameDriver
+	context *eventContext
 
 	// closed reports whether the window was destroyed.
 	closed bool
@@ -736,7 +736,7 @@ func (u *glfwBackend) registerWindowFramebufferSizeCallback() error {
 			// While the window is being resized on macOS or Windows, the OS traps the main
 			// thread in an event-handling loop and the game loop cannot proceed. Render a frame
 			// here so that the rendering result follows the window size (#2615).
-			u.forceUpdateFrameDuringPollEvents(float64(ww), float64(wh), w, h, s)
+			u.forceUpdateFrameDuringPollEvents(w, h, s)
 		}
 	}
 	if _, err := u.window.SetFramebufferSizeCallback(u.defaultFramebufferSizeCallback); err != nil {
@@ -750,7 +750,7 @@ func (u *glfwBackend) registerWindowFramebufferSizeCallback() error {
 // Otherwise, forceUpdateFrameDuringPollEvents does nothing.
 //
 // forceUpdateFrameDuringPollEvents must be called from the main thread.
-func (u *glfwBackend) forceUpdateFrameDuringPollEvents(outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64) {
+func (u *glfwBackend) forceUpdateFrameDuringPollEvents(screenWidth, screenHeight int, deviceScaleFactor float64) {
 	// On macOS and Windows, resizing a window runs a modal loop inside event polling and traps
 	// the main thread until the mouse button is released, so a frame must be rendered here.
 	// On X11 and Wayland, there is no such modal loop: resize events are delivered through the
@@ -797,7 +797,7 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(outsideWidth, outsideHeig
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	go func() {
 		defer cancel()
-		err = u.context.forceUpdateFrame(u.graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, u.UserInterface)
+		err = u.context.forceUpdateFrame(u.graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, u.UserInterface)
 	}()
 	_ = mainThread.NestedLoop(ctx)
 	if err != nil {
@@ -880,42 +880,26 @@ event:
 	return nil
 }
 
-// outsideSizeInDIP returns the size to give the game's Layout, in device-independent pixels.
-func outsideSizeInDIP(windowWidth, windowHeight int, requestedWidthInDIP, requestedHeightInDIP int, fullscreen bool, deviceScaleFactor float64) (float64, float64) {
-	// The requested size is a windowed size, unrelated to the size of a fullscreen window.
-	if !fullscreen {
-		// Report the requested size while the window has the pixel size that request produces, as
-		// converting the pixel size back would not return it at a fractional scale factor (#2978).
-		// Otherwise use the actual window size, which might not match the specified size on
-		// Windows (#1163).
-		if rw, rh := windowSizeInGLFWPixels(requestedWidthInDIP, requestedHeightInDIP, deviceScaleFactor); windowWidth == rw && windowHeight == rh {
-			return float64(requestedWidthInDIP), float64(requestedHeightInDIP)
-		}
-	}
-	return dipFromGLFWPixel(float64(windowWidth), deviceScaleFactor), dipFromGLFWPixel(float64(windowHeight), deviceScaleFactor)
-}
-
-// layoutSizes returns the size to give the game's Layout, in device-independent pixels, and the
-// size of the final rendering destination, in pixels.
+// layoutSizes returns the size of the final rendering destination, in pixels.
 //
 // layoutSizes must be called from the main thread.
-func (u *glfwBackend) layoutSizes() (outsideWidth, outsideHeight float64, screenWidth, screenHeight int, err error) {
+func (u *glfwBackend) layoutSizes() (screenWidth, screenHeight int, err error) {
 	m, err := u.currentMonitor()
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, err
 	}
 	if m == nil {
-		return 0, 0, 0, 0, nil
+		return 0, 0, nil
 	}
 	s := m.DeviceScaleFactor()
 
 	wf, err := u.isWindowedFullscreen()
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, err
 	}
 	nf, err := u.isNativeFullscreen()
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, err
 	}
 	fullscreen := wf || nf
 
@@ -926,12 +910,12 @@ func (u *glfwBackend) layoutSizes() (outsideWidth, outsideHeight float64, screen
 	// configuration (#2225).
 	fw, fh, err := u.window.GetFramebufferSize()
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, err
 	}
 
 	a, err := u.window.GetAttrib(glfw.Iconified)
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, err
 	}
 	if a == glfw.True {
 		// An iconified window has no size to lay out for; use the size it is restored to, which is
@@ -939,28 +923,22 @@ func (u *glfwBackend) layoutSizes() (outsideWidth, outsideHeight float64, screen
 		// reports no client area on Windows, so the rendering destination comes from that same
 		// source.
 		if fullscreen {
-			w, h := m.sizeInDIP()
 			if fw == 0 || fh == 0 {
 				fw, fh = m.boundsInGLFWPixels.Dx(), m.boundsInGLFWPixels.Dy()
 			}
-			return w, h, fw, fh, nil
+			return fw, fh, nil
 		}
-		w := float64(u.windowWidthInDIP)
-		h := float64(u.windowHeightInDIP)
 		if fw == 0 || fh == 0 {
 			// setWindowSizeInDIP rounds the product, so round it here as well to predict the
 			// same pixel count.
+			w := float64(u.windowWidthInDIP)
+			h := float64(u.windowHeightInDIP)
 			fw, fh = int(math.Round(w*s)), int(math.Round(h*s))
 		}
-		return w, h, fw, fh, nil
+		return fw, fh, nil
 	}
 
-	ww, wh, err := u.window.GetSize()
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	w, h := outsideSizeInDIP(ww, wh, u.windowWidthInDIP, u.windowHeightInDIP, fullscreen, s)
-	return w, h, fw, fh, nil
+	return fw, fh, nil
 }
 
 // setFPSMode must be called from the main thread.

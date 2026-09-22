@@ -81,6 +81,13 @@ monitor and window APIs. Everything outside that was dropped.
   Android and iOS sources. The browser (`js`/`wasm`) target is kept. `internal/microsoftgdk`
   survives as a stub whose `IsXbox` is always false so the glfw and DirectX
   drivers stay untouched.
+- The `frameDriver` interface, which had one implementation. `eventContext` is
+  now named directly. Its outside-size parameters were never read, so
+  `layoutSizes`, `updateWindow` and `forceUpdateFrameDuringPollEvents` return
+  and take the rendering destination's pixel size alone, and `outsideSizeInDIP`
+  — the size for the game's `Layout` — is gone. Its client/logical position
+  converters were identities, so `LogicalPositionToClientPositionInNativePixels`
+  is now the scale conversion alone.
 - The legacy `Game`/`RunGame` API: `Game`, `LayoutFer`, `FinalScreen`,
   `FinalScreenDrawer`, `RunGame`, `RunGameWithOptions`, `ScreenSize`, the TPS
   and FPS-mode functions, the image dumper and its screenshot environment
@@ -158,8 +165,6 @@ WebGL feels.
   `NewWindow` has to reject a transparent window when they disagree. The deeper
   fix is to pass transparency to surface creation and delete both. The same
   shape applies to `RunOptions.InitUnfocused` versus `WindowOptions.Unfocused`.
-- `frameDriver` has one implementation now, and its outside-size parameters and
-  position converters are unused or identities.
 - The FPS-mode machinery in `internal/ui` can only hold `FPSModeVsyncOn` since
   the root-level setters went.
 - X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which

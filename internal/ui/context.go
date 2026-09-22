@@ -26,29 +26,6 @@ var (
 	LinearFilterShader  = &Shader{shader: atlas.LinearFilterShader}
 )
 
-// frameDriver decides what a frame for one window does.
-type frameDriver interface {
-	// renderFrame runs one frame. present reports whether the window can be presented; force
-	// draws regardless of the draw-skipping states. It returns whether the surface must be
-	// presented, which the caller does by flushing the commands with a present.
-	renderFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present, force bool) (needsSwapBuffers bool, err error)
-
-	// forceUpdateFrame runs and presents one frame immediately, while the loop is blocked in an
-	// OS callback like a window resize.
-	forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error
-
-	// wantsFrame reports whether the window has a frame pending.
-	wantsFrame() bool
-
-	setSurface(surface graphicsdriver.Surface)
-
-	// dispose releases the images of the window. The surface is disposed by the caller.
-	dispose()
-
-	clientPositionToLogicalPosition(x, y float64, deviceScaleFactor float64) (float64, float64)
-	logicalPositionToClientPosition(x, y float64, deviceScaleFactor float64) (float64, float64)
-}
-
 // framePacer paces the loop when presenting does not wait for the display.
 type framePacer struct {
 	lastSwapBufferTime time.Time
@@ -156,13 +133,10 @@ func (u *UserInterface) monitorDeviceScaleFactor() float64 {
 }
 
 // LogicalPositionToClientPositionInNativePixels converts a logical position to a client-area
-// position in native pixels. Before the first window exists, the logical position is the client
-// position.
+// position in native pixels. A logical position is already a client position in
+// device-independent pixels: an app window has no letterboxing.
 func (u *UserInterface) LogicalPositionToClientPositionInNativePixels(x, y float64) (float64, float64) {
 	s := u.monitorDeviceScaleFactor()
-	if d := u.primaryFrameDriver(); d != nil {
-		x, y = d.logicalPositionToClientPosition(x, y, s)
-	}
 	x = dipToNativePixels(x, s)
 	y = dipToNativePixels(y, s)
 	return x, y

@@ -356,8 +356,6 @@ type eventContext struct {
 	frameRequested atomic.Bool
 }
 
-var _ frameDriver = (*eventContext)(nil)
-
 func newEventContext(app App, window AppWindow) *eventContext {
 	c := &eventContext{app: app, window: window}
 	// The first frame shows the window.
@@ -384,7 +382,7 @@ func (c *eventContext) dispose() {
 	}
 }
 
-func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present, force bool) (needsSwapBuffers bool, err error) {
+func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, present, force bool) (needsSwapBuffers bool, err error) {
 	if screenWidth == 0 || screenHeight == 0 {
 		return false, nil
 	}
@@ -435,12 +433,12 @@ func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, outsi
 	return true, nil
 }
 
-func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error {
+func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error {
 	// The size change is queued as a ResizeEvent; hand it over before the frame.
 	if err := ui.dispatchEvents(); err != nil {
 		return err
 	}
-	needsSwapBuffers, err := c.renderFrame(graphicsDriver, outsideWidth, outsideHeight, screenWidth, screenHeight, deviceScaleFactor, ui, true, true)
+	needsSwapBuffers, err := c.renderFrame(graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, ui, true, true)
 	if err != nil {
 		return err
 	}
@@ -448,15 +446,4 @@ func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, 
 		return err
 	}
 	return graphicscommand.FinishForcedFrame(graphicsDriver)
-}
-
-// Input positions are already in device-independent pixels of the client area; there is no
-// letterboxing on an app window.
-
-func (c *eventContext) clientPositionToLogicalPosition(x, y float64, deviceScaleFactor float64) (float64, float64) {
-	return x, y
-}
-
-func (c *eventContext) logicalPositionToClientPosition(x, y float64, deviceScaleFactor float64) (float64, float64) {
-	return x, y
 }

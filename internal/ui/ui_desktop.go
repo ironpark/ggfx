@@ -167,15 +167,6 @@ func (u *UserInterface) runningBackend() uiBackend {
 	return *b
 }
 
-// primaryFrameDriver returns the frame driver of the primary window, or nil before the window
-// exists.
-func (u *UserInterface) primaryFrameDriver() frameDriver {
-	if p := u.primary.Load(); p != nil {
-		return p.context
-	}
-	return nil
-}
-
 func (u *UserInterface) setInitMonitor(m *Monitor) {
 	u.initMonitor.Store(m)
 }

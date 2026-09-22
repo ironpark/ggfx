@@ -150,12 +150,12 @@ func (w *jsWindow) Size() (int, int) {
 	return int(ow), int(oh)
 }
 
-// appWindow returns the AppWindow of the canvas, or nil for a game.
+// appWindow returns the AppWindow of the canvas, or nil before its context exists.
 func (u *UserInterface) appWindow() AppWindow {
-	if c, ok := u.context.(*eventContext); ok {
-		return c.window
+	if u.context == nil {
+		return nil
 	}
-	return nil
+	return u.context.window
 }
 
 // pushFocusEvent queues a FocusEvent for the canvas, if an app runs.

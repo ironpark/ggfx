@@ -261,12 +261,12 @@ func (w *appWindow) SetHandle(handle any) {
 	w.handle = handle
 }
 
-// appWindow returns the AppWindow of this backend, or nil for a game window.
+// appWindow returns the AppWindow of this backend, or nil before its context exists.
 func (u *glfwBackend) appWindow() AppWindow {
-	if c, ok := u.context.(*eventContext); ok {
-		return c.window
+	if u.context == nil {
+		return nil
 	}
-	return nil
+	return u.context.window
 }
 
 // cursorPositionInDIP converts a cursor position reported by GLFW to device-independent pixels.

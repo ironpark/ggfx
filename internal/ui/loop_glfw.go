@@ -384,23 +384,23 @@ func (u *UserInterface) pumpEvents() error {
 // It returns errWindowClosed when the window asked to close.
 //
 // updateWindow must be called from the main thread.
-func (u *glfwBackend) updateWindow() (outsideWidth, outsideHeight float64, screenWidth, screenHeight int, err error) {
+func (u *glfwBackend) updateWindow() (screenWidth, screenHeight int, err error) {
 	if err := u.error(); err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, err
 	}
 
 	sc, err := u.window.ShouldClose()
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return 0, 0, err
 	}
 	if sc {
-		return 0, 0, 0, 0, errWindowClosed
+		return 0, 0, errWindowClosed
 	}
 
 	// On macOS, one swapping buffers seems required before entering fullscreen (#2599).
 	if u.primary && u.isInitFullscreen() && (u.bufferOnceSwapped || runtime.GOOS != "darwin") {
 		if err := u.setFullscreen(true); err != nil {
-			return 0, 0, 0, 0, err
+			return 0, 0, err
 		}
 		u.setInitFullscreen(false)
 	}
@@ -418,7 +418,7 @@ func (u *glfwBackend) updateWindow() (outsideWidth, outsideHeight float64, scree
 			}
 		})
 		if err != nil {
-			return 0, 0, 0, 0, err
+			return 0, 0, err
 		}
 	}
 
@@ -472,7 +472,7 @@ func (u *glfwBackend) updateWindow() (outsideWidth, outsideHeight float64, scree
 			}
 		})
 		if err != nil {
-			return 0, 0, 0, 0, err
+			return 0, 0, err
 		}
 	}
 
@@ -480,7 +480,7 @@ func (u *glfwBackend) updateWindow() (outsideWidth, outsideHeight float64, scree
 	// Calling this inside setWindowSize didn't work (#1363).
 	if !u.fpsModeInited {
 		if err := u.setFPSMode(FPSModeType(u.fpsMode.Load())); err != nil {
-			return 0, 0, 0, 0, err
+			return 0, 0, err
 		}
 	}
 
@@ -550,8 +550,6 @@ func (u *UserInterface) waitWhileUnfocused() error {
 type windowFrame struct {
 	window            *glfwBackend
 	present           bool
-	outsideWidth      float64
-	outsideHeight     float64
 	screenWidth       int
 	screenHeight      int
 	deviceScaleFactor float64
@@ -602,7 +600,7 @@ func (u *UserInterface) updateFrame() error {
 			}
 			present := shouldPresentFrame(visible == glfw.True && !occluded, w.bufferOnceSwapped, w.desktopWindow.isInitWindowVisible())
 
-			ow, oh, sw, sh, e := w.updateWindow()
+			sw, sh, e := w.updateWindow()
 			if errors.Is(e, errWindowClosed) {
 				if w.primary {
 					err = RegularTermination
@@ -635,8 +633,6 @@ func (u *UserInterface) updateFrame() error {
 			frames = append(frames, windowFrame{
 				window:            w,
 				present:           present,
-				outsideWidth:      ow,
-				outsideHeight:     oh,
 				screenWidth:       sw,
 				screenHeight:      sh,
 				deviceScaleFactor: m.DeviceScaleFactor(),
@@ -692,7 +688,7 @@ func (u *UserInterface) updateFrame() error {
 		if !f.window.context.wantsFrame() {
 			continue
 		}
-		n, err := f.window.context.renderFrame(u.graphicsDriver, f.outsideWidth, f.outsideHeight, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, f.present, false)
+		n, err := f.window.context.renderFrame(u.graphicsDriver, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, f.present, false)
 		if err != nil {
 			return err
 		}
