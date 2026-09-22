@@ -1567,7 +1567,6 @@ func (w *Window) platformCreateWindow(wndconfig *wndconfig, ctxconfig *ctxconfig
 
 func (w *Window) platformDestroyWindow() error {
 	w.destroyDropTarget()
-	w.native = nativeWindowState{}
 	if w.monitor != nil {
 		if err := w.releaseMonitor(); err != nil {
 			return err

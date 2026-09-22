@@ -397,7 +397,22 @@ var (
 	sel_requestUserAttention                        = objc.RegisterName("requestUserAttention:")
 	sel_arrangeInFront                              = objc.RegisterName("arrangeInFront:")
 	sel_convertRectToScreen                         = objc.RegisterName("convertRectToScreen:")
-	sel_mouseLocationOutsideOfEventStream           = objc.RegisterName("mouseLocationOutsideOfEventStream")
+
+	// Native hook selectors (native_window_darwin.go).
+	sel_draggingLocation                  = objc.RegisterName("draggingLocation")
+	sel_convertPoint_fromView             = objc.RegisterName("convertPoint:fromView:")
+	sel_convertRect_toView                = objc.RegisterName("convertRect:toView:")
+	sel_fileSystemRepresentation          = objc.RegisterName("fileSystemRepresentation")
+	sel_numberWithBool                    = objc.RegisterName("numberWithBool:")
+	sel_dictionaryWithObject_forKey       = objc.RegisterName("dictionaryWithObject:forKey:")
+	sel_inputContext                      = objc.RegisterName("inputContext")
+	sel_discardMarkedText                 = objc.RegisterName("discardMarkedText")
+	sel_invalidateCharacterCoordinates    = objc.RegisterName("invalidateCharacterCoordinates")
+	sel_array                             = objc.RegisterName("array")
+	sel_setFrame                          = objc.RegisterName("setFrame:")
+	sel_setAutoresizingMask               = objc.RegisterName("setAutoresizingMask:")
+	sel_addSubview                        = objc.RegisterName("addSubview:")
+	sel_mouseLocationOutsideOfEventStream = objc.RegisterName("mouseLocationOutsideOfEventStream")
 
 	// NSView selectors
 	sel_frame              = objc.RegisterName("frame")

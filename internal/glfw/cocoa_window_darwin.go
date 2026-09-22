@@ -492,17 +492,13 @@ func registerGLFWClasses() error {
 
 					// Interpret key events for text input.
 					eventArray := objc.ID(class_NSArray).Send(sel_arrayWithObject, event)
-					if !window.native.textConfigured || window.native.textEnabled {
+					if window.native.textEnabled {
 						self.Send(sel_interpretKeyEvents, eventArray)
 					} else {
 						// Disabling composition does not disable committed characters.
 						// A field can gain focus in the same event batch as its first key.
-						characters := event.Send(objc.RegisterName("characters"))
-						for _, r := range (cocoa.NSString{ID: characters}).String() {
-							if r < 0xf700 || r > 0xf7ff {
-								window.inputChar(r, mods, mods&(ModSuper|ModControl) == 0)
-							}
-						}
+						characters := cocoa.NSString{ID: event.Send(sel_characters)}
+						window.inputCharacters(characters.String(), mods, mods&(ModSuper|ModControl) == 0)
 					}
 				},
 			},
@@ -845,12 +841,7 @@ func registerGLFWClasses() error {
 						return
 					}
 					self.Send(sel_unmarkText)
-					for _, ch := range s {
-						if ch >= 0xf700 && ch <= 0xf7ff {
-							continue
-						}
-						window.inputChar(ch, mods, plain)
-					}
+					window.inputCharacters(s, mods, plain)
 				},
 			},
 			{
@@ -906,40 +897,12 @@ func registerGLFWClasses() error {
 
 					// Update the cursor position to the drop location.
 					contentRect := objc.Send[cocoa.NSRect](window.platform.view, sel_frame)
-					pos := objc.Send[cocoa.NSPoint](sender, objc.RegisterName("draggingLocation"))
+					pos := objc.Send[cocoa.NSPoint](sender, sel_draggingLocation)
 					window.inputCursorPos(pos.X, contentRect.Size.Height-pos.Y)
 
-					pasteboard := sender.Send(sel_draggingPasteboard)
-					urlClass := objc.ID(class_NSURL)
-					classes := objc.ID(class_NSArray).Send(sel_arrayWithObject, urlClass)
-
-					// Filter to file URLs only.
-					nsYes := objc.ID(objc.GetClass("NSNumber")).Send(objc.RegisterName("numberWithBool:"), true)
-					options := objc.ID(objc.GetClass("NSDictionary")).Send(
-						objc.RegisterName("dictionaryWithObject:forKey:"),
-						uintptr(nsYes), uintptr(nsPasteboardURLReadingFileURLsOnlyKey))
-
-					urls := pasteboard.Send(sel_readObjectsForClasses_options, classes, uintptr(options))
-					var urlCount int
-					if urls != 0 {
-						urlCount = int(urls.Send(sel_count))
-					}
-
-					if urlCount > 0 {
-						paths := make([]string, urlCount)
-						for i := range urlCount {
-							url := urls.Send(sel_objectAtIndex, i)
-							// Use fileSystemRepresentation instead of path to handle
-							// HFS+ Unicode normalization correctly.
-							fsRep := url.Send(objc.RegisterName("fileSystemRepresentation"))
-							if fsRep != 0 {
-								paths[i] = goStringFromCString(uintptr(fsRep))
-							}
-						}
-
+					if paths := cocoaDragPaths(sender); len(paths) > 0 {
 						window.inputDrop(paths)
 					}
-
 					return true
 				},
 			},
@@ -1224,8 +1187,6 @@ func (w *Window) platformDestroyWindow() error {
 		delete(theGoWindows, objc.ID(w.native.accessibilityView))
 		w.native.accessibilityView = 0
 	}
-	w.native.accessibilityChildren, w.native.accessibilityHitTest = nil, nil
-	w.native.drag, w.native.composition, w.native.getObject = nil, nil, nil
 
 	if _glfw.platformWindow.disabledCursorWindow == w {
 		_glfw.platformWindow.disabledCursorWindow = nil

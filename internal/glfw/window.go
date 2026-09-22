@@ -114,6 +114,7 @@ func CreateWindow(width, height int, title string, monitor *Monitor, share *Wind
 	}
 
 	window = &Window{
+		native: newNativeWindowState(),
 		videoMode: VidMode{
 			Width:       width,
 			Height:      height,
@@ -343,6 +344,8 @@ func (w *Window) Destroy() error {
 	w.callbacks.character = nil
 	w.callbacks.charmods = nil
 	w.callbacks.drop = nil
+	// The native hooks first, so that nothing fires into the app while the
+	// platform window is torn down; the rest of the state goes after it.
 	w.native.text, w.native.drag, w.native.composition = nil, nil, nil
 	w.native.getObject = nil
 	w.native.accessibilityChildren, w.native.accessibilityHitTest = nil, nil

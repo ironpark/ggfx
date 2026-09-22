@@ -5,6 +5,8 @@
 
 package glfw
 
+import "unicode/utf16"
+
 // Native hooks belong to the window and are accessed only on the main thread.
 type nativeWindowState struct {
 	text                         func(text string, start, end int, replacement bool)
@@ -15,12 +17,16 @@ type nativeWindowState struct {
 	accessibilityChildren        func() uintptr
 	accessibilityHitTest         func(x, y float64) uintptr
 	accessibilityView            uintptr
-	textEnabled                  bool
-	textConfigured               bool
+	textEnabled                  bool // true from creation; see newNativeWindowState
 	textRect                     [4]float64
-	selectionStart, selectionEnd int
+	selectionStart, selectionEnd int // the marked selection, in the platform's units
 	composing                    bool
+	dragPaths                    []string // the files of the drag in progress
 }
+
+// newNativeWindowState is the state of a fresh window: text input on, as a
+// window without an app expects the platform's usual key interpretation.
+func newNativeWindowState() nativeWindowState { return nativeWindowState{textEnabled: true} }
 
 const (
 	DragEntered = iota
@@ -40,17 +46,15 @@ func (w *Window) SetCompositionCallback(f func(text string, start, end int, done
 
 func (w *Window) inputComposition(text string, start, end int, done bool) {
 	w.native.composing = !done && text != ""
-	w.native.selectionStart, w.native.selectionEnd = start, end
 	if f := w.native.composition; f != nil {
 		f(text, start, end, done)
 	}
 }
 
 func (w *Window) SetTextInputEnabled(enabled bool) {
-	if w.native.textConfigured && w.native.textEnabled == enabled {
+	if w.native.textEnabled == enabled {
 		return
 	}
-	w.native.textConfigured = true
 	w.native.textEnabled = enabled
 	w.platformSetTextInputEnabled(enabled)
 }
@@ -80,10 +84,7 @@ func (w *Window) AccessibilityView() uintptr { return w.platformAccessibilityVie
 func utf16ByteOffset(text string, offset int) int {
 	units := 0
 	for i, r := range text {
-		n := 1
-		if r > 0xffff {
-			n = 2
-		}
+		n := utf16.RuneLen(r)
 		if units+n > offset {
 			return i
 		}
@@ -99,10 +100,7 @@ func (w *Window) SetTextCallback(f func(string, int, int, bool)) { w.native.text
 func utf16Length(s string) int {
 	n := 0
 	for _, r := range s {
-		n++
-		if r > 0xffff {
-			n++
-		}
+		n += utf16.RuneLen(r)
 	}
 	return n
 }
