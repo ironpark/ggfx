@@ -132,6 +132,11 @@ type Surface struct {
 
 	// drawable is the drawable acquired for the current frame, and zero when none is.
 	drawable ca.MetalDrawable
+
+	// cleared reports whether the drawable has been cleared this frame. The first render pass on
+	// a drawable clears it; later passes load what earlier ones drew, as an app draws to the screen
+	// many times per frame.
+	cleared bool
 }
 
 // NewSurface creates a layer for the NSWindow given as a uintptr. NewSurface must be called on the
@@ -190,6 +195,7 @@ func (s *Surface) texture() mtl.Texture {
 		// Keep the drawable alive across flushes that drain the autorelease pool without presenting (#3704).
 		drawable.Retain()
 		s.drawable = drawable
+		s.cleared = false
 		// After nextDrawable, it is expected some command buffers are completed.
 		s.graphics.gcBuffers()
 	}
@@ -534,21 +540,22 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 
 	if g.rce == (mtl.RenderCommandEncoder{}) {
 		var rpd mtl.RenderPassDescriptor
-		// Even though the destination pixels are not used, mtl.LoadActionDontCare might cause glitches
-		// (#1019). Always using mtl.LoadActionLoad is safe.
-		if dst.screen {
-			rpd.ColorAttachments[0].LoadAction = mtl.LoadActionClear
-		} else {
-			rpd.ColorAttachments[0].LoadAction = mtl.LoadActionLoad
-		}
-
-		// The store action should always be 'store' even for the screen (#1700).
-		rpd.ColorAttachments[0].StoreAction = mtl.StoreActionStore
-
 		t := dst.mtlTexture()
 		if t == (mtl.Texture{}) {
 			return nil
 		}
+
+		// Even though the destination pixels are not used, mtl.LoadActionDontCare might cause glitches
+		// (#1019). Always using mtl.LoadActionLoad is safe. A drawable is cleared by its first pass
+		// of the frame only; mtlTexture acquired it above, so the flag is current.
+		rpd.ColorAttachments[0].LoadAction = mtl.LoadActionLoad
+		if dst.screen && !dst.surface.cleared {
+			rpd.ColorAttachments[0].LoadAction = mtl.LoadActionClear
+			dst.surface.cleared = true
+		}
+
+		// The store action should always be 'store' even for the screen (#1700).
+		rpd.ColorAttachments[0].StoreAction = mtl.StoreActionStore
 		rpd.ColorAttachments[0].Texture = t
 		rpd.ColorAttachments[0].ClearColor = mtl.ClearColor{}
 
