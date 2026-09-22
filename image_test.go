@@ -2072,139 +2072,6 @@ func TestImageWritePixelsOnSubImage(t *testing.T) {
 	}
 }
 
-func TestImageDrawTrianglesWithColorM(t *testing.T) {
-	const w, h = 16, 16
-	dst0 := ggfx.NewImage(w, h)
-	src := ggfx.NewImage(w, h)
-	src.Fill(color.White)
-
-	vs0 := []ggfx.Vertex{
-		{
-			DstX:   0,
-			DstY:   0,
-			SrcX:   0,
-			SrcY:   0,
-			ColorR: 1,
-			ColorG: 1,
-			ColorB: 1,
-			ColorA: 1,
-		},
-		{
-			DstX:   w,
-			DstY:   0,
-			SrcX:   w,
-			SrcY:   0,
-			ColorR: 1,
-			ColorG: 1,
-			ColorB: 1,
-			ColorA: 1,
-		},
-		{
-			DstX:   0,
-			DstY:   h,
-			SrcX:   0,
-			SrcY:   h,
-			ColorR: 1,
-			ColorG: 1,
-			ColorB: 1,
-			ColorA: 1,
-		},
-		{
-			DstX:   w,
-			DstY:   h,
-			SrcX:   w,
-			SrcY:   h,
-			ColorR: 1,
-			ColorG: 1,
-			ColorB: 1,
-			ColorA: 1,
-		},
-	}
-	op := &ggfx.DrawTrianglesOptions{}
-	op.ColorM.Scale(0.2, 0.4, 0.6, 0.8)
-	is := []uint16{0, 1, 2, 1, 2, 3}
-	dst0.DrawTriangles(vs0, is, src, op)
-
-	for _, format := range []ggfx.ColorScaleMode{
-		ggfx.ColorScaleModeStraightAlpha,
-		ggfx.ColorScaleModePremultipliedAlpha,
-	} {
-		t.Run(fmt.Sprintf("format%d", format), func(t *testing.T) {
-			var cr, cg, cb, ca float32
-			switch format {
-			case ggfx.ColorScaleModeStraightAlpha:
-				// The values are the same as ColorM.Scale
-				cr = 0.2
-				cg = 0.4
-				cb = 0.6
-				ca = 0.8
-			case ggfx.ColorScaleModePremultipliedAlpha:
-				cr = 0.2 * 0.8
-				cg = 0.4 * 0.8
-				cb = 0.6 * 0.8
-				ca = 0.8
-			}
-			vs1 := []ggfx.Vertex{
-				{
-					DstX:   0,
-					DstY:   0,
-					SrcX:   0,
-					SrcY:   0,
-					ColorR: cr,
-					ColorG: cg,
-					ColorB: cb,
-					ColorA: ca,
-				},
-				{
-					DstX:   w,
-					DstY:   0,
-					SrcX:   w,
-					SrcY:   0,
-					ColorR: cr,
-					ColorG: cg,
-					ColorB: cb,
-					ColorA: ca,
-				},
-				{
-					DstX:   0,
-					DstY:   h,
-					SrcX:   0,
-					SrcY:   h,
-					ColorR: cr,
-					ColorG: cg,
-					ColorB: cb,
-					ColorA: ca,
-				},
-				{
-					DstX:   w,
-					DstY:   h,
-					SrcX:   w,
-					SrcY:   h,
-					ColorR: cr,
-					ColorG: cg,
-					ColorB: cb,
-					ColorA: ca,
-				},
-			}
-
-			dst1 := ggfx.NewImage(w, h)
-			op := &ggfx.DrawTrianglesOptions{}
-			op.ColorScaleMode = format
-			dst1.DrawTriangles(vs1, is, src, op)
-
-			for j := range h {
-				for i := range w {
-					got := dst0.At(i, j)
-					want := dst1.At(i, j)
-					if got != want {
-						t.Errorf("At(%d, %d): got: %v, want: %v", i, j, got, want)
-					}
-				}
-			}
-		})
-	}
-}
-
 func TestImageDrawTrianglesInterpolatesColors(t *testing.T) {
 	const w, h = 3, 1
 	src := ggfx.NewImage(w, h)
@@ -2495,30 +2362,6 @@ func TestImageFloatTranslate(t *testing.T) {
 	}
 }
 
-// Issue #1213
-func TestImageColorMCopy(t *testing.T) {
-	const w, h = 16, 16
-	dst := ggfx.NewImage(w, h)
-	src := ggfx.NewImage(w, h)
-
-	for k := range 256 {
-		op := &ggfx.DrawImageOptions{}
-		op.ColorM.Translate(1, 1, 1, float64(k)/0xff)
-		op.Blend = ggfx.BlendCopy
-		dst.DrawImage(src, op)
-
-		for j := range h {
-			for i := range w {
-				got := dst.At(i, j).(color.RGBA)
-				want := color.RGBA{R: byte(k), G: byte(k), B: byte(k), A: byte(k)}
-				if !sameColors(got, want, 1) {
-					t.Fatalf("dst.At(%d, %d), k: %d: got %v, want %v", i, j, k, got, want)
-				}
-			}
-		}
-	}
-}
-
 // TODO: Do we have to guarantee this behavior? See #1222
 func TestImageWritePixelsAndModifyPixels(t *testing.T) {
 	const w, h = 16, 16
@@ -2563,7 +2406,7 @@ func TestImageWritePixelsAndModifyPixels(t *testing.T) {
 	}
 }
 
-func TestImageCompositeModeMultiply(t *testing.T) {
+func TestImageBlendMultiply(t *testing.T) {
 	const w, h = 16, 16
 	dst := ggfx.NewImage(w, h)
 	src := ggfx.NewImage(w, h)
@@ -2572,7 +2415,14 @@ func TestImageCompositeModeMultiply(t *testing.T) {
 	src.Fill(color.RGBA{R: 0x50, G: 0x60, B: 0x70, A: 0x80})
 
 	op := &ggfx.DrawImageOptions{}
-	op.CompositeMode = ggfx.CompositeModeMultiply
+	op.Blend = ggfx.Blend{
+		BlendFactorSourceRGB:        ggfx.BlendFactorDestinationColor,
+		BlendFactorSourceAlpha:      ggfx.BlendFactorDestinationColor,
+		BlendFactorDestinationRGB:   ggfx.BlendFactorZero,
+		BlendFactorDestinationAlpha: ggfx.BlendFactorZero,
+		BlendOperationRGB:           ggfx.BlendOperationAdd,
+		BlendOperationAlpha:         ggfx.BlendOperationAdd,
+	}
 	dst.DrawImage(src, op)
 
 	for j := range h {
@@ -3058,18 +2908,6 @@ func TestImageFillRule(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// #1658
-func BenchmarkColorMScale(b *testing.B) {
-	r := rand.Float64
-	dst := ggfx.NewImage(16, 16)
-	src := ggfx.NewImage(16, 16)
-	for n := 0; n < b.N; n++ {
-		op := &ggfx.DrawImageOptions{}
-		op.ColorM.Scale(r(), r(), r(), r())
-		dst.DrawImage(src, op)
 	}
 }
 
@@ -3826,93 +3664,6 @@ func TestImageTooManyConstantBuffersInDirectX(t *testing.T) {
 	}
 }
 
-func TestImageColorMAndScale(t *testing.T) {
-	const w, h = 16, 16
-	src := ggfx.NewImage(w, h)
-
-	src.Fill(color.RGBA{R: 0x80, G: 0x80, B: 0x80, A: 0x80})
-	vs := []ggfx.Vertex{
-		{
-			SrcX:   0,
-			SrcY:   0,
-			DstX:   0,
-			DstY:   0,
-			ColorR: 0.5,
-			ColorG: 0.25,
-			ColorB: 0.5,
-			ColorA: 0.75,
-		},
-		{
-			SrcX:   w,
-			SrcY:   0,
-			DstX:   w,
-			DstY:   0,
-			ColorR: 0.5,
-			ColorG: 0.25,
-			ColorB: 0.5,
-			ColorA: 0.75,
-		},
-		{
-			SrcX:   0,
-			SrcY:   h,
-			DstX:   0,
-			DstY:   h,
-			ColorR: 0.5,
-			ColorG: 0.25,
-			ColorB: 0.5,
-			ColorA: 0.75,
-		},
-		{
-			SrcX:   w,
-			SrcY:   h,
-			DstX:   w,
-			DstY:   h,
-			ColorR: 0.5,
-			ColorG: 0.25,
-			ColorB: 0.5,
-			ColorA: 0.75,
-		},
-	}
-	is := []uint16{0, 1, 2, 1, 2, 3}
-
-	for _, format := range []ggfx.ColorScaleMode{
-		ggfx.ColorScaleModeStraightAlpha,
-		ggfx.ColorScaleModePremultipliedAlpha,
-	} {
-		t.Run(fmt.Sprintf("format%d", format), func(t *testing.T) {
-			dst := ggfx.NewImage(w, h)
-
-			op := &ggfx.DrawTrianglesOptions{}
-			op.ColorM.Translate(0.25, 0.25, 0.25, 0)
-			op.ColorScaleMode = format
-			dst.DrawTriangles(vs, is, src, op)
-
-			got := dst.At(0, 0).(color.RGBA)
-			alphaBeforeScale := 0.5
-			var want color.RGBA
-			switch format {
-			case ggfx.ColorScaleModeStraightAlpha:
-				want = color.RGBA{
-					R: byte(math.Floor(0xff * (0.5/alphaBeforeScale + 0.25) * alphaBeforeScale * 0.5 * 0.75)),
-					G: byte(math.Floor(0xff * (0.5/alphaBeforeScale + 0.25) * alphaBeforeScale * 0.25 * 0.75)),
-					B: byte(math.Floor(0xff * (0.5/alphaBeforeScale + 0.25) * alphaBeforeScale * 0.5 * 0.75)),
-					A: byte(math.Floor(0xff * alphaBeforeScale * 0.75)),
-				}
-			case ggfx.ColorScaleModePremultipliedAlpha:
-				want = color.RGBA{
-					R: byte(math.Floor(0xff * (0.5/alphaBeforeScale + 0.25) * alphaBeforeScale * 0.5)),
-					G: byte(math.Floor(0xff * (0.5/alphaBeforeScale + 0.25) * alphaBeforeScale * 0.25)),
-					B: byte(math.Floor(0xff * (0.5/alphaBeforeScale + 0.25) * alphaBeforeScale * 0.5)),
-					A: byte(math.Floor(0xff * alphaBeforeScale * 0.75)),
-				}
-			}
-			if !sameColors(got, want, 2) {
-				t.Errorf("got: %v, want: %v", got, want)
-			}
-		})
-	}
-}
-
 func TestImageBlendOperation(t *testing.T) {
 	const w, h = 16, 1
 	dst := ggfx.NewImage(w, h)
@@ -4478,55 +4229,6 @@ func TestImageAntiAlias(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-func TestImageColorMScale(t *testing.T) {
-	const w, h = 16, 16
-	dst0 := ggfx.NewImage(w, h)
-	dst1 := ggfx.NewImage(w, h)
-	src := ggfx.NewImage(w, h)
-	src.Fill(color.RGBA{R: 0x24, G: 0x3f, B: 0x6a, A: 0x88})
-
-	// As the ColorM is a diagonal matrix, a built-in shader for a color matrix is NOT used.
-	op := &ggfx.DrawImageOptions{}
-	op.ColorM.Scale(0.3, 0.4, 0.5, 0.6)
-	dst0.DrawImage(src, op)
-
-	// As the ColorM is not a diagonal matrix, a built-in shader for a color matrix is used.
-	op = &ggfx.DrawImageOptions{}
-	op.ColorM.Scale(0.3, 0.4, 0.5, 0.6)
-	op.ColorM.Translate(0, 0, 0, 1e-4)
-	dst1.DrawImage(src, op)
-
-	got := dst0.At(0, 0)
-	want := dst1.At(0, 0)
-	if got != want {
-		t.Errorf("got: %v, want: %v", got, want)
-	}
-}
-
-func TestImageColorScaleAndColorM(t *testing.T) {
-	const w, h = 16, 16
-	dst0 := ggfx.NewImage(w, h)
-	dst1 := ggfx.NewImage(w, h)
-	src := ggfx.NewImage(w, h)
-	src.Fill(color.RGBA{R: 0x24, G: 0x3f, B: 0x6a, A: 0x88})
-
-	// ColorScale is applied to premultiplied-alpha colors.
-	op := &ggfx.DrawImageOptions{}
-	op.ColorScale.Scale(0.3*0.6, 0.4*0.6, 0.5*0.6, 0.6)
-	dst0.DrawImage(src, op)
-
-	// ColorM.Scale is applied to straight-alpha colors.
-	op = &ggfx.DrawImageOptions{}
-	op.ColorM.Scale(0.3, 0.4, 0.5, 0.6)
-	dst1.DrawImage(src, op)
-
-	got := dst0.At(0, 0)
-	want := dst1.At(0, 0)
-	if got != want {
-		t.Errorf("got: %v, want: %v", got, want)
 	}
 }
 

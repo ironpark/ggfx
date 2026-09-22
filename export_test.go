@@ -14,15 +14,9 @@
 
 package ggfx
 
-import "github.com/ironpark/ggfx/internal/builtinshader"
-
 var (
 	ImageToBytes = imageToBytes
 )
-
-func BuiltinShader(filter builtinshader.Filter, address builtinshader.Address, useColorM bool) *Shader {
-	return builtinShader(filter, address, useColorM)
-}
 
 func ResetStencilBufferImagesForTesting() {
 	stencilBufferM.Lock()

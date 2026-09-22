@@ -24,10 +24,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/ironpark/ggfx/internal/affine"
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/builtinshader"
-	"github.com/ironpark/ggfx/internal/colormshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
@@ -166,29 +164,11 @@ type DrawImageOptions struct {
 	// The default (zero) value is identity, which draws the image at (0, 0).
 	GeoM GeoM
 
-	// ColorScale is a scale of color.
-	//
-	// ColorScale is slightly different from colorm.ColorM's Scale in terms of alphas.
-	// ColorScale is applied to premultiplied-alpha colors, while colorm.ColorM is applied to straight-alpha colors.
-	// Thus, ColorM.Scale(r, g, b, a) equals to ColorScale.Scale(r*a, g*a, b*a, a).
-	//
+	// ColorScale is a scale of color, applied to premultiplied-alpha colors.
 	// The default (zero) value is identity, which is (1, 1, 1, 1).
 	ColorScale ColorScale
 
-	// ColorM is a color matrix to draw.
-	// The default (zero) value is identity, which doesn't change any color.
-	//
-	// Deprecated: as of v2.5. Use ColorScale or the package colorm instead.
-	ColorM ColorM
-
-	// CompositeMode is a composite mode to draw.
-	// The default (zero) value is CompositeModeCustom (Blend is used).
-	//
-	// Deprecated: as of v2.5. Use Blend instead.
-	CompositeMode CompositeMode
-
 	// Blend is a blending way of the source color and the destination color.
-	// Blend is used only when CompositeMode is CompositeModeCustom.
 	// The default (zero) value is the regular alpha blending.
 	Blend Blend
 
@@ -310,12 +290,7 @@ func (i *Image) DrawImage(img *Image, options *DrawImageOptions) {
 		options = &DrawImageOptions{}
 	}
 
-	var blend graphicsdriver.Blend
-	if options.CompositeMode == CompositeModeCustom {
-		blend = options.Blend.internalBlend()
-	} else {
-		blend = options.CompositeMode.blend().internalBlend()
-	}
+	blend := options.Blend.internalBlend()
 	filter := builtinshader.Filter(options.Filter)
 
 	geoM := options.GeoM
@@ -331,26 +306,15 @@ func (i *Image) DrawImage(img *Image, options *DrawImageOptions) {
 	bounds := img.Bounds()
 	sx0, sy0 := img.adjustPosition(bounds.Min.X, bounds.Min.Y)
 	sx1, sy1 := img.adjustPosition(bounds.Max.X, bounds.Max.Y)
-	colorm, cr, cg, cb, ca := colorMToScale(options.ColorM.affineColorM())
-	cr, cg, cb, ca = options.ColorScale.apply(cr, cg, cb, ca)
+	cr, cg, cb, ca := options.ColorScale.apply(1, 1, 1, 1)
 	vs := i.ensureTmpVertices(4 * graphics.VertexFloatCount)
 	graphics.QuadVerticesFromSrcAndMatrix(vs, float32(sx0), float32(sy0), float32(sx1), float32(sy1), a, b, c, d, tx, ty, cr, cg, cb, ca)
 	is := graphics.QuadIndices()
 
 	srcs := [graphics.ShaderSrcImageCount]*ui.Image{img.image}
 
-	useColorM := !colorm.IsIdentity()
-	shader := builtinShader(filter, builtinshader.AddressUnsafe, useColorM)
+	shader := builtinShader(filter, builtinshader.AddressUnsafe)
 	i.tmpUniforms = i.tmpUniforms[:0]
-	if useColorM {
-		var body [16]float32
-		var translation [4]float32
-		colorm.Elements(body[:], translation[:])
-		i.tmpUniforms = shader.appendUniforms(i.tmpUniforms, map[string]any{
-			colormshader.UniformColorMBody:        body[:],
-			colormshader.UniformColorMTranslation: translation[:],
-		})
-	}
 
 	dr := i.adjustedBounds()
 	skipMipmap := options.DisableMipmaps
@@ -476,26 +440,13 @@ const (
 
 // DrawTrianglesOptions represents options for DrawTriangles.
 type DrawTrianglesOptions struct {
-	// ColorM is a color matrix to draw.
-	// The default (zero) value is identity, which doesn't change any color.
-	// ColorM is applied before vertex color scale is applied.
-	//
-	// Deprecated: as of v2.5. Use the package colorm instead.
-	ColorM ColorM
 
 	// ColorScaleMode is the mode of color scales in vertices.
 	// ColorScaleMode affects the color calculation with vertex colors, but doesn't affect with a color matrix.
 	// The default (zero) value is ColorScaleModeStraightAlpha.
 	ColorScaleMode ColorScaleMode
 
-	// CompositeMode is a composite mode to draw.
-	// The default (zero) value is CompositeModeCustom (Blend is used).
-	//
-	// Deprecated: as of v2.5. Use Blend instead.
-	CompositeMode CompositeMode
-
 	// Blend is a blending way of the source color and the destination color.
-	// Blend is used only when CompositeMode is CompositeModeCustom.
 	// The default (zero) value is the regular alpha blending.
 	Blend Blend
 
@@ -651,17 +602,10 @@ func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image,
 		options = &DrawTrianglesOptions{}
 	}
 
-	var blend graphicsdriver.Blend
-	if options.CompositeMode == CompositeModeCustom {
-		blend = options.Blend.internalBlend()
-	} else {
-		blend = options.CompositeMode.blend().internalBlend()
-	}
+	blend := options.Blend.internalBlend()
 
 	address := builtinshader.Address(options.Address)
 	filter := builtinshader.Filter(options.Filter)
-
-	colorm, cr, cg, cb, ca := colorMToScale(options.ColorM.affineColorM())
 
 	vs := i.ensureTmpVertices(len(vertices) * graphics.VertexFloatCount)
 	dst := i
@@ -676,10 +620,10 @@ func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image,
 			sx, sy := img.adjustPositionF32(vertices[i].SrcX, vertices[i].SrcY)
 			vs[2] = sx
 			vs[3] = sy
-			vs[4] = vertices[i].ColorR * vertices[i].ColorA * cr
-			vs[5] = vertices[i].ColorG * vertices[i].ColorA * cg
-			vs[6] = vertices[i].ColorB * vertices[i].ColorA * cb
-			vs[7] = vertices[i].ColorA * ca
+			vs[4] = vertices[i].ColorR * vertices[i].ColorA
+			vs[5] = vertices[i].ColorG * vertices[i].ColorA
+			vs[6] = vertices[i].ColorB * vertices[i].ColorA
+			vs[7] = vertices[i].ColorA
 		}
 	} else {
 		// See comment above (#3103).
@@ -692,27 +636,17 @@ func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image,
 			sx, sy := img.adjustPositionF32(vertices[i].SrcX, vertices[i].SrcY)
 			vs[2] = sx
 			vs[3] = sy
-			vs[4] = vertices[i].ColorR * cr
-			vs[5] = vertices[i].ColorG * cg
-			vs[6] = vertices[i].ColorB * cb
-			vs[7] = vertices[i].ColorA * ca
+			vs[4] = vertices[i].ColorR
+			vs[5] = vertices[i].ColorG
+			vs[6] = vertices[i].ColorB
+			vs[7] = vertices[i].ColorA
 		}
 	}
 
 	srcs := [graphics.ShaderSrcImageCount]*ui.Image{img.image}
 
-	useColorM := !colorm.IsIdentity()
-	shader := builtinShader(filter, address, useColorM)
+	shader := builtinShader(filter, address)
 	i.tmpUniforms = i.tmpUniforms[:0]
-	if useColorM {
-		var body [16]float32
-		var translation [4]float32
-		colorm.Elements(body[:], translation[:])
-		i.tmpUniforms = shader.appendUniforms(i.tmpUniforms, map[string]any{
-			colormshader.UniformColorMBody:        body[:],
-			colormshader.UniformColorMTranslation: translation[:],
-		})
-	}
 
 	skipMipmap := options.DisableMipmaps
 	if !skipMipmap {
@@ -723,14 +657,8 @@ func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image,
 
 // DrawTrianglesShaderOptions represents options for DrawTrianglesShader.
 type DrawTrianglesShaderOptions struct {
-	// CompositeMode is a composite mode to draw.
-	// The default (zero) value is CompositeModeCustom (Blend is used).
-	//
-	// Deprecated: as of v2.5. Use Blend instead.
-	CompositeMode CompositeMode
 
 	// Blend is a blending way of the source color and the destination color.
-	// Blend is used only when CompositeMode is CompositeModeCustom.
 	// The default (zero) value is the regular alpha blending.
 	Blend Blend
 
@@ -902,12 +830,7 @@ func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shade
 		options = &DrawTrianglesShaderOptions{}
 	}
 
-	var blend graphicsdriver.Blend
-	if options.CompositeMode == CompositeModeCustom {
-		blend = options.Blend.internalBlend()
-	} else {
-		blend = options.CompositeMode.blend().internalBlend()
-	}
+	blend := options.Blend.internalBlend()
 
 	vs := i.ensureTmpVertices(len(vertices) * graphics.VertexFloatCount)
 	dst := i
@@ -968,14 +891,7 @@ type DrawRectShaderOptions struct {
 	// The default (zero) value is identity, which is (1, 1, 1, 1).
 	ColorScale ColorScale
 
-	// CompositeMode is a composite mode to draw.
-	// The default (zero) value is CompositeModeCustom (Blend is used).
-	//
-	// Deprecated: as of v2.5. Use Blend instead.
-	CompositeMode CompositeMode
-
 	// Blend is a blending way of the source color and the destination color.
-	// Blend is used only when CompositeMode is CompositeModeCustom.
 	// The default (zero) value is the regular alpha blending.
 	Blend Blend
 
@@ -1061,12 +977,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 		options = &DrawRectShaderOptions{}
 	}
 
-	var blend graphicsdriver.Blend
-	if options.CompositeMode == CompositeModeCustom {
-		blend = options.Blend.internalBlend()
-	} else {
-		blend = options.CompositeMode.blend().internalBlend()
-	}
+	blend := options.Blend.internalBlend()
 
 	var imgs [graphics.ShaderSrcImageCount]*ui.Image
 	for i, img := range options.Images {
@@ -1624,43 +1535,6 @@ func NewImageFromImageWithOptions(source image.Image, options *NewImageFromImage
 
 	i.WritePixels(imageToBytes(source, true))
 	return i
-}
-
-// colorMToScale returns a new color matrix and color scales that equal to the given matrix in terms of the effect.
-//
-// If the given matrix is merely a scaling matrix, colorMToScale returns
-// an identity matrix and its scaling factors in premultiplied-alpha format.
-// This is useful to optimize the rendering speed by avoiding the use of the
-// color matrix and instead multiplying all vertex colors by the scale.
-func colorMToScale(colorm affine.ColorM) (newColorM affine.ColorM, r, g, b, a float32) {
-	if colorm.IsIdentity() {
-		return colorm, 1, 1, 1, 1
-	}
-
-	if !colorm.ScaleOnly() {
-		return colorm, 1, 1, 1, 1
-	}
-
-	r = colorm.At(0, 0)
-	g = colorm.At(1, 1)
-	b = colorm.At(2, 2)
-	a = colorm.At(3, 3)
-
-	// Color matrices work on non-premultiplied colors.
-	// This color matrix can only make colors darker or equal,
-	// and thus can never invoke color clamping.
-	// Thus the simpler vertex color scale based shader can be used.
-	//
-	// Negative color values can become positive and out-of-range
-	// after applying to vertex colors below, which can make the min() in the shader kick in.
-	//
-	// Alpha values smaller than 0, combined with negative vertex colors,
-	// can also make the min() kick in, so that shall be ruled out too.
-	if r < 0 || g < 0 || b < 0 || a < 0 || r > 1 || g > 1 || b > 1 {
-		return colorm, 1, 1, 1, 1
-	}
-
-	return affine.ColorMIdentity{}, r * a, g * a, b * a, a
 }
 
 func (i *Image) ensureTmpVertices(n int) []float32 {

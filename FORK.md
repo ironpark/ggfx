@@ -40,7 +40,7 @@ shader contract. What changed for the drivers:
   required; feature levels 10.x are dropped. Vertex semantics are `LOC0..3`.
   The projection matrix's Y inversion, which the HLSL uniform adjuster
   used to do, now lives in the driver (`flipProjectionY`), like Metal.
-- The built-in, ColorM, vector stencil and test shaders are rewritten in
+- The built-in, vector stencil and test shaders are rewritten in
   WGSL. The texel unit (`//kage:unit texels`) is gone; all positions are
   pixels.
 - `vector/stencilshader.go` and `stencilbuffer.go` changed with it, so those
@@ -58,6 +58,13 @@ monitor and window APIs. Everything outside that was dropped.
   it is doing. `exp/textinput`'s console backend went with the consoles.
 - `audio`, `mobile`, `cmd` (ebitenmobile), `examples`, `misc`, `skills`,
   `ebitenutil`, `colorm`, old `text` v1, `vibrate`.
+- The deprecated color matrix and composite mode: `ColorM`, `ColorMDim`,
+  `CompositeMode` and its constants, the `ColorM`/`CompositeMode` fields on
+  every draw option, `internal/affine` and `internal/colormshader`. `ColorScale`
+  and `Blend` are the only ways to tint and blend. Without a color matrix
+  `builtinShader` has one shader per filter and address rather than two, and
+  `DrawTriangles` no longer scales every vertex colour by a matrix-derived
+  factor that was always 1.
 - Console and mobile platforms: Nintendo Switch, PlayStation 5, Xbox GDK,
   Android and iOS sources. The browser (`js`/`wasm`) target is kept. `internal/microsoftgdk`
   survives as a stub whose `IsXbox` is always false so the glfw and DirectX

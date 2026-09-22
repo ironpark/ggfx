@@ -20,7 +20,6 @@ import (
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
-	"github.com/ironpark/ggfx/internal/colormshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/ui"
 )
@@ -76,17 +75,13 @@ func (s *Shader) appendUniforms(dst []uint32, uniforms map[string]any) []uint32 
 }
 
 var (
-	builtinShadersForRead atomic.Pointer[[builtinshader.FilterCount][builtinshader.AddressCount][2]*Shader]
+	builtinShadersForRead atomic.Pointer[[builtinshader.FilterCount][builtinshader.AddressCount]*Shader]
 	builtinShadersM       sync.Mutex
 )
 
-func builtinShader(filter builtinshader.Filter, address builtinshader.Address, useColorM bool) *Shader {
-	var c int
-	if useColorM {
-		c = 1
-	}
+func builtinShader(filter builtinshader.Filter, address builtinshader.Address) *Shader {
 	if read := builtinShadersForRead.Load(); read != nil {
-		if s := (*read)[filter][address][c]; s != nil {
+		if s := (*read)[filter][address]; s != nil {
 			return s
 		}
 	}
@@ -96,14 +91,13 @@ func builtinShader(filter builtinshader.Filter, address builtinshader.Address, u
 
 	// Double check in case another goroutine already created a shader.
 	if read := builtinShadersForRead.Load(); read != nil {
-		if s := (*read)[filter][address][c]; s != nil {
+		if s := (*read)[filter][address]; s != nil {
 			return s
 		}
 	}
 
 	var shader *Shader
-	if (filter == builtinshader.FilterNearest || filter == builtinshader.FilterLinear) &&
-		address == builtinshader.AddressUnsafe && !useColorM {
+	if address == builtinshader.AddressUnsafe && (filter == builtinshader.FilterNearest || filter == builtinshader.FilterLinear) {
 		switch filter {
 		case builtinshader.FilterNearest:
 			shader = &Shader{shader: ui.NearestFilterShader}
@@ -111,12 +105,6 @@ func builtinShader(filter builtinshader.Filter, address builtinshader.Address, u
 			shader = &Shader{shader: ui.LinearFilterShader}
 		}
 	} else {
-		var src []byte
-		if useColorM {
-			src = colormshader.ShaderSource(colormshader.Filter(filter), colormshader.Address(address))
-		} else {
-			src = builtinshader.ShaderSource(filter, address)
-		}
 		var name string
 		switch filter {
 		case builtinshader.FilterNearest:
@@ -132,21 +120,18 @@ func builtinShader(filter builtinshader.Filter, address builtinshader.Address, u
 		case builtinshader.AddressRepeat:
 			name += "-repeat"
 		}
-		if useColorM {
-			name += "-colorm"
-		}
-		s, err := newShader(src, name)
+		s, err := newShader(builtinshader.ShaderSource(filter, address), name)
 		if err != nil {
 			panic(fmt.Sprintf("ggfx: NewShader for a built-in shader failed: %v", err))
 		}
 		shader = s
 	}
 
-	var shaders [builtinshader.FilterCount][builtinshader.AddressCount][2]*Shader
+	var shaders [builtinshader.FilterCount][builtinshader.AddressCount]*Shader
 	if ptr := builtinShadersForRead.Load(); ptr != nil {
 		shaders = *ptr
 	}
-	shaders[filter][address][c] = shader
+	shaders[filter][address] = shader
 	builtinShadersForRead.Store(&shaders)
 	return shader
 }

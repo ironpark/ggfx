@@ -294,9 +294,8 @@ fn fragment(v: Vertex) -> vec4f {
 			name: "FillRuleBlendCopy",
 			draw: func(dst *ggfx.Image) {
 				dst.DrawTriangles32(nil, nil, src, &ggfx.DrawTrianglesOptions{
-					FillRule:      ggfx.FillRuleNonZero,
-					CompositeMode: ggfx.CompositeModeCustom,
-					Blend:         ggfx.BlendCopy,
+					FillRule: ggfx.FillRuleNonZero,
+					Blend:    ggfx.BlendCopy,
 				})
 			},
 		},
@@ -304,9 +303,8 @@ fn fragment(v: Vertex) -> vec4f {
 			name: "ShaderFillRuleBlendCopy",
 			draw: func(dst *ggfx.Image) {
 				dst.DrawTrianglesShader32(nil, nil, shader, &ggfx.DrawTrianglesShaderOptions{
-					FillRule:      ggfx.FillRuleNonZero,
-					CompositeMode: ggfx.CompositeModeCustom,
-					Blend:         ggfx.BlendCopy,
+					FillRule: ggfx.FillRuleNonZero,
+					Blend:    ggfx.BlendCopy,
 				})
 			},
 		},

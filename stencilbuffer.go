@@ -217,17 +217,9 @@ func doDrawTrianglesWithAntialias(dst *Image, vertices []Vertex, indices []uint3
 
 	var uncommonBlend bool
 	if dtOptions != nil {
-		if dtOptions.CompositeMode != CompositeModeCustom {
-			uncommonBlend = dtOptions.CompositeMode != CompositeModeSourceOver
-		} else {
-			uncommonBlend = dtOptions.Blend != BlendSourceOver
-		}
+		uncommonBlend = dtOptions.Blend != BlendSourceOver
 	} else if dtsOptions != nil {
-		if dtsOptions.CompositeMode != CompositeModeCustom {
-			uncommonBlend = dtsOptions.CompositeMode != CompositeModeSourceOver
-		} else {
-			uncommonBlend = dtsOptions.Blend != BlendSourceOver
-		}
+		uncommonBlend = dtsOptions.Blend != BlendSourceOver
 	}
 
 	// Copy the current destination image for the blending, if the blend mode is not the regular alpha blending.
@@ -241,9 +233,7 @@ func doDrawTrianglesWithAntialias(dst *Image, vertices []Vertex, indices []uint3
 
 	if dtOptions != nil {
 		op := &DrawTrianglesOptions{}
-		op.ColorM = dtOptions.ColorM
 		op.ColorScaleMode = dtOptions.ColorScaleMode
-		op.CompositeMode = dtOptions.CompositeMode
 		op.Blend = dtOptions.Blend
 		op.Filter = dtOptions.Filter
 		op.Address = dtOptions.Address
@@ -253,7 +243,6 @@ func doDrawTrianglesWithAntialias(dst *Image, vertices []Vertex, indices []uint3
 		op := &DrawTrianglesShaderOptions{}
 		op.Uniforms = dtsOptions.Uniforms
 		op.Images = dtsOptions.Images
-		op.CompositeMode = dtsOptions.CompositeMode
 		op.Blend = dtsOptions.Blend
 		os1.DrawTrianglesShader32(vs, indices, shader, op)
 	}
@@ -301,7 +290,6 @@ func doDrawTrianglesShaderWithStencilBuffer(dst *Image, vertices []Vertex, indic
 	os1 := ensureOffscreenImage1(bounds).SubImage(bounds).(*Image)
 	if dtOptions != nil {
 		op := &DrawTrianglesOptions{}
-		op.ColorM = dtOptions.ColorM
 		op.ColorScaleMode = dtOptions.ColorScaleMode
 		op.Filter = dtOptions.Filter
 		op.Address = dtOptions.Address
@@ -346,14 +334,12 @@ func doDrawTrianglesShaderWithStencilBuffer(dst *Image, vertices []Vertex, indic
 	// as this logic is for the legacy API.
 	op := &DrawImageOptions{}
 	if dtOptions != nil {
-		op.CompositeMode = dtOptions.CompositeMode
 		op.Blend = dtOptions.Blend
 		if dtOptions.AntiAlias {
 			op.GeoM.Scale(0.5, 0.5)
 			op.Filter = FilterLinear
 		}
 	} else if dtsOptions != nil {
-		op.CompositeMode = dtsOptions.CompositeMode
 		op.Blend = dtsOptions.Blend
 		if dtsOptions.AntiAlias {
 			op.GeoM.Scale(0.5, 0.5)
