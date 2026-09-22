@@ -18,6 +18,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"sync/atomic"
 	"syscall/js"
 	"time"
 
@@ -100,7 +101,9 @@ type userInterfaceImpl struct {
 	lastCaptureExitTime time.Time
 	hiDPIEnabled        bool
 
-	context             *context
+	context             frameDriver
+	surface             graphicsdriver.Surface
+	closeRequested      atomic.Bool
 	inputState          InputState
 	cursorXInClient     float64
 	cursorYInClient     float64
@@ -345,6 +348,16 @@ func (u *UserInterface) updateImpl(force bool) error {
 	// Now there is not a good way to detect the change.
 	// See also https://crbug.com/123694.
 
+	if u.app != nil {
+		if u.closeRequested.Load() {
+			return RegularTermination
+		}
+		u.incrementTick()
+		if err := u.dispatchEvents(); err != nil {
+			return err
+		}
+	}
+
 	w, h := u.outsideSize()
 	sw, sh := u.screenSize()
 	if force {
@@ -352,7 +365,11 @@ func (u *UserInterface) updateImpl(force bool) error {
 			return err
 		}
 	} else {
-		if err := u.context.updateFrame(u.graphicsDriver, w, h, sw, sh, theMonitor.DeviceScaleFactor(), u, true); err != nil {
+		needsSwapBuffers, err := u.context.renderFrame(u.graphicsDriver, w, h, sw, sh, theMonitor.DeviceScaleFactor(), u, true, false)
+		if err != nil {
+			return err
+		}
+		if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.FPSMode() == FPSModeVsyncOn, u.RefreshRate()); err != nil {
 			return err
 		}
 	}
@@ -360,6 +377,22 @@ func (u *UserInterface) updateImpl(force bool) error {
 }
 
 func (u *UserInterface) needsUpdate() bool {
+	if u.app != nil {
+		// An app renders on request and when there is something to handle.
+		if u.renderingScheduled || u.closeRequested.Load() {
+			return true
+		}
+		u.eventsMu.Lock()
+		pending := len(u.events) > 0
+		u.eventsMu.Unlock()
+		if pending {
+			return true
+		}
+		if c, ok := u.context.(*eventContext); ok {
+			return c.wantsFrame()
+		}
+		return false
+	}
 	if u.fpsMode != FPSModeVsyncOffMinimum {
 		return true
 	}
@@ -570,6 +603,11 @@ func (u *UserInterface) setWindowEventHandlers(v js.Value) {
 func (u *UserInterface) onResize() {
 	u.updateScreenSize()
 
+	if aw := u.appWindow(); aw != nil {
+		ow, oh := u.outsideSize()
+		u.pushEvent(ResizeEvent{Window: aw, Width: ow, Height: oh, Scale: theMonitor.DeviceScaleFactor()})
+	}
+
 	// updateImpl can block. Use goroutine.
 	// See https://pkg.go.dev/syscall/js#FuncOf.
 	go func() {
@@ -772,6 +810,10 @@ func (u *UserInterface) appendDroppedFiles(data js.Value) {
 			return
 		}
 		u.inputState.DroppedFiles = fs
+		if aw := u.appWindow(); aw != nil {
+			u.pushEvent(DropEvent{Window: aw, Files: fs})
+			u.scheduleRendering()
+		}
 	}
 }
 
@@ -830,7 +872,10 @@ func (u *UserInterface) initOnMainThread(options *RunOptions) error {
 	if err != nil {
 		return err
 	}
-	u.context.surface = surface
+	u.surface = surface
+	if u.context != nil {
+		u.context.setSurface(surface)
+	}
 
 	if bodyStyle := document.Get("body").Get("style"); options.ScreenTransparent {
 		bodyStyle.Set("backgroundColor", "transparent")

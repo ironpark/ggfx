@@ -27,17 +27,22 @@ import (
 )
 
 func (u *UserInterface) Run(game Game, options *RunOptions) error {
-	if options.SingleThread || buildTagSingleThread || runtime.GOOS == "js" {
-		return u.runSingleThread(game, options)
-	}
-	return u.runMultiThread(game, options)
+	u.context = newContext(game, options.ScreenTransparent)
+	return u.runLoop(options, nil)
 }
 
-func (u *UserInterface) runMultiThread(game Game, options *RunOptions) error {
+// runLoop runs the loop. start, if any, runs on the loop's goroutine after the initialization and
+// before the first iteration.
+func (u *UserInterface) runLoop(options *RunOptions, start func() error) error {
+	if options.SingleThread || buildTagSingleThread || runtime.GOOS == "js" {
+		return u.runSingleThread(options, start)
+	}
+	return u.runMultiThread(options, start)
+}
+
+func (u *UserInterface) runMultiThread(options *RunOptions, start func() error) error {
 	u.mainThread = thread.NewOSThread()
 	graphicscommand.SetOSThreadAsRenderThread()
-
-	u.context = newContext(game, options.ScreenTransparent)
 
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	defer cancel()
@@ -69,6 +74,12 @@ func (u *UserInterface) runMultiThread(game Game, options *RunOptions) error {
 		// setRunning(true) should be called in initOnMainThread for each platform.
 		defer u.setRunning(false)
 
+		if start != nil {
+			if err := start(); err != nil {
+				return err
+			}
+		}
+
 		return u.loopGame()
 	})
 
@@ -78,17 +89,21 @@ func (u *UserInterface) runMultiThread(game Game, options *RunOptions) error {
 	return wg.Wait()
 }
 
-func (u *UserInterface) runSingleThread(game Game, options *RunOptions) error {
+func (u *UserInterface) runSingleThread(options *RunOptions, start func() error) error {
 	// Initialize the main thread first so the thread is available at u.run (#809).
 	u.mainThread = thread.NewNoopThread()
 
 	u.setRunning(true)
 	defer u.setRunning(false)
 
-	u.context = newContext(game, options.ScreenTransparent)
-
 	if err := u.initOnMainThread(options); err != nil {
 		return err
+	}
+
+	if start != nil {
+		if err := start(); err != nil {
+			return err
+		}
 	}
 
 	if err := u.loopGame(); err != nil {
