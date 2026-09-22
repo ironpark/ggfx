@@ -174,6 +174,16 @@ WebGL feels.
   only Metal and OpenGL ran a transparent window.
 - The FPS-mode machinery in `internal/ui` can only hold `FPSModeVsyncOn` since
   the root-level setters went.
+- Rendering without a visible window, so that a screenshot dumper does not have
+  to open one. A driver with no window at all is not reachable: OpenGL makes its
+  context current through the window every frame, so it needs one either way.
+  What is missing is smaller. `WindowOptions.Hidden` already creates the window,
+  and the loop still collects a frame for it, but `shouldPresentFrame` returns
+  false for an invisible window and `renderFrame` returns before running the
+  frame whenever it cannot present. Hidden-on-purpose and occluded-by-the-OS both
+  arrive as `present == false`, and only the second should skip the frame: the
+  first should run it and skip the buffer swap alone. `isInitWindowVisible` is
+  the signal that separates them.
 - X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which
   had stopped reporting anything under `Run` anyway. It needs to take committed
   text from `TextEvent` instead, which is the same gap as IME composition there.
