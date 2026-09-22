@@ -36,8 +36,8 @@ import (
 	"golang.org/x/image/math/fixed"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	t "github.com/hajimehoshi/ebiten/v2/internal/testing"
+	"github.com/hajimehoshi/ebiten/v2/internal/testresources"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
 )
