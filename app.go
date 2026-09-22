@@ -48,7 +48,6 @@ func Run(h Handler, options *RunOptions) error {
 	defer runEnded.Store(true)
 
 	op := toUIRunOptions(options)
-	screenTransparent.Store(op.ScreenTransparent)
 
 	if err := ui.Get().RunApp(&appForUI{handler: h}, op); err != nil {
 		if errors.Is(err, Termination) {

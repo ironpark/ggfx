@@ -19,9 +19,12 @@ import (
 	"sync"
 )
 
-// virtualKeyboard holds what the screen transform needs in order to keep a text-input caret
-// out of the region a virtual keyboard covers. The text-input package writes it; the values
-// it reports come from the platform, which is why they are not measured here.
+// virtualKeyboard holds what a screen transform would need in order to keep a text-input caret
+// out of the region a virtual keyboard covers. The text-input package writes it; the values it
+// reports come from the platform, which is why they are not measured here.
+//
+// Nothing reads it yet. The shift used to live in the game's letterbox transform, which went away
+// with the Game path; an event-path window would have to apply it itself.
 type virtualKeyboard struct {
 	caretBounds image.Rectangle
 	caretKnown  bool
@@ -34,8 +37,8 @@ type virtualKeyboard struct {
 
 var theVirtualKeyboard virtualKeyboard
 
-// SetTextInputCaretBounds records the caret of the live text-input session in logical units.
-// The rendering shifts to keep the caret out of the region a virtual keyboard covers.
+// SetTextInputCaretBounds records the caret of the live text-input session in logical units, for
+// a shift that keeps the caret out of the region a virtual keyboard covers.
 func (u *UserInterface) SetTextInputCaretBounds(bounds image.Rectangle) {
 	v := &theVirtualKeyboard
 	v.mu.Lock()

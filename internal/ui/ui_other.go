@@ -26,11 +26,6 @@ import (
 	"github.com/ironpark/ggfx/internal/thread"
 )
 
-func (u *UserInterface) Run(game Game, options *RunOptions) error {
-	u.context = newContext(game, options.ScreenTransparent)
-	return u.runLoop(options, nil)
-}
-
 // runLoop runs the loop. start, if any, runs on the loop's goroutine after the initialization and
 // before the first iteration.
 func (u *UserInterface) runLoop(options *RunOptions, start func() error) error {
@@ -80,7 +75,7 @@ func (u *UserInterface) runMultiThread(options *RunOptions, start func() error) 
 			}
 		}
 
-		return u.loopGame()
+		return u.loopFrames()
 	})
 
 	// Run the main thread. The loop is the thread's whole life, so a call arriving after
@@ -106,7 +101,7 @@ func (u *UserInterface) runSingleThread(options *RunOptions, start func() error)
 		}
 	}
 
-	if err := u.loopGame(); err != nil {
+	if err := u.loopFrames(); err != nil {
 		return err
 	}
 

@@ -63,7 +63,11 @@ monitor and window APIs. Everything outside that was dropped.
   and FPS-mode functions, the image dumper and its screenshot environment
   variables, and the root-level window, cursor, fullscreen and monitor
   functions that addressed the primary window. `Run`, `NewWindow` and
-  `*Window` replace them. `RunGameOptions` is now `RunOptions`.
+  `*Window` replace them. `RunGameOptions` is now `RunOptions`. Inside
+  `internal/ui` the game frame driver, its entry points and the app-versus-game
+  branches went with it; `internal/ui.Game` no longer exists. The virtual
+  keyboard's screen shift lived in the game's letterbox transform and has no
+  consumer now: the state is still recorded for a per-window shift to use.
 - The VM guest/host remote rendering backend (`exp/vmhost`,
   `internal/vmguest`, `internal/vmprotocol`, `internal/graphicsdriver/remote`)
   and the `RunGameOptions.VMGuestEndpoint` option.

@@ -17,13 +17,11 @@
 package ui
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/windowsystem"
 )
 
 // uiBackend is the platform UI implementation for the desktop build.
@@ -144,17 +142,10 @@ func (u *UserInterface) init() error {
 	return nil
 }
 
-func (u *UserInterface) Run(game Game, options *RunOptions) error {
-	if !windowsystem.Available() {
-		return errors.New("ui: no window system is available")
-	}
-	return u.run(game, options)
-}
-
-// setRunningBackend publishes the backend that serves the running game, or
+// setRunningBackend publishes the backend that serves the running window, or
 // unpublishes the current backend when b is nil. The running state is updated
 // accordingly. A backend calls setRunningBackend with itself when it gets
-// ready to serve calls, and with nil when the game stops.
+// ready to serve calls, and with nil when the window closes.
 func (u *UserInterface) setRunningBackend(b uiBackend) {
 	// The backend and the running state are updated non-atomically. The update
 	// orders guarantee that a backend is published whenever the running state
@@ -168,8 +159,8 @@ func (u *UserInterface) setRunningBackend(b uiBackend) {
 	u.setRunning(true)
 }
 
-// runningBackend returns the backend serving the running game, or nil if the
-// game is not running.
+// runningBackend returns the backend serving the running window, or nil when
+// nothing is running.
 func (u *UserInterface) runningBackend() uiBackend {
 	b := u.backend.Load()
 	if b == nil {
@@ -178,13 +169,13 @@ func (u *UserInterface) runningBackend() uiBackend {
 	return *b
 }
 
-// primaryFrameDriver returns the frame driver of the primary window, or a zero context before the
-// window exists.
+// primaryFrameDriver returns the frame driver of the primary window, or nil before the window
+// exists.
 func (u *UserInterface) primaryFrameDriver() frameDriver {
 	if p := u.primary.Load(); p != nil {
 		return p.context
 	}
-	return &context{}
+	return nil
 }
 
 func (u *UserInterface) setInitMonitor(m *Monitor) {

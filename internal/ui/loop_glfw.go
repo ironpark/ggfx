@@ -36,12 +36,6 @@ import (
 // errWindowClosed is returned by updateWindow when the window asked to close.
 var errWindowClosed = errors.New("ui: window closed")
 
-func (u *UserInterface) run(game Game, options *RunOptions) error {
-	return u.runLoop(options, func() error {
-		return u.initOnMainThread(game, options)
-	}, nil)
-}
-
 // runLoop runs the loop. initMain runs on the main thread first; start, if any, runs on the loop's
 // goroutine before the first iteration.
 func (u *UserInterface) runLoop(options *RunOptions, initMain func() error, start func() error) error {
@@ -83,7 +77,7 @@ func (u *UserInterface) runMultiThread(options *RunOptions, initMain func() erro
 		// The backend is published at the window creation.
 		defer u.setRunningBackend(nil)
 
-		return u.loopGame(start)
+		return u.loopFrames(start)
 	})
 
 	// Run the main thread. The loop is the thread's whole life, so a call arriving after
@@ -103,37 +97,10 @@ func (u *UserInterface) runSingleThread(options *RunOptions, initMain func() err
 		return err
 	}
 
-	if err := u.loopGame(start); err != nil {
+	if err := u.loopFrames(start); err != nil {
 		return err
 	}
 
-	return nil
-}
-
-// initOnMainThread initializes GLFW and the graphics driver, and creates the primary window for
-// the game. It must be called on the main thread.
-func (u *UserInterface) initOnMainThread(game Game, options *RunOptions) error {
-	if err := u.initGraphicsOnMainThread(options); err != nil {
-		return err
-	}
-
-	// Center the window on the monitor if the position was not explicitly set.
-	if !options.WindowPositionSet {
-		m := u.getInitMonitor()
-		if m != nil {
-			sw, sh := m.sizeInDIP()
-			x, y := InitialWindowPosition(int(sw), int(sh), options.InitWindowWidthInDIP, options.InitWindowHeightInDIP)
-			u.Window().SetPosition(x, y)
-		}
-	}
-
-	w := newGLFWBackend(u)
-	w.context = newContext(game, options.ScreenTransparent)
-	u.primary.Store(w)
-	if err := w.createWindowOnMainThread(options); err != nil {
-		return err
-	}
-	u.windows = append(u.windows, w)
 	return nil
 }
 
@@ -348,7 +315,7 @@ func (u *glfwBackend) destroy() error {
 	return nil
 }
 
-func (u *UserInterface) loopGame(start func() error) (err error) {
+func (u *UserInterface) loopFrames(start func() error) (err error) {
 	defer func() {
 		graphicscommand.Terminate()
 		u.mainThread.Call(func() {
@@ -368,7 +335,7 @@ func (u *UserInterface) loopGame(start func() error) (err error) {
 	}
 
 	for {
-		if err := u.updateGame(); err != nil {
+		if err := u.updateFrame(); err != nil {
 			return err
 		}
 	}
@@ -381,19 +348,12 @@ func (u *UserInterface) pumpEvents() error {
 	defer func() {
 		u.pollingEvents = false
 	}()
-	if u.app != nil {
-		// An app renders on request: wait for an event unless a frame is pending. A window that
-		// has not presented yet is still hidden and needs its first frame.
-		for _, w := range u.windows {
-			if w.context.wantsFrame() || !w.bufferOnceSwapped {
-				return glfw.PollEvents()
-			}
+	// Frames are rendered on request: wait for an event unless one is pending. A window that has
+	// not presented yet is still hidden and needs its first frame.
+	for _, w := range u.windows {
+		if w.context.wantsFrame() || !w.bufferOnceSwapped {
+			return glfw.PollEvents()
 		}
-		return glfw.WaitEvents()
-	}
-	if FPSModeType(u.fpsMode.Load()) != FPSModeVsyncOffMinimum {
-		// TODO: Updating the input can be skipped when clock.Update returns 0 (#1367).
-		return glfw.PollEvents()
 	}
 	return glfw.WaitEvents()
 }
@@ -578,7 +538,7 @@ type windowFrame struct {
 	deviceScaleFactor float64
 }
 
-func (u *UserInterface) updateGame() error {
+func (u *UserInterface) updateFrame() error {
 	var unfocused = true
 	var monitorChanged bool
 	var frames []windowFrame
@@ -697,17 +657,15 @@ func (u *UserInterface) updateGame() error {
 		u.pacer.resetVsyncDetection()
 	}
 
-	if u.app != nil {
-		// A game advances the tick in its Update; an app advances it once per iteration, so
-		// that the time-based caches, like the current monitor, keep expiring. The hooks that
-		// a game runs before Update, like the text input's, run here for the same reason.
-		u.incrementTick()
-		if err := hook.RunBeforeUpdateHooks(); err != nil {
-			return err
-		}
-		if err := u.dispatchEvents(); err != nil {
-			return err
-		}
+	// The tick advances once per iteration, so that the time-based caches, like the current
+	// monitor, keep expiring. The before-update hooks, like the text input's, run for the same
+	// reason.
+	u.incrementTick()
+	if err := hook.RunBeforeUpdateHooks(); err != nil {
+		return err
+	}
+	if err := u.dispatchEvents(); err != nil {
+		return err
 	}
 
 	var needsSwapBuffers bool

@@ -130,10 +130,6 @@ type RunOptions struct {
 	X11InstanceName string
 }
 
-var screenTransparent atomic.Bool
-
-var initUnfocused atomic.Bool
-
 func toUIRunOptions(options *RunOptions) *ui.RunOptions {
 	const (
 		defaultX11ClassName    = "Ebitengine-Application"
@@ -151,11 +147,9 @@ func toUIRunOptions(options *RunOptions) *ui.RunOptions {
 
 	if options == nil {
 		return &ui.RunOptions{
-			InitUnfocused:     initUnfocused.Load(),
-			ScreenTransparent: screenTransparent.Load(),
-			ColorSpace:        colorSpace,
-			X11ClassName:      defaultX11ClassName,
-			X11InstanceName:   defaultX11InstanceName,
+			ColorSpace:      colorSpace,
+			X11ClassName:    defaultX11ClassName,
+			X11InstanceName: defaultX11InstanceName,
 		}
 	}
 

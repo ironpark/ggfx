@@ -348,17 +348,15 @@ func (u *UserInterface) updateImpl(force bool) error {
 	// Now there is not a good way to detect the change.
 	// See also https://crbug.com/123694.
 
-	if u.app != nil {
-		if u.closeRequested.Load() {
-			return RegularTermination
-		}
-		u.incrementTick()
-		if err := hook.RunBeforeUpdateHooks(); err != nil {
-			return err
-		}
-		if err := u.dispatchEvents(); err != nil {
-			return err
-		}
+	if u.closeRequested.Load() {
+		return RegularTermination
+	}
+	u.incrementTick()
+	if err := hook.RunBeforeUpdateHooks(); err != nil {
+		return err
+	}
+	if err := u.dispatchEvents(); err != nil {
+		return err
 	}
 
 	w, h := u.outsideSize()
@@ -380,36 +378,23 @@ func (u *UserInterface) updateImpl(force bool) error {
 }
 
 func (u *UserInterface) needsUpdate() bool {
-	if u.app != nil {
-		// An app renders on request and when there is something to handle.
-		if u.renderingScheduled || u.closeRequested.Load() {
-			return true
-		}
-		u.eventsMu.Lock()
-		pending := len(u.events) > 0
-		u.eventsMu.Unlock()
-		if pending {
-			return true
-		}
-		if c, ok := u.context.(*eventContext); ok {
-			return c.wantsFrame()
-		}
-		return false
-	}
-	if u.fpsMode != FPSModeVsyncOffMinimum {
+	// Frames are rendered on request and when there is something to handle.
+	if u.renderingScheduled || u.closeRequested.Load() {
 		return true
 	}
-	if !u.onceUpdateCalled {
+	u.eventsMu.Lock()
+	pending := len(u.events) > 0
+	u.eventsMu.Unlock()
+	if pending {
 		return true
 	}
-	if u.renderingScheduled {
-		return true
+	if c, ok := u.context.(*eventContext); ok {
+		return c.wantsFrame()
 	}
-	// TODO: Watch the gamepad state?
 	return false
 }
 
-func (u *UserInterface) loopGame() error {
+func (u *UserInterface) loopFrames() error {
 	// Initialize the screen size first (#3034).
 	// If ebiten.SetRunnableOnUnfocused(false) and the canvas is not focused,
 	// suspended() returns true and the update routine cannot start.
@@ -926,9 +911,6 @@ func (u *UserInterface) readInputState(inputState *InputState) {
 }
 
 func (u *UserInterface) primaryFrameDriver() frameDriver {
-	if u.context == nil {
-		return &context{}
-	}
 	return u.context
 }
 

@@ -331,7 +331,7 @@ func (u *glfwBackend) registerInputCallbacks() error {
 
 // updateInputStateForFrame updates the input state using pre-fetched cursor position
 // and device scale factor. GetCursorPos and gamepad.Update are already called in
-// the mainThread.Call block of updateGame, so this avoids an extra round-trip.
+// the mainThread.Call block of updateFrame, so this avoids an extra round-trip.
 func (u *glfwBackend) updateInputStateForFrame(deviceScaleFactor float64) error {
 	s := deviceScaleFactor
 
@@ -362,7 +362,7 @@ func (u *glfwBackend) updateInputStateForFrame(deviceScaleFactor float64) error 
 		u.input.setCursorPos(cx, cy)
 	}
 
-	// gamepad.Update is already called in updateGame's mainThread.Call block.
+	// gamepad.Update is already called in updateFrame's mainThread.Call block.
 	return nil
 }
 

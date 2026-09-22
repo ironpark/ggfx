@@ -3,8 +3,7 @@
 ggfx drives a GUI, not a game. A GUI has any number of windows, redraws only
 when something changed, and reacts to input as events rather than by polling a
 per-tick snapshot. This document is the contract for that model. The legacy `Game`/`RunGame` API is
-gone; what is left of it inside `internal/ui` is unreachable and is being
-removed separately.
+gone, inside `internal/ui` as well as on the public surface.
 
 ## Layers
 
