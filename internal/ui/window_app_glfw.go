@@ -68,9 +68,6 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 	if u.isTerminated() {
 		return nil, errors.New("ui: NewWindow cannot be called after the app stopped")
 	}
-	if err := u.checkWindowOptions(o); err != nil {
-		return nil, err
-	}
 
 	settings := &desktopWindow{ui: u}
 	settings.init()

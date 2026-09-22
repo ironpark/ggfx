@@ -286,7 +286,10 @@ func (g *graphics11) End(mode graphicsdriver.FlushMode) error {
 	return nil
 }
 
-func (g *graphics11) NewSurface(target any) (graphicsdriver.Surface, error) {
+func (g *graphics11) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
+	if transparent {
+		return nil, errors.New("directx: a transparent surface is not supported")
+	}
 	if g.window != 0 {
 		return nil, errors.New("directx: only one surface is supported")
 	}
@@ -296,10 +299,6 @@ func (g *graphics11) NewSurface(target any) (graphicsdriver.Surface, error) {
 	}
 	g.window = w
 	return &Surface{newScreenImage: g.newScreenImage}, nil
-}
-
-func (g *graphics11) SetTransparent(transparent bool) {
-	// TODO: Implement this?
 }
 
 // SupportsDirectComposition reports whether this driver can present through DirectComposition.

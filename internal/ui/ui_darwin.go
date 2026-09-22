@@ -198,8 +198,7 @@ func setApplePressAndHoldEnabled(enabled bool) {
 }
 
 type graphicsDriverCreatorImpl struct {
-	transparent bool
-	colorSpace  color.ColorSpace
+	colorSpace color.ColorSpace
 }
 
 func (g *graphicsDriverCreatorImpl) newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error) {

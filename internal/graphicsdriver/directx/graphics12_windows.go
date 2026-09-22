@@ -741,7 +741,10 @@ func (g *graphics12) createRenderTargetViewsDesktop() (ferr error) {
 	return nil
 }
 
-func (g *graphics12) NewSurface(target any) (graphicsdriver.Surface, error) {
+func (g *graphics12) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
+	if transparent {
+		return nil, errors.New("directx: a transparent surface is not supported")
+	}
 	if g.window != 0 {
 		return nil, errors.New("directx: only one surface is supported")
 	}
@@ -1051,10 +1054,6 @@ func (g *graphics12) withDeviceRemovedReason(err error) error {
 		return fmt.Errorf("%w (device removed reason: %w)", err, reason)
 	}
 	return err
-}
-
-func (g *graphics12) SetTransparent(transparent bool) {
-	// TODO: Implement this?
 }
 
 // SupportsDirectComposition reports whether this driver can present through DirectComposition.

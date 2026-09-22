@@ -372,9 +372,9 @@ type WindowOptions struct {
 	Maximized   bool
 	Unfocused   bool
 
-	// Transparent makes the window's framebuffer transparent. It needs
-	// [RunOptions.ScreenTransparent], which creates the driver that can present one; NewWindow
-	// fails without it.
+	// Transparent makes the window's framebuffer composite with what is behind the window.
+	// DirectX cannot present such a surface, so NewWindow fails with it on a Windows machine
+	// that chose the DirectX driver.
 	Transparent bool
 
 	// The size limits in device-independent pixels. 0 means no limit.

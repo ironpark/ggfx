@@ -1660,10 +1660,6 @@ func (u *glfwBackend) setWindowMousePassthrough(enabled bool) error {
 	return nil
 }
 
-func IsScreenTransparentAvailable() bool {
-	return true
-}
-
 func (u *glfwBackend) RunOnMainThread(f func()) {
 	u.mainThread.Call(f)
 }

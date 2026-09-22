@@ -114,15 +114,13 @@ func (u *UserInterface) initGraphicsOnMainThread(options *RunOptions) error {
 	setApplePressAndHoldEnabled(options.ApplePressAndHoldEnabled)
 
 	g, lib, err := newGraphicsDriver(&graphicsDriverCreatorImpl{
-		transparent: options.ScreenTransparent,
-		colorSpace:  options.ColorSpace,
+		colorSpace: options.ColorSpace,
 	}, options.GraphicsLibrary)
 	if err != nil {
 		return err
 	}
 	u.graphicsDriver = g
 	u.setGraphicsLibrary(lib)
-	u.graphicsDriver.SetTransparent(options.ScreenTransparent)
 
 	if g, ok := u.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
 		g.SetMainThreadRunner(u.mainThread.Call)
@@ -266,7 +264,7 @@ func (u *glfwBackend) createWindowOnMainThread() error {
 		}
 		target = w
 	}
-	surface, err := u.graphicsDriver.NewSurface(target)
+	surface, err := u.graphicsDriver.NewSurface(target, u.desktopWindow.isInitWindowTransparent())
 	if err != nil {
 		return err
 	}

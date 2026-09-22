@@ -68,13 +68,11 @@ type RunOptions struct {
 	// The default (zero) value is false, which means that the page takes focus.
 	InitUnfocused bool
 
-	// ScreenTransparent creates a graphics driver that can present transparent windows. The
-	// driver is created once, before any window exists, so a window with
-	// [WindowOptions.Transparent] needs this, and NewWindow fails without it.
+	// ScreenTransparent makes the browser's canvas composite with the page behind it. It is
+	// read at initialization, as the browser has one canvas. Desktop windows use
+	// [WindowOptions.Transparent] instead.
 	//
-	// ScreenTransparent is valid on desktops and browsers.
-	//
-	// The default (zero) value is false: windows are opaque.
+	// The default (zero) value is false: the canvas is opaque.
 	ScreenTransparent bool
 
 	// SkipTaskbar indicates whether an application icon is shown on a taskbar or not. It

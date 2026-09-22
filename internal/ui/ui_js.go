@@ -840,7 +840,7 @@ func (u *UserInterface) initOnMainThread(options *RunOptions) error {
 	}
 	u.graphicsDriver = g
 	u.setGraphicsLibrary(lib)
-	surface, err := g.NewSurface(canvas)
+	surface, err := g.NewSurface(canvas, options.ScreenTransparent)
 	if err != nil {
 		return err
 	}
@@ -929,10 +929,6 @@ func (u *UserInterface) Monitor() *Monitor {
 
 func (u *UserInterface) updateIconIfNeeded() error {
 	return nil
-}
-
-func IsScreenTransparentAvailable() bool {
-	return true
 }
 
 func dipToNativePixels(x float64, scale float64) float64 {

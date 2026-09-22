@@ -81,6 +81,16 @@ monitor and window APIs. Everything outside that was dropped.
   Android and iOS sources. The browser (`js`/`wasm`) target is kept. `internal/microsoftgdk`
   survives as a stub whose `IsXbox` is always false so the glfw and DirectX
   drivers stay untouched.
+- `graphicsdriver.Graphics.SetTransparent` and, on the desktop,
+  `RunOptions.ScreenTransparent`. Transparency is a property of a surface, so
+  it is passed to `NewSurface` and the window's own `Transparent` option
+  decides it. Metal sets the layer's opacity from it as it always did, OpenGL
+  ignores it because the GLFW framebuffer hint decides it, and DirectX returns
+  an error rather than silently presenting an opaque window. `NewWindow` no
+  longer cross-checks a process-wide knob against a per-window one, and
+  `IsScreenTransparentAvailable`, which nothing called, is gone.
+  `RunOptions.ScreenTransparent` survives for the browser, which has one
+  canvas, like `RunOptions.InitUnfocused`.
 - The `frameDriver` interface, which had one implementation. `eventContext` is
   now named directly. Its outside-size parameters were never read, so
   `layoutSizes`, `updateWindow` and `forceUpdateFrameDuringPollEvents` return
@@ -160,11 +170,8 @@ WebGL feels.
   a two-window smoke test in `examples/nativehooks`.
 - Waking the loop from the macOS and Linux gamepad connection callbacks, instead
   of the one-second detection poll (`docs/window.md`).
-- `RunOptions.ScreenTransparent` and `graphicsdriver.SetTransparent` are a
-  process-wide knob for something every retained driver decides per surface, so
-  `NewWindow` has to reject a transparent window when they disagree. The deeper
-  fix is to pass transparency to surface creation and delete both. The same
-  shape applies to `RunOptions.InitUnfocused` versus `WindowOptions.Unfocused`.
+- DirectX's refusal of a transparent surface is returned but never seen here;
+  only Metal and OpenGL ran a transparent window.
 - The FPS-mode machinery in `internal/ui` can only hold `FPSModeVsyncOn` since
   the root-level setters went.
 - X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which

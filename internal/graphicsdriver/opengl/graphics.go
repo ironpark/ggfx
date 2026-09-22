@@ -105,10 +105,6 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	return nil
 }
 
-func (g *Graphics) SetTransparent(transparent bool) {
-	// Do nothing.
-}
-
 func (g *Graphics) checkSize(width, height int) {
 	if width < 1 {
 		panic(fmt.Sprintf("opengl: width (%d) must be equal or more than %d", width, 1))
@@ -160,7 +156,9 @@ type Surface struct {
 	graphics *Graphics
 }
 
-func (g *Graphics) NewSurface(target any) (graphicsdriver.Surface, error) {
+// NewSurface ignores transparent: on the desktop the GLFW framebuffer hint decides whether the
+// window composites, and in the browser the canvas does.
+func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
 	if g.surface != nil {
 		return nil, errors.New("opengl: only one surface is supported")
 	}

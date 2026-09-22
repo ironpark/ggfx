@@ -50,14 +50,14 @@ type Graphics interface {
 	Begin() error
 	// End ends a command batch with the given flush mode.
 	End(mode FlushMode) error
-	SetTransparent(transparent bool)
 	SetVertices(vertices []float32, indices []uint32) error
 	NewImage(width, height int) (Image, error)
 
 	// NewSurface creates a presentation target for a native window. target is what the platform's
 	// UI layer has: an NSWindow or HWND handle as uintptr, or an opengl.Presenter for OpenGL.
-	// NewSurface is called on the main thread.
-	NewSurface(target any) (Surface, error)
+	// transparent asks for a surface that composites with what is behind the window; a driver
+	// that cannot present one returns an error. NewSurface is called on the main thread.
+	NewSurface(target any, transparent bool) (Surface, error)
 	SetVsyncEnabled(enabled bool)
 	NeedsClearingScreen() bool
 	MaxImageSize() int

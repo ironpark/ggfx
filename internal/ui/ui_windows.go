@@ -42,8 +42,7 @@ func setApplePressAndHoldEnabled(enabled bool) {
 }
 
 type graphicsDriverCreatorImpl struct {
-	transparent bool
-	colorSpace  color.ColorSpace
+	colorSpace color.ColorSpace
 }
 
 func (g *graphicsDriverCreatorImpl) newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error) {
@@ -85,10 +84,7 @@ func (*graphicsDriverCreatorImpl) newOpenGL() (graphicsdriver.Graphics, error) {
 	return opengl.NewGraphics()
 }
 
-func (g *graphicsDriverCreatorImpl) newDirectX() (graphicsdriver.Graphics, error) {
-	if g.transparent {
-		return nil, errors.New("ui: DirectX is not available with a transparent window")
-	}
+func (*graphicsDriverCreatorImpl) newDirectX() (graphicsdriver.Graphics, error) {
 	return directx.NewGraphics()
 }
 

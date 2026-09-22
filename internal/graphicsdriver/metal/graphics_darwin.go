@@ -76,7 +76,6 @@ type Graphics struct {
 	shaders      map[graphicsdriver.ShaderID]*Shader
 	nextShaderID graphicsdriver.ShaderID
 
-	transparent  bool
 	maxImageSize int
 	tmpTextures  []mtl.Texture
 
@@ -141,7 +140,7 @@ type Surface struct {
 
 // NewSurface creates a layer for the NSWindow given as a uintptr. NewSurface must be called on the
 // main thread.
-func (g *Graphics) NewSurface(target any) (graphicsdriver.Surface, error) {
+func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
 	window, ok := target.(uintptr)
 	if !ok {
 		return nil, fmt.Errorf("metal: NewSurface needs an NSWindow as uintptr but got %T", target)
@@ -152,7 +151,7 @@ func (g *Graphics) NewSurface(target any) (graphicsdriver.Surface, error) {
 		s.view.release()
 		return nil, err
 	}
-	s.view.ml.SetOpaque(!g.transparent)
+	s.view.ml.SetOpaque(!transparent)
 	s.view.setDisplaySyncEnabled(g.vsync)
 	s.view.setWindow(window)
 	g.surfaces = append(g.surfaces, s)
@@ -449,13 +448,6 @@ func (g *Graphics) addImage(img *Image) {
 
 func (g *Graphics) removeImage(img *Image) {
 	delete(g.images, img.id)
-}
-
-func (g *Graphics) SetTransparent(transparent bool) {
-	g.transparent = transparent
-	for _, s := range g.surfaces {
-		s.view.ml.SetOpaque(!transparent)
-	}
 }
 
 func blendFactorToMetalBlendFactor(c graphicsdriver.BlendFactor) mtl.BlendFactor {

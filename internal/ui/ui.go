@@ -257,7 +257,9 @@ type RunOptions struct {
 	GraphicsLibrary GraphicsLibrary
 	// InitUnfocused is read by the browser at initialization. Desktop windows use
 	// WindowOptions.Unfocused instead.
-	InitUnfocused            bool
+	InitUnfocused bool
+	// ScreenTransparent is read by the browser at initialization. Desktop windows use
+	// WindowOptions.Transparent instead.
 	ScreenTransparent        bool
 	SkipTaskbar              bool
 	SingleThread             bool
@@ -279,16 +281,6 @@ func (u *UserInterface) startApp(app App, options *RunOptions) {
 	if options.Gamepads {
 		u.gamepads = &gamepadTracker{}
 	}
-}
-
-// checkWindowOptions reports why a window cannot be created with these options.
-func (u *UserInterface) checkWindowOptions(o *WindowOptions) error {
-	if o.Transparent && !u.runOptions.ScreenTransparent {
-		// Whether transparency is possible is decided once, when the graphics driver is
-		// created, which happens before any window exists.
-		return errors.New("ui: a transparent window needs RunOptions.ScreenTransparent")
-	}
-	return nil
 }
 
 // InitialWindowPosition returns the position to place a window of size (ww, wh) in a monitor of size (mw, mh).

@@ -54,9 +54,6 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 	if u.context != nil {
 		return nil, errors.New("ui: a browser page has one window")
 	}
-	if err := u.checkWindowOptions(o); err != nil {
-		return nil, err
-	}
 	w := &jsWindow{ui: u, handle: handle}
 	w.context = newEventContext(u.app, w)
 	w.context.setSurface(u.surface)
