@@ -18,38 +18,12 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/ironpark/ggfx/internal/clock"
 	ecolor "github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/ui"
 )
 
-// ActualFPS returns how many frames were presented in the last second, across every window.
-//
-// On some environments ActualFPS is unreliable because vsync does not work well there. The value
-// is for measurement and debugging; an application should not rely on it.
-//
-// ActualFPS is concurrent-safe.
-func ActualFPS() float64 {
-	return clock.ActualFPS()
-}
-
 // runEnded reports that [Run] returned, after which no image can be created.
 var runEnded atomic.Bool
-
-// SetScreenClearedEveryFrame enables or disables the clearing of the screen at the beginning of each frame.
-// The default value is true and the screen is cleared each frame by default.
-//
-// SetScreenClearedEveryFrame is concurrent-safe.
-func SetScreenClearedEveryFrame(cleared bool) {
-	ui.Get().SetScreenClearedEveryFrame(cleared)
-}
-
-// IsScreenClearedEveryFrame returns true if the screen is cleared at the beginning of each frame.
-//
-// IsScreenClearedEveryFrame is concurrent-safe.
-func IsScreenClearedEveryFrame() bool {
-	return ui.Get().IsScreenClearedEveryFrame()
-}
 
 // Termination is a special error which indicates termination without error.
 var Termination = ui.RegularTermination

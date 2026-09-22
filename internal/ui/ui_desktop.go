@@ -34,7 +34,6 @@ type uiBackend interface {
 	IsFocused() bool
 	IsFullscreen() bool
 	SetFullscreen(fullscreen bool)
-	applyFPSMode()
 	ScheduleFrame()
 	CursorMode() CursorMode
 	SetCursorMode(mode CursorMode)
@@ -118,7 +117,6 @@ type userInterfaceImpl struct {
 	// initialization, and reads the other fields whenever it needs them.
 	// The window settings are held by desktopWindow.
 	runnableOnUnfocused atomic.Bool
-	fpsMode             atomic.Int32
 	cursorShape         atomic.Int32
 
 	initMonitor    atomic.Pointer[Monitor]
@@ -236,24 +234,6 @@ func (u *UserInterface) SetFullscreen(fullscreen bool) {
 		return
 	}
 	b.SetFullscreen(fullscreen)
-}
-
-func (u *UserInterface) FPSMode() FPSModeType {
-	return FPSModeType(u.fpsMode.Load())
-}
-
-func (u *UserInterface) SetFPSMode(mode FPSModeType) {
-	if u.isTerminated() {
-		return
-	}
-	if FPSModeType(u.fpsMode.Swap(int32(mode))) == mode {
-		return
-	}
-	b := u.runningBackend()
-	if b == nil {
-		return
-	}
-	b.applyFPSMode()
 }
 
 func (u *UserInterface) CursorMode() CursorMode {

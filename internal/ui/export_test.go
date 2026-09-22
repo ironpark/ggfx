@@ -33,5 +33,5 @@ func VsyncIgnoredForTest(frameTimes []time.Duration, refreshInterval time.Durati
 
 func FlushCommandsAndWaitForTesting(driver graphicsdriver.Graphics, present bool) error {
 	var c framePacer
-	return c.flushCommandsAndWait(present, driver, false, 60)
+	return c.flushCommandsAndWait(present, driver, 60)
 }

@@ -446,7 +446,7 @@ func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, 
 	if err != nil {
 		return err
 	}
-	if err := ui.pacer.flushCommandsAndWait(needsSwapBuffers, graphicsDriver, ui.FPSMode() == FPSModeVsyncOn, ui.RefreshRate()); err != nil {
+	if err := ui.pacer.flushCommandsAndWait(needsSwapBuffers, graphicsDriver, ui.RefreshRate()); err != nil {
 		return err
 	}
 	return graphicscommand.FinishForcedFrame(graphicsDriver)

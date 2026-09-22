@@ -34,14 +34,6 @@ import (
 // the game loop should be terminated as soon as possible.
 var RegularTermination = errors.New("regular termination")
 
-type FPSModeType int
-
-const (
-	FPSModeVsyncOn FPSModeType = iota
-	FPSModeVsyncOffMaximum
-	FPSModeVsyncOffMinimum
-)
-
 type CursorMode int
 
 const (
@@ -76,11 +68,10 @@ const (
 type UserInterface struct {
 	err atomic.Pointer[error]
 
-	isScreenClearedEveryFrame atomic.Bool
-	graphicsLibrary           atomic.Int32
-	running                   atomic.Bool
-	terminated                atomic.Bool
-	tick                      atomic.Int64
+	graphicsLibrary atomic.Int32
+	running         atomic.Bool
+	terminated      atomic.Bool
+	tick            atomic.Int64
 
 	// preferredColorMode is the color mode the application prefers.
 	//
@@ -169,7 +160,6 @@ func newUserInterface() (*UserInterface, error) {
 	u := &UserInterface{
 		funcsInFrameCh: make(chan func()),
 	}
-	u.isScreenClearedEveryFrame.Store(true)
 	u.graphicsLibrary.Store(int32(GraphicsLibraryUnknown))
 
 	u.whiteImage = u.NewImage(3, 3, atlas.ImageTypeRegular)
@@ -315,14 +305,6 @@ func (u *UserInterface) setError(err error) {
 			break
 		}
 	}
-}
-
-func (u *UserInterface) IsScreenClearedEveryFrame() bool {
-	return u.isScreenClearedEveryFrame.Load()
-}
-
-func (u *UserInterface) SetScreenClearedEveryFrame(cleared bool) {
-	u.isScreenClearedEveryFrame.Store(cleared)
 }
 
 func (u *UserInterface) setGraphicsLibrary(library GraphicsLibrary) {

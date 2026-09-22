@@ -90,7 +90,6 @@ type userInterfaceImpl struct {
 	graphicsDriver graphicsdriver.Graphics
 
 	runnableOnUnfocused bool
-	fpsMode             FPSModeType
 	renderingScheduled  bool
 	cursorMode          CursorMode
 	cursorPrevMode      CursorMode
@@ -117,7 +116,6 @@ var (
 	screen                = js.Global().Get("screen")
 	canvas                js.Value
 	requestAnimationFrame = js.Global().Get("requestAnimationFrame")
-	setTimeout            = js.Global().Get("setTimeout")
 )
 
 var (
@@ -172,14 +170,6 @@ func (u *UserInterface) SetRunnableOnUnfocused(runnableOnUnfocused bool) {
 
 func (u *UserInterface) IsRunnableOnUnfocused() bool {
 	return u.runnableOnUnfocused
-}
-
-func (u *UserInterface) FPSMode() FPSModeType {
-	return u.fpsMode
-}
-
-func (u *UserInterface) SetFPSMode(mode FPSModeType) {
-	u.fpsMode = mode
 }
 
 func (u *UserInterface) ScheduleFrame() {
@@ -358,7 +348,7 @@ func (u *UserInterface) updateImpl(force bool) error {
 		if err != nil {
 			return err
 		}
-		if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.FPSMode() == FPSModeVsyncOn, u.RefreshRate()); err != nil {
+		if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.RefreshRate()); err != nil {
 			return err
 		}
 	}
@@ -408,14 +398,7 @@ func (u *UserInterface) loopFrames() error {
 				return
 			}
 		}
-		switch u.fpsMode {
-		case FPSModeVsyncOn:
-			requestAnimationFrame.Invoke(cf)
-		case FPSModeVsyncOffMaximum:
-			setTimeout.Invoke(cf, 0)
-		case FPSModeVsyncOffMinimum:
-			requestAnimationFrame.Invoke(cf)
-		}
+		requestAnimationFrame.Invoke(cf)
 	}
 
 	// TODO: Should cf be released after the game ends?
@@ -787,20 +770,6 @@ func (u *UserInterface) appendDroppedFiles(data js.Value) {
 			u.scheduleRendering()
 		}
 	}
-}
-
-func (u *UserInterface) forceUpdateOnMinimumFPSMode() {
-	if u.fpsMode != FPSModeVsyncOffMinimum {
-		return
-	}
-
-	// updateImpl can block. Use goroutine.
-	// See https://pkg.go.dev/syscall/js#FuncOf.
-	go func() {
-		if err := u.updateImpl(true); err != nil {
-			u.setError(err)
-		}
-	}()
 }
 
 func (u *UserInterface) shouldFocusFirst(options *RunOptions) bool {

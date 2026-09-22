@@ -88,7 +88,6 @@ func eventToKeys(e js.Value) (key0, key1 Key) {
 
 func (u *UserInterface) updateInputFromEvent(e js.Value) error {
 	u.pushInputEvent(e)
-	u.forceUpdateOnMinimumFPSMode()
 	return nil
 }
 

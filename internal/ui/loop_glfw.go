@@ -474,14 +474,6 @@ func (u *glfwBackend) updateWindow() (screenWidth, screenHeight int, err error) 
 		}
 	}
 
-	// Initialize vsync after SetMonitor is called.
-	// Calling this inside setWindowSize didn't work (#1363).
-	if !u.fpsModeInited {
-		if err := u.setFPSMode(FPSModeType(u.fpsMode.Load())); err != nil {
-			return 0, 0, err
-		}
-	}
-
 	return u.layoutSizes()
 }
 
@@ -698,7 +690,7 @@ func (u *UserInterface) updateFrame() error {
 		}
 		needsSwapBuffers = needsSwapBuffers || n
 	}
-	if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.FPSMode() == FPSModeVsyncOn, u.RefreshRate()); err != nil {
+	if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.RefreshRate()); err != nil {
 		return err
 	}
 

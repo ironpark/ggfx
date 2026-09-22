@@ -103,6 +103,21 @@ monitor and window APIs. Everything outside that was dropped.
   `IsScreenTransparentAvailable`, which nothing called, is gone.
   `RunOptions.ScreenTransparent` survives for the browser, which has one
   canvas, like `RunOptions.InitUnfocused`.
+- The fixed-TPS clock and the FPS modes. `internal/clock`, which decided how
+  many `Update` calls a frame owed the real time, lost its only caller with
+  `Update`: `UpdateFrame`, `SinkTick` and `SetTPS` had none left, so
+  `ActualFPS` had been returning 0 and `TPS` a constant 60. The 60 survives as
+  `monitorCacheTicks`, how long the current monitor stays cached. `FPSModeType`
+  could only ever hold `FPSModeVsyncOn` once the root-level setters went, so it
+  goes with `SetFPSMode`, `applyFPSMode`, `setFPSMode` and the browser's
+  `forceUpdateOnMinimumFPSMode`; the frame pacer no longer asks whether vsync
+  is on and the command queue applies it once rather than tracking four states.
+  `setFPSMode` also set GLFW's sticky keys and mouse buttons, which only a
+  polling reader would have seen. `SetScreenClearedEveryFrame` and
+  `IsScreenClearedEveryFrame` stored a flag no renderer read: the screen is
+  cleared when `graphicsdriver.NeedsClearingScreen` says so.
+  `Tick` stays: it counts loop iterations, and the image GC, `text/v2`'s glyph
+  cache and `exp/textinput`'s state queue expire against it.
 - The `frameDriver` interface, which had one implementation. `eventContext` is
   now named directly. Its outside-size parameters were never read, so
   `layoutSizes`, `updateWindow` and `forceUpdateFrameDuringPollEvents` return
@@ -184,8 +199,6 @@ WebGL feels.
   of the one-second detection poll (`docs/window.md`).
 - DirectX's refusal of a transparent surface is returned but never seen here;
   only Metal and OpenGL ran a transparent window.
-- The FPS-mode machinery in `internal/ui` can only hold `FPSModeVsyncOn` since
-  the root-level setters went.
 - A rendering target with no window at all. OpenGL makes its context current
   through the window every frame, so a driver without one is not reachable;
   `WindowOptions.Hidden` is the way to render without showing anything.

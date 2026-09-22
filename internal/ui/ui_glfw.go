@@ -27,10 +27,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ironpark/ggfx/internal/clock"
 	"github.com/ironpark/ggfx/internal/file"
 	"github.com/ironpark/ggfx/internal/glfw"
-	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/windowsystem"
 )
@@ -119,8 +117,6 @@ type glfwBackend struct {
 	// An explicit request does, and it also updates windowToRestore.
 	windowXInDIP int
 	windowYInDIP int
-
-	fpsModeInited bool
 
 	backendWindow glfwWindow
 
@@ -447,18 +443,6 @@ func (u *glfwBackend) IsFocused() bool {
 		focused = a == glfw.True
 	})
 	return focused
-}
-
-func (u *glfwBackend) applyFPSMode() {
-	u.mainThread.Call(func() {
-		if u.isTerminated() {
-			return
-		}
-		if err := u.setFPSMode(FPSModeType(u.fpsMode.Load())); err != nil {
-			u.setError(err)
-			return
-		}
-	})
 }
 
 func (u *glfwBackend) ScheduleFrame() {
@@ -941,28 +925,6 @@ func (u *glfwBackend) layoutSizes() (screenWidth, screenHeight int, err error) {
 	return fw, fh, nil
 }
 
-// setFPSMode must be called from the main thread.
-func (u *glfwBackend) setFPSMode(fpsMode FPSModeType) error {
-	// The unchanged-mode case is filtered out by UserInterface.SetFPSMode, which updates u.fpsMode.
-	// Do not compare fpsMode with u.fpsMode here.
-	u.fpsModeInited = true
-
-	sticky := glfw.True
-	if fpsMode == FPSModeVsyncOffMinimum {
-		sticky = glfw.False
-	}
-	if err := u.window.SetInputMode(glfw.StickyMouseButtonsMode, sticky); err != nil {
-		return err
-	}
-	if err := u.window.SetInputMode(glfw.StickyKeysMode, sticky); err != nil {
-		return err
-	}
-
-	graphicscommand.SetVsyncEnabled(fpsMode == FPSModeVsyncOn)
-
-	return nil
-}
-
 // shouldPresentFrame reports whether a frame should be presented to the window.
 func shouldPresentFrame(windowOnScreen, bufferOnceSwapped, initWindowVisible bool) bool {
 	if windowOnScreen {
@@ -1344,11 +1306,16 @@ func (u *glfwBackend) minimumWindowWidth() (int, error) {
 	return 1, nil
 }
 
+// monitorCacheTicks is how many loop iterations the current monitor stays cached for. Asking the
+// window system which monitor a window is on is not cheap, and a window does not change monitors
+// often.
+const monitorCacheTicks = 60
+
 // currentMonitor returns the current active monitor.
 //
 // currentMonitor must be called on the main thread.
 func (u *glfwBackend) currentMonitor() (*Monitor, error) {
-	if u.cachedCurrentMonitor != nil && u.cachedCurrentMonitorTime > u.Tick()-int64(clock.TPS()) && theMonitors.contains(u.cachedCurrentMonitor) {
+	if u.cachedCurrentMonitor != nil && u.cachedCurrentMonitorTime > u.Tick()-monitorCacheTicks && theMonitors.contains(u.cachedCurrentMonitor) {
 		return u.cachedCurrentMonitor, nil
 	}
 
