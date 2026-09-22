@@ -21,33 +21,43 @@ import (
 	"github.com/ironpark/ggfx"
 )
 
-type game struct {
-	m    *testing.M
-	code int
+// window is the window MainWithRunLoop opens, so that a test can ask for its
+// size instead of the removed root-level ScreenSize.
+var window *ggfx.Window
+
+// Window returns the window the test run loop opened, or nil outside it.
+func Window() *ggfx.Window {
+	return window
 }
 
-func (g *game) Update() error {
-	g.code = g.m.Run()
-	return ggfx.Termination
-}
-
-func (*game) Draw(*ggfx.Image) {
-}
-
-func (*game) Layout(int, int) (int, int) {
-	return 320, 240
-}
-
+// MainWithRunLoop runs m inside a ggfx event loop, which is what makes
+// (*Image).At and the rest of the graphics API available to a test. The tests
+// run in the window's first frame, between the atlas's begin and end of frame,
+// which is where the legacy Game path called Update.
 func MainWithRunLoop(m *testing.M) {
-	// Run an Ebiten process so that (*Image).At is available.
-	g := &game{
-		m:    m,
-		code: 1,
-	}
-	if err := ggfx.RunGame(g); err != nil {
+	code := 1
+	err := ggfx.Run(ggfx.HandlerFunc(func(ev ggfx.Event) error {
+		switch ev.(type) {
+		case ggfx.StartEvent:
+			w, err := ggfx.NewWindow(&ggfx.WindowOptions{
+				Title:  "ggfx tests",
+				Width:  320,
+				Height: 240,
+			})
+			if err != nil {
+				return err
+			}
+			window = w
+		case ggfx.FrameEvent:
+			code = m.Run()
+			return ggfx.Termination
+		}
+		return nil
+	}), nil)
+	if err != nil {
 		panic(err)
 	}
-	if g.code != 0 {
-		os.Exit(g.code)
+	if code != 0 {
+		os.Exit(code)
 	}
 }

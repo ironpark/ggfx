@@ -18,11 +18,12 @@ import (
 	"testing"
 
 	"github.com/ironpark/ggfx"
+	etesting "github.com/ironpark/ggfx/internal/testing"
 )
 
-func TestScreenSize(t *testing.T) {
-	// The game running these tests returns (320, 240) at Layout.
-	w, h := ggfx.ScreenSize()
+func TestWindowSize(t *testing.T) {
+	// The run loop running these tests opens a 320x240 window.
+	w, h := etesting.Window().Size()
 	if got, want := w, 320; got != want {
 		t.Errorf("w: got: %d, want: %d", got, want)
 	}

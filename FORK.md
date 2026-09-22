@@ -86,8 +86,10 @@ windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 `Run`, `NewWindow`, `Window` and the event types in `app.go` are the API a
 GUI uses: any number of windows, frames on request, input as events. The
 design and the per-driver status are in [docs/window.md](docs/window.md).
-`Game`/`RunGame` still work and drive the test suite; internally a game is
-one window that asks for a frame every iteration.
+The test suite runs on `Run` too: `internal/testing.MainWithRunLoop` opens one
+window and runs the tests in its first frame. `Game`/`RunGame` still work, and
+internally a game is one window that asks for a frame every iteration, but
+nothing in ggfx or ggui calls it any more.
 
 ## Draw call merging
 
