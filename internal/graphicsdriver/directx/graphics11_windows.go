@@ -129,6 +129,7 @@ type graphics11 struct {
 	nextImageID graphicsdriver.ImageID
 
 	shaders      map[graphicsdriver.ShaderID]*shader11
+	tmpUniforms  []uint32
 	nextShaderID graphicsdriver.ShaderID
 
 	vertexBuffer            *_ID3D11Buffer
@@ -542,7 +543,8 @@ func (g *graphics11) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphic
 
 	// Set the shader parameters.
 	shader := g.shaders[shaderID]
-	if err := shader.use(uniforms, srcs); err != nil {
+	g.tmpUniforms = flipProjectionY(g.tmpUniforms, uniforms)
+	if err := shader.use(g.tmpUniforms, srcs); err != nil {
 		return err
 	}
 

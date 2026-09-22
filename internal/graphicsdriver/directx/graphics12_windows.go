@@ -41,6 +41,8 @@ func (r *resourceWithSize) release() {
 }
 
 type graphics12 struct {
+	tmpUniforms []uint32
+
 	debug              *_ID3D12Debug
 	dredEnabled        bool
 	device             *_ID3D12Device
@@ -1336,7 +1338,8 @@ func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.
 		Format:         _DXGI_FORMAT_R32_UINT,
 	})
 
-	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, g.frameIndex, dst.screen, srcImages, shader, dstRegions, uniforms, blend, indexOffset); err != nil {
+	g.tmpUniforms = flipProjectionY(g.tmpUniforms, uniforms)
+	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, g.frameIndex, dst.screen, srcImages, shader, dstRegions, g.tmpUniforms, blend, indexOffset); err != nil {
 		return err
 	}
 

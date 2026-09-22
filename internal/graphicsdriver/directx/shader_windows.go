@@ -123,3 +123,20 @@ func compileShader(program *shader.Program) (_, _ *_ID3DBlob, ferr error) {
 func userConstantBufferSize(program *shader.Program) uint32 {
 	return alignUp16(uint32(program.UniformDwordCount) * 4)
 }
+
+// flipProjectionY returns a copy of uniforms whose projection matrix has its Y axis inverted, using
+// buf as storage. In DirectX, the NDC's Y direction (upward) and the framebuffer's Y direction
+// (downward) don't match, so the Y direction must be inverted for every draw, as the Metal driver
+// does. This used to happen in the HLSL uniform adjuster before the naga port; keep it here so a
+// driver change cannot drop it again. uniforms itself is not modified: it lives in the command
+// queue's buffer.
+func flipProjectionY(buf []uint32, uniforms []uint32) []uint32 {
+	buf = append(buf[:0], uniforms...)
+	const p = graphics.ProjectionMatrixUniformDwordIndex
+	// Invert the sign bits as float32 values.
+	buf[p+1] ^= 1 << 31
+	buf[p+5] ^= 1 << 31
+	buf[p+9] ^= 1 << 31
+	buf[p+13] ^= 1 << 31
+	return buf
+}
