@@ -97,14 +97,6 @@
 // The option "dred" is valid only for DirectX 12 and is independent of "debug".
 // On a device removal, it reports the GPU's last command and the page-fault address via log/slog.
 //
-// `EBITENGINE_VM_ENDPOINT` environment variable specifies the endpoint URL of a virtualization host,
-// like unix:///path/to/socket or tcp://host:port. If this is set, the game runs as a virtualization
-// guest of that host instead of opening a window. This is valid only when the build tag 'ebitenginevmguest'
-// is specified. This works only on desktops. See also RunGameOptions.VMGuestEndpoint.
-//
-// The endpoint addresses one guest session. The variable is removed from the game's environment at
-// startup, so that a process the game starts does not inherit it.
-//
 // # Build tags
 //
 // `ebitenginedebug` outputs a log of graphics commands. This is useful to know what happens in Ebitengine. In general, the
@@ -118,11 +110,6 @@
 // They must be called from the main thread or the same goroutine as the given game's callback functions like Update.
 // `ebitenginesinglethread` works only with desktops and consoles.
 // `ebitenginesinglethread` was deprecated as of v2.7. Use RunGameOptions.SingleThread instead.
-//
-// `ebitenginevmguest` allows the environment variable `EBITENGINE_VM_ENDPOINT` to run the game as a
-// virtualization guest. This works only on desktops.
-//
-// `microsoftgdk` is for Microsoft GDK (e.g. Xbox).
 //
 // `nintendosdk` is for NintendoSDK (e.g. Nintendo Switch).
 //

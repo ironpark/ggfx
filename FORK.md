@@ -40,7 +40,9 @@ monitor and window APIs. Everything outside that was dropped.
   `internal/testresources`.
 
 Retained platforms: macOS (Metal, OpenGL), Windows (DirectX, OpenGL),
-Linux and BSD (OpenGL through glfw). Linux still needs cgo for glfw.
+Linux and the BSDs (OpenGL through glfw; cgo required). Only macOS was
+built and tested in the fork pass; Windows was cross-compiled; Linux and BSD
+were not built.
 
 ## Upstream policy
 
