@@ -300,8 +300,12 @@ type WindowOptions struct {
 	Floating    bool
 	Hidden      bool
 	Maximized   bool
-	Transparent bool
 	Unfocused   bool
+
+	// Transparent makes the window's framebuffer transparent. It needs
+	// [RunOptions.ScreenTransparent], which creates the driver that can present one; NewWindow
+	// fails without it.
+	Transparent bool
 
 	// The size limits in device-independent pixels. 0 means no limit.
 	MinWidth  int

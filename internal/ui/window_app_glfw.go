@@ -42,6 +42,7 @@ func (u *UserInterface) RunApp(app App, options *RunOptions) error {
 		return errors.New("ui: no window system is available")
 	}
 	u.app = app
+	u.runOptions = options
 	return u.runLoop(options, func() error {
 		return u.initGraphicsOnMainThread(options)
 	}, func() error {
@@ -67,6 +68,10 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 	}
 	if u.isTerminated() {
 		return nil, errors.New("ui: NewWindow cannot be called after the app stopped")
+	}
+	if o.Transparent && !u.runOptions.ScreenTransparent {
+		// The graphics driver is created transparent or not once, before any window exists.
+		return nil, errors.New("ui: a transparent window needs RunOptions.ScreenTransparent")
 	}
 
 	settings := &desktopWindow{ui: u}
@@ -138,10 +143,7 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 				settings.setInitWindowPositionInDIP(x, y)
 			}
 		}
-		if err = b.createWindowOnMainThread(&RunOptions{
-			ScreenTransparent: o.Transparent,
-			InitUnfocused:     o.Unfocused,
-		}); err != nil {
+		if err = b.createWindowOnMainThread(o); err != nil {
 			return
 		}
 		u.windows = append(u.windows, b)

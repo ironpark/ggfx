@@ -117,6 +117,7 @@ type WindowOptions struct {
     MinWidth, MinHeight, MaxWidth, MaxHeight int
 }
 
+// NewWindow fails when Transparent is set without RunOptions.ScreenTransparent.
 func NewWindow(o *WindowOptions) (*Window, error) // only while Run runs
 
 type Window struct{ ... }

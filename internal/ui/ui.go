@@ -104,8 +104,12 @@ type UserInterface struct {
 	// funcsInFrameCh carries functions that must run inside a frame, like reading pixels.
 	funcsInFrameCh chan func()
 
-	// app is the App driven by RunApp, and nil for a game.
+	// app is the App driven by RunApp.
 	app App
+
+	// runOptions are the process-wide options RunApp was given. Window creation reads the
+	// parts of them that are not per window, like the X11 names.
+	runOptions *RunOptions
 
 	// events are the events queued for the app, in order.
 	eventsMu sync.Mutex
@@ -252,7 +256,9 @@ func (u *UserInterface) dumpImages(dir string) (string, error) {
 }
 
 type RunOptions struct {
-	GraphicsLibrary          GraphicsLibrary
+	GraphicsLibrary GraphicsLibrary
+	// InitUnfocused is read by the browser at initialization. Desktop windows use
+	// WindowOptions.Unfocused instead.
 	InitUnfocused            bool
 	ScreenTransparent        bool
 	SkipTaskbar              bool
@@ -262,9 +268,6 @@ type RunOptions struct {
 	ApplePressAndHoldEnabled bool
 	X11ClassName             string
 	X11InstanceName          string
-	InitWindowWidthInDIP     int
-	InitWindowHeightInDIP    int
-	WindowPositionSet        bool
 }
 
 // InitialWindowPosition returns the position to place a window of size (ww, wh) in a monitor of size (mw, mh).

@@ -133,7 +133,8 @@ func (u *UserInterface) initGraphicsOnMainThread(options *RunOptions) error {
 // createWindowOnMainThread sets the window hints from the window's settings and options, creates
 // the GLFW window, its surface and its callbacks. It must be called on the main thread after
 // initGraphicsOnMainThread.
-func (u *glfwBackend) createWindowOnMainThread(options *RunOptions) error {
+func (u *glfwBackend) createWindowOnMainThread(o *WindowOptions) error {
+	run := u.runOptions
 	if err := glfw.WindowHint(glfw.AutoIconify, glfw.False); err != nil {
 		return err
 	}
@@ -143,11 +144,11 @@ func (u *glfwBackend) createWindowOnMainThread(options *RunOptions) error {
 		return err
 	}
 
-	if err := glfw.WindowHintString(glfw.X11ClassName, options.X11ClassName); err != nil {
+	if err := glfw.WindowHintString(glfw.X11ClassName, run.X11ClassName); err != nil {
 		return err
 	}
 
-	if err := glfw.WindowHintString(glfw.X11InstanceName, options.X11InstanceName); err != nil {
+	if err := glfw.WindowHintString(glfw.X11InstanceName, run.X11InstanceName); err != nil {
 		return err
 	}
 
@@ -163,7 +164,7 @@ func (u *glfwBackend) createWindowOnMainThread(options *RunOptions) error {
 	}
 
 	glfwTransparent := glfw.False
-	if options.ScreenTransparent {
+	if o.Transparent {
 		glfwTransparent = glfw.True
 	}
 	if err := glfw.WindowHint(glfw.TransparentFramebuffer, glfwTransparent); err != nil {
@@ -210,9 +211,9 @@ func (u *glfwBackend) createWindowOnMainThread(options *RunOptions) error {
 		return err
 	}
 
-	u.initUnfocused = options.InitUnfocused
+	u.initUnfocused = o.Unfocused
 	focused := glfw.True
-	if options.InitUnfocused {
+	if o.Unfocused {
 		focused = glfw.False
 	}
 	if err := glfw.WindowHint(glfw.FocusOnShow, focused); err != nil {
@@ -250,7 +251,7 @@ func (u *glfwBackend) createWindowOnMainThread(options *RunOptions) error {
 		return err
 	}
 
-	if options.SkipTaskbar {
+	if run.SkipTaskbar {
 		// Ignore the error.
 		_ = u.skipTaskbar()
 	}

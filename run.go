@@ -63,19 +63,25 @@ type RunOptions struct {
 	// The default (zero) value is GraphicsLibraryAuto, which lets Ebitengine choose the graphics library.
 	GraphicsLibrary GraphicsLibrary
 
-	// InitUnfocused indicates whether the window is unfocused or not on launching.
-	// InitUnfocused is valid on desktops and browsers.
+	// InitUnfocused starts the page without taking focus. On desktops the equivalent is
+	// [WindowOptions.Unfocused], which is per window; this applies to the browser, where the
+	// decision is made before the canvas is bound.
 	//
-	// The default (zero) value is false, which means that the window is focused.
+	// The default (zero) value is false, which means that the page takes focus.
 	InitUnfocused bool
 
-	// ScreenTransparent indicates whether the window is transparent or not.
+	// ScreenTransparent creates a graphics driver that can present transparent windows. The
+	// driver is created once, before any window exists, so a window with
+	// [WindowOptions.Transparent] needs this, and NewWindow fails without it.
+	//
 	// ScreenTransparent is valid on desktops and browsers.
 	//
-	// The default (zero) value is false, which means that the window is not transparent.
+	// The default (zero) value is false: windows are opaque.
 	ScreenTransparent bool
 
-	// SkipTaskbar indicates whether an application icon is shown on a taskbar or not.
+	// SkipTaskbar indicates whether an application icon is shown on a taskbar or not. It
+	// applies to every window.
+	//
 	// SkipTaskbar is valid only on Windows.
 	//
 	// The default (zero) value is false, which means that an icon is shown on a taskbar.
