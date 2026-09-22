@@ -492,7 +492,18 @@ func registerGLFWClasses() error {
 
 					// Interpret key events for text input.
 					eventArray := objc.ID(class_NSArray).Send(sel_arrayWithObject, event)
-					self.Send(sel_interpretKeyEvents, eventArray)
+					if !window.native.textConfigured || window.native.textEnabled {
+						self.Send(sel_interpretKeyEvents, eventArray)
+					} else {
+						// Disabling composition does not disable committed characters.
+						// A field can gain focus in the same event batch as its first key.
+						characters := event.Send(objc.RegisterName("characters"))
+						for _, r := range (cocoa.NSString{ID: characters}).String() {
+							if r < 0xf700 || r > 0xf7ff {
+								window.inputChar(r, mods, mods&(ModSuper|ModControl) == 0)
+							}
+						}
+					}
 				},
 			},
 			{
@@ -742,7 +753,7 @@ func registerGLFWClasses() error {
 					if window != nil && window.platform.markedText != 0 {
 						length := objc.Send[uintptr](window.platform.markedText, sel_length)
 						if length > 0 {
-							return nsRange{Location: 0, Length: length - 1}
+							return nsRange{Location: uintptr(utf16Length(window.native.before)), Length: length}
 						}
 					}
 					return nsRange{Location: uintptr(math.MaxInt), Length: 0} // NSNotFound
@@ -750,13 +761,16 @@ func registerGLFWClasses() error {
 			},
 			{
 				Cmd: sel_selectedRange,
-				Fn: func(_ objc.ID, _ objc.SEL) nsRange {
+				Fn: func(self objc.ID, _ objc.SEL) nsRange {
+					if w := getGoWindow(self); w != nil && w.native.textEnabled {
+						return nsRange{Location: uintptr(utf16Length(w.native.before) + w.native.selectionStart), Length: uintptr(w.native.selectionEnd - w.native.selectionStart)}
+					}
 					return nsRange{Location: uintptr(math.MaxInt), Length: 0} // NSNotFound
 				},
 			},
 			{
 				Cmd: sel_setMarkedText_selectedRange_replacementRange,
-				Fn: func(self objc.ID, _ objc.SEL, str objc.ID, _ nsRange, _ nsRange) {
+				Fn: func(self objc.ID, _ objc.SEL, str objc.ID, selected nsRange, _ nsRange) {
 					window := getGoWindow(self)
 					if window == nil {
 						return
@@ -769,6 +783,9 @@ func registerGLFWClasses() error {
 					} else {
 						window.platform.markedText = objc.ID(class_NSMutableAttributedString).Send(sel_alloc).Send(sel_initWithString, str)
 					}
+					text := (cocoa.NSString{ID: window.platform.markedText.Send(sel_string)}).String()
+					window.inputComposition(text, utf16ByteOffset(text, int(selected.Location)), utf16ByteOffset(text, int(selected.Location+selected.Length)), false)
+					window.native.selectionStart, window.native.selectionEnd = int(selected.Location), int(selected.Location+selected.Length)
 				},
 			},
 			{
@@ -783,6 +800,9 @@ func registerGLFWClasses() error {
 						emptyStr := cocoa.NSString_alloc().InitWithUTF8String("")
 						ms.Send(sel_setString, emptyStr.ID)
 						emptyStr.ID.Send(sel_release)
+					}
+					if window.native.composing {
+						window.inputComposition("", 0, 0, true)
 					}
 				},
 			},
@@ -801,7 +821,7 @@ func registerGLFWClasses() error {
 			},
 			{
 				Cmd: sel_insertText_replacementRange,
-				Fn: func(self objc.ID, _ objc.SEL, text objc.ID, _ nsRange) {
+				Fn: func(self objc.ID, _ objc.SEL, text objc.ID, replacement nsRange) {
 					window := getGoWindow(self)
 					if window == nil {
 						return
@@ -820,6 +840,11 @@ func registerGLFWClasses() error {
 					}
 					str := cocoa.NSString{ID: characters}
 					s := str.String()
+					if window.native.textEnabled && window.native.text != nil {
+						window.insertNativeText(s, replacement)
+						return
+					}
+					self.Send(sel_unmarkText)
 					for _, ch := range s {
 						if ch >= 0xf700 && ch <= 0xf7ff {
 							continue
@@ -841,11 +866,7 @@ func registerGLFWClasses() error {
 					if window == nil {
 						return cocoa.NSRect{}
 					}
-					frame := objc.Send[cocoa.NSRect](window.platform.view, sel_frame)
-					return cocoa.NSRect{
-						Origin: frame.Origin,
-						Size:   cocoa.CGSize{Width: 0, Height: 0},
-					}
+					return window.textInputRect()
 				},
 			},
 			{
@@ -868,10 +889,13 @@ func registerGLFWClasses() error {
 			// Drag and drop.
 			{
 				Cmd: objc.RegisterName("draggingEntered:"),
-				Fn: func(_ objc.ID, _ objc.SEL, _ objc.ID) uintptr {
-					return NSDragOperationGeneric
+				Fn: func(self objc.ID, _ objc.SEL, sender objc.ID) uintptr {
+					return cocoaDrag(self, sender, DragEntered)
 				},
 			},
+			{Cmd: objc.RegisterName("draggingUpdated:"), Fn: func(self objc.ID, _ objc.SEL, sender objc.ID) uintptr { return cocoaDrag(self, sender, DragMoved) }},
+			{Cmd: objc.RegisterName("draggingExited:"), Fn: func(self objc.ID, _ objc.SEL, sender objc.ID) { cocoaDrag(self, sender, DragExited) }},
+			{Cmd: objc.RegisterName("draggingEnded:"), Fn: func(self objc.ID, _ objc.SEL, sender objc.ID) { cocoaDrag(self, sender, DragEnded) }},
 			{
 				Cmd: objc.RegisterName("performDragOperation:"),
 				Fn: func(self objc.ID, _ objc.SEL, sender objc.ID) bool {
@@ -1196,6 +1220,12 @@ func (w *Window) platformCreateWindow(wndconfig *wndconfig, ctxconfig *ctxconfig
 func (w *Window) platformDestroyWindow() error {
 	pool := cocoa.NSAutoreleasePool_new()
 	defer pool.Release()
+	if w.native.accessibilityView != 0 {
+		delete(theGoWindows, objc.ID(w.native.accessibilityView))
+		w.native.accessibilityView = 0
+	}
+	w.native.accessibilityChildren, w.native.accessibilityHitTest = nil, nil
+	w.native.drag, w.native.composition, w.native.getObject = nil, nil, nil
 
 	if _glfw.platformWindow.disabledCursorWindow == w {
 		_glfw.platformWindow.disabledCursorWindow = nil

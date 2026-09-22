@@ -822,7 +822,7 @@ func (u *glfwBackend) registerDropCallback() error {
 	if _, err := u.window.SetDropCallback(u.dropCallback); err != nil {
 		return err
 	}
-	return nil
+	return u.registerNativeCallbacks()
 }
 
 // waitForFramebufferSizeCallback waits for GLFW's FramebufferSize callback.

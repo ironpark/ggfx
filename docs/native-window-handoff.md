@@ -5,6 +5,50 @@ the native window so that ggui stops reaching around it. It records what is
 true today, what the goal is, what to build, and how to check it. Read
 `docs/window.md` and `FORK.md` first; this document assumes them.
 
+## Implementation status (2026-09-22)
+
+The implementation below is now in ggfx and the adjacent ggui checkout:
+
+- Dialogs use the initiating App's ggfx window handle; the Cocoa/Win32 window
+  enumeration helpers are gone.
+- DragEvent is wired through Cocoa and Windows IDropTarget. ggui consumes these
+  events, with no class patching or drag-position polling.
+- Accessibility uses ggfx's owned macOS container and Windows WM_GETOBJECT hook.
+  ggui's element/provider objects resolve their own bridge, not a process-global
+  current bridge; the custom container and HWND subclass were removed.
+- CompositionEvent, caret/context setters and committed-text replacement ranges
+  feed ggui's per-window session queues on macOS and Windows. The old ggui IME view
+  and Tick dependency are gone. X11/browser keep their exp/textinput backends.
+- KeyEvent carries modifier state at the event. This also fixes native shortcuts
+  when a modifier's separate key event is absent or its release precedes a frame.
+
+The final API is documented in `docs/window.md`. Two additions to the suggested
+shape were necessary: SetAccessibilityHandlers supplies a lazy platform tree
+without modifying the owned view class, and SetTextInputContext plus TextEvent
+replacement offsets preserves macOS accent-menu edits to surrounding text.
+
+Validation performed:
+
+- ggfx's full Metal and OpenGL test suites; Windows amd64 and js/wasm builds.
+- A cgo-disabled macOS build and cgo-disabled Windows builds.
+- The two-window, 30-frame close example.
+- `examples/nativehooks -smoke` with two Metal windows and one OpenGL window:
+  real Cocoa method calls check composition/commit ordering, UTF-16 ranges,
+  replacement offsets, caret rectangle size, drag phases/coordinates and the
+  owned accessibility container. This is deterministic injection, not a human
+  typing with a system IME.
+- ggui's full test suite and Windows/wasm builds through go.work; targeted
+  textinput/a11y race tests.
+- Gallery and Settings launched and rendered. Settings accepted keyboard input,
+  Cmd+A and Korean clipboard text; its accessibility tree exposed the controls
+  and accepted a Korean text-field value through the accessibility API. An
+  accessibility-enabled idle Settings process reported 0.0% CPU.
+
+Still requiring platform/manual validation: real Korean/Japanese IME candidate
+interaction, a Finder drag in and out without dropping, VoiceOver speech,
+sqlite Cmd+O sheet ownership, and Windows OLE/IMM/UIA runtime behavior. Windows
+was cross-built only. The original brief below remains as design history.
+
 ## Where things stand
 
 ggfx (this repo) is an ebiten fork. The window layer is `internal/glfw`,

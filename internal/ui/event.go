@@ -56,6 +56,12 @@ type AppWindow interface {
 
 	// NativeHandle is the platform's window object: an NSWindow, an HWND or an X11 window.
 	NativeHandle() uintptr
+	SetTextInputEnabled(bool)
+	SetTextInputContext(before, after string)
+	SetTextInputRect(x, y, width, height float64)
+	AccessibilityView() uintptr
+	SetAccessibilityHandlers(children func() uintptr, hitTest func(x, y float64) uintptr)
+	SetGetObjectHandler(func(wparam, lparam uintptr) (uintptr, bool))
 
 	// Handle is a value the app attaches to the window, and gets back from the window in events.
 	Handle() any
@@ -136,17 +142,39 @@ func (c CloseEvent) KeepOpen() {
 // KeyEvent reports a key press or release. Repeat is set for the presses the OS generates while
 // the key is held.
 type KeyEvent struct {
-	Window  AppWindow
-	Key     Key
-	Pressed bool
-	Repeat  bool
+	Window    AppWindow
+	Key       Key
+	Pressed   bool
+	Repeat    bool
+	Modifiers KeyModifiers
 }
+
+type KeyModifiers struct{ Shift, Control, Alt, Meta bool }
 
 // TextEvent carries the characters the user typed.
 type TextEvent struct {
-	Window AppWindow
-	Text   string
+	Window                           AppWindow
+	Text                             string
+	ReplacementStart, ReplacementEnd int
+	HasReplacement                   bool
 }
+
+type CompositionEvent struct {
+	Window     AppWindow
+	Text       string
+	Start, End int
+	Done       bool
+}
+
+type DragEvent struct {
+	Window AppWindow
+	Phase  int
+	X, Y   float64
+	Files  fs.FS
+}
+
+func (CompositionEvent) isEvent() {}
+func (DragEvent) isEvent()        {}
 
 // MouseMoveEvent reports the cursor position in device-independent pixels relative to the client
 // area.

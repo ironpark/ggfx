@@ -141,6 +141,12 @@ func (w *Window) Monitor() *MonitorType
 func (w *Window) CursorShape(); SetCursorShape(CursorShapeType)
 func (w *Window) CursorMode(); SetCursorMode(CursorModeType)
 func (w *Window) NativeHandle() uintptr  // NSWindow* / HWND / X11 window
+func (w *Window) SetTextInputEnabled(bool)
+func (w *Window) SetTextInputRect(x, y, width, height float64) // caret in client DIP
+func (w *Window) SetTextInputContext(before, after string)
+func (w *Window) AccessibilityView() uintptr // macOS NSView owned by ggfx; 0 elsewhere
+func (w *Window) SetAccessibilityHandlers(children func() uintptr, hitTest func(x, y float64) uintptr)
+func (w *Window) SetGetObjectHandler(func(wparam, lparam uintptr) (uintptr, bool))
 ```
 
 Events. Every event but `StartEvent` has a `Window *Window` field.
@@ -152,13 +158,15 @@ Events. Every event but `StartEvent` has a `Window *Window` field.
 | `FrameEvent` | `Screen *Image` (pixels), `Scale float64` | after `RequestFrame`, after a resize, when the window is first shown |
 | `FocusEvent` | `Focused bool` | |
 | `CloseEvent` | | the user asked to close; the window closes after the event unless `KeepOpen()` was called |
-| `KeyEvent` | `Key`, `Pressed`, `Repeat bool` | OS key repeat is delivered with `Repeat` set |
-| `TextEvent` | `Text string` | committed characters |
+| `KeyEvent` | `Key`, `Pressed`, `Repeat bool`, `Modifiers KeyModifiers` | OS key repeat; modifiers captured at the event, before later releases |
+| `TextEvent` | `Text string`, `HasReplacement`, `ReplacementStart, ReplacementEnd int` | committed text; optional UTF-8 byte replacement offsets relative to the supplied context's caret |
+| `CompositionEvent` | `Text string`, `Start, End int`, `Done bool` | macOS/Windows marked text; selection is UTF-8 bytes within Text; Done ends the composition with empty Text |
 | `MouseMoveEvent` | `X, Y float64` (DIP) | |
 | `MouseButtonEvent` | `Button`, `Pressed`, `X, Y` | |
 | `ScrollEvent` | `X, Y float64` | |
 | `TouchEvent` | `ID TouchID`, `Phase`, `X, Y` | browser only for now |
 | `DropEvent` | `Files fs.FS` | |
+| `DragEvent` | `Phase DragPhase`, `X, Y float64`, `Files fs.FS` | macOS/Windows file drag entered, moved, exited or ended; Files can be nil |
 
 Coordinates in input events are DIP relative to the window's client area;
 `FrameEvent.Screen` is in physical pixels and `Scale` converts between them.
@@ -167,15 +175,53 @@ Coordinates in input events are DIP relative to the window's client area;
 `Window.Close()` closes without a `CloseEvent`; the event is for the user's
 close button. `Run` returns when the last window closes.
 
+### Native hooks
+
+Native input and accessibility hooks are per window and main-thread marshalled.
+Text input is initially enabled. SetTextInputEnabled(false) cancels composition
+while leaving plain committed characters and keyboard focus available. Enable it
+when an editor gains focus, update the caret rectangle after layout or scrolling,
+and supply the surrounding text with SetTextInputContext. Do not disable it
+between commits: a Korean IME can commit a syllable and mark the next one in the
+same OS event. CompositionEvent and TextEvent retain their native order.
+
+macOS uses the existing content view as its NSTextInputClient. Its native
+selection and replacement ranges are converted from UTF-16 to UTF-8. Windows
+uses IMM composition/result messages and positions the native candidate panel.
+Committed result messages are handled once, without a duplicate WM_CHAR.
+
+macOS accessibility gets a lazily created, mouse-transparent NSView owned and
+destroyed by ggfx. SetAccessibilityHandlers supplies that view's children as an
+autoreleased NSArray and its hit test as an NSAccessibilityElement; hit-test
+coordinates are native screen points. The bridge owns its element objects, not
+the view. Windows forwards WM_GETOBJECT through SetGetObjectHandler; false
+falls through to the default procedure. These synchronous native callbacks
+must answer from a snapshot: do not call Window methods or wait for the event
+handler from them. Detach callbacks and retire bridge objects before closing
+their window. Unsupported platforms return zero for the view and ignore the
+accessibility/IME setters.
+
+File drags use Cocoa dragging callbacks and Windows IDropTarget, with one OLE
+registration per window, revoked during teardown. X11 and the browser retain
+DropEvent but do not emit pre-drop DragEvent. Native drag and composition
+callbacks request a frame when state changes; they do not add a polling loop.
+Dialogs use the initiating window's NativeHandle, obtained before entering
+RunOnMainThread.
+
+Run `go run ./examples/nativehooks` to exercise text and file drags in two Metal
+windows. `-smoke` injects Cocoa callbacks and checks window isolation, UTF-16
+selection conversion, Korean commit/next-mark ordering, replacement ranges,
+caret rectangle size, drag phases/coordinates and accessibility attachment.
+Use `-windows 1` with OpenGL or DirectX. The smoke injection is macOS-only.
+
 ## What the event path does not do
 
 - No ticks, no `TPS`, no `inpututil`. `KeyEvent.Repeat` replaces
   `KeyPressDuration`. Apps that need key state keep it from the events.
   `Tick()` still advances once per loop iteration, and the before-update
   hooks run then, so `exp/textinput` keeps working when polled every frame.
-- No IME events on the event path. `TextEvent` carries committed characters
-  from the platform's character callback; composition is polled through
-  `exp/textinput` as before.
+- No composition events on X11 or the browser yet. Their `exp/textinput`
+  backends remain available; macOS and Windows have per-window CompositionEvent.
 - One window on OpenGL, WebGL and DirectX.
 - Gamepads are not delivered as events.
 - `Monitor()` on the root package still means the primary window's monitor;

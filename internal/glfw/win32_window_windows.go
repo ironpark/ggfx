@@ -615,6 +615,9 @@ func windowProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) 
 		return uintptr(_DefWindowProcW(hWnd, uMsg, wParam, lParam))
 	}
 
+	if result, handled := window.handleNativeMessage(uMsg, uintptr(wParam), uintptr(lParam)); handled {
+		return result
+	}
 	switch uMsg {
 	case _WM_MOUSEACTIVATE:
 		// HACK: Postpone cursor disabling when the window was activated by
@@ -1563,6 +1566,8 @@ func (w *Window) platformCreateWindow(wndconfig *wndconfig, ctxconfig *ctxconfig
 }
 
 func (w *Window) platformDestroyWindow() error {
+	w.destroyDropTarget()
+	w.native = nativeWindowState{}
 	if w.monitor != nil {
 		if err := w.releaseMonitor(); err != nil {
 			return err

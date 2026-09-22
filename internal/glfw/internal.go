@@ -129,6 +129,7 @@ type (
 )
 
 type Window struct {
+	native           nativeWindowState
 	resizable        bool
 	decorated        bool
 	autoIconify      bool

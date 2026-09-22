@@ -102,9 +102,13 @@ func eventFromUI(ev ui.Event) Event {
 	case ui.CloseEvent:
 		return CloseEvent{Window: windowFromUI(ev.Window), keepOpen: ev.KeepOpen}
 	case ui.KeyEvent:
-		return KeyEvent{Window: windowFromUI(ev.Window), Key: Key(ev.Key), Pressed: ev.Pressed, Repeat: ev.Repeat}
+		return KeyEvent{Window: windowFromUI(ev.Window), Key: Key(ev.Key), Pressed: ev.Pressed, Repeat: ev.Repeat, Modifiers: KeyModifiers(ev.Modifiers)}
 	case ui.TextEvent:
-		return TextEvent{Window: windowFromUI(ev.Window), Text: ev.Text}
+		return TextEvent{Window: windowFromUI(ev.Window), Text: ev.Text, ReplacementStart: ev.ReplacementStart, ReplacementEnd: ev.ReplacementEnd, HasReplacement: ev.HasReplacement}
+	case ui.CompositionEvent:
+		return CompositionEvent{Window: windowFromUI(ev.Window), Text: ev.Text, Start: ev.Start, End: ev.End, Done: ev.Done}
+	case ui.DragEvent:
+		return DragEvent{Window: windowFromUI(ev.Window), Phase: DragPhase(ev.Phase), X: ev.X, Y: ev.Y, Files: ev.Files}
 	case ui.MouseMoveEvent:
 		return MouseMoveEvent{Window: windowFromUI(ev.Window), X: ev.X, Y: ev.Y}
 	case ui.MouseButtonEvent:
@@ -166,17 +170,60 @@ func (c CloseEvent) KeepOpen() {
 // KeyEvent reports a key press or release. Repeat is set for the presses the OS generates while
 // the key is held.
 type KeyEvent struct {
-	Window  *Window
-	Key     Key
-	Pressed bool
-	Repeat  bool
+	Window    *Window
+	Key       Key
+	Pressed   bool
+	Repeat    bool
+	Modifiers KeyModifiers
 }
+
+// KeyModifiers captures modifier state at the key event, even if a modifier is
+// released before the next frame or the platform did not send its own key event.
+type KeyModifiers struct{ Shift, Control, Alt, Meta bool }
 
 // TextEvent carries the characters the user typed.
 type TextEvent struct {
 	Window *Window
 	Text   string
+	// A native IME may replace surrounding text (for example the macOS accent
+	// menu). When HasReplacement is true, these UTF-8 byte offsets are relative
+	// to the caret in the context supplied to SetTextInputContext.
+	ReplacementStart, ReplacementEnd int
+	HasReplacement                   bool
 }
+
+// CompositionEvent reports IME marked text on macOS and Windows. Start and End
+// are UTF-8 byte offsets within Text. Done ends the composition and Text is empty;
+// committed characters arrive separately as TextEvent.
+type CompositionEvent struct {
+	Window     *Window
+	Text       string
+	Start, End int
+	Done       bool
+}
+
+// DragPhase identifies a stage of a file drag before or after the drop.
+type DragPhase int
+
+const (
+	DragEntered DragPhase = iota
+	DragMoved
+	DragExited
+	DragEnded
+)
+
+// DragEvent reports a native file drag on macOS and Windows. Coordinates are
+// client-area DIP. Files is nil when the platform cannot provide the paths.
+// DropEvent delivers the files when the user drops them.
+type DragEvent struct {
+	Window *Window
+	Phase  DragPhase
+	X, Y   float64
+	Files  fs.FS
+}
+
+func (CompositionEvent) isEvent() {}
+func (DragEvent) isEvent()        {}
 
 // MouseMoveEvent reports the cursor position in device-independent pixels relative to the client
 // area.
@@ -478,3 +525,40 @@ func (w *Window) SetCursorMode(mode CursorModeType) {
 func (w *Window) NativeHandle() uintptr {
 	return w.ui.NativeHandle()
 }
+
+// SetTextInputEnabled enables native IME input on macOS and Windows. Disabling
+// it cancels marked text without removing the window's keyboard focus.
+// It has no effect on other platforms. Call it when an editable field gains or
+// loses focus, not on each composition commit.
+func (w *Window) SetTextInputEnabled(enabled bool) { w.ui.SetTextInputEnabled(enabled) }
+
+// SetTextInputRect positions the IME candidate panel at the caret rectangle in
+// client-area DIP. It has no effect on platforms without native IME events.
+func (w *Window) SetTextInputRect(x, y, width, height float64) {
+	w.ui.SetTextInputRect(x, y, width, height)
+}
+
+// AccessibilityView returns a mouse-transparent NSView owned by this window on
+// macOS, or zero elsewhere. The view is valid until the window closes.
+func (w *Window) AccessibilityView() uintptr { return w.ui.AccessibilityView() }
+
+// SetAccessibilityHandlers supplies the macOS accessibility container's children
+// (an autoreleased NSArray) and hit test (an NSAccessibilityElement). Hit test
+// coordinates are native screen points. Callbacks run on the main thread and
+// must not call window methods or wait for the event handler. Nil detaches them.
+// Other platforms ignore these callbacks.
+func (w *Window) SetAccessibilityHandlers(children func() uintptr, hitTest func(x, y float64) uintptr) {
+	w.ui.SetAccessibilityHandlers(children, hitTest)
+}
+
+// SetGetObjectHandler handles Windows WM_GETOBJECT. The callback runs on the
+// main thread and must not call window methods or wait for the event handler.
+// Return false to use the default window procedure; nil removes the handler.
+// Other platforms ignore it.
+func (w *Window) SetGetObjectHandler(f func(wparam, lparam uintptr) (uintptr, bool)) {
+	w.ui.SetGetObjectHandler(f)
+}
+
+// SetTextInputContext supplies the text before and after the editable selection
+// for native IME replacement ranges. Update it when the caret or text changes.
+func (w *Window) SetTextInputContext(before, after string) { w.ui.SetTextInputContext(before, after) }

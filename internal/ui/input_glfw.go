@@ -246,10 +246,11 @@ func (u *glfwBackend) registerInputCallbacks() error {
 		}
 		if aw != nil {
 			u.pushEvent(KeyEvent{
-				Window:  aw,
-				Key:     uk,
-				Pressed: action != glfw.Release,
-				Repeat:  action == glfw.Repeat,
+				Window:    aw,
+				Key:       uk,
+				Pressed:   action != glfw.Release,
+				Repeat:    action == glfw.Repeat,
+				Modifiers: KeyModifiers{Shift: mods&glfw.ModShift != 0, Control: mods&glfw.ModControl != 0, Alt: mods&glfw.ModAlt != 0, Meta: mods&glfw.ModSuper != 0},
 			})
 		}
 		// The input state records presses and releases only.

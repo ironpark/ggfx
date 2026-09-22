@@ -343,6 +343,9 @@ func (w *Window) Destroy() error {
 	w.callbacks.character = nil
 	w.callbacks.charmods = nil
 	w.callbacks.drop = nil
+	w.native.text, w.native.drag, w.native.composition = nil, nil, nil
+	w.native.getObject = nil
+	w.native.accessibilityChildren, w.native.accessibilityHitTest = nil, nil
 
 	// Detach w's context if it is current, so the window is not destroyed while current
 	if w == _glfw.currentContext {
@@ -354,6 +357,7 @@ func (w *Window) Destroy() error {
 	if err := w.platformDestroyWindow(); err != nil {
 		return err
 	}
+	w.native = nativeWindowState{}
 
 	// Unlink window from global list (after platform destroy, matching C ordering).
 	for i, window := range _glfw.windows {

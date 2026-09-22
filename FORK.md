@@ -92,16 +92,15 @@ one window that asks for a frame every iteration.
 - More than one window on OpenGL and WebGL (`docs/window.md`). Only Metal
   and the two-window example in `examples/multiwindow` were run; DirectX
   accepts one surface and was cross-compiled only.
-- IME composition on the event path outside macOS. `TextEvent` carries
-  committed characters; `exp/textinput` still runs off the per-iteration
-  hooks.
+- IME composition on the event path outside macOS and Windows. X11 and the
+  browser still use `exp/textinput` for composition.
 - Only macOS Metal and OpenGL ran the test suite after the shader change;
   DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
   to need shader model 5.0 without register spaces, but no D3D compiler or
   debug layer has seen it.
-- Exposing native window hooks (drag-over, IME composition, accessibility
-  attach points) so ggui stops reaching into the GLFW port's classes and
-  windows; see `docs/native-window-handoff.md`.
+- Runtime validation of Windows native hooks (OLE drag-over, IMM composition,
+  WM_GETOBJECT); they are implemented and cross-built. macOS native hooks have
+  a two-window smoke test in `examples/nativehooks`.
 - Deciding whether gamepad support stays.
 - `genkeys.go` still generates key tables for the removed mobile platforms.
 - The `ebiten:` prefix in error messages and documentation wording.

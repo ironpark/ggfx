@@ -234,6 +234,9 @@ func (w *appWindow) Monitor() *Monitor {
 
 func (w *appWindow) NativeHandle() uintptr {
 	b := w.backend
+	if b.isTerminated() {
+		return 0
+	}
 	var h uintptr
 	b.mainThread.Call(func() {
 		if b.isTerminated() || b.closed {

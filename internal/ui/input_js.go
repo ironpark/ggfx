@@ -202,7 +202,9 @@ func (u *UserInterface) pushInputEvent(e js.Value) {
 		key0, key1 := eventToKeys(e)
 		for _, k := range [...]Key{key0, key1} {
 			if k >= 0 {
-				u.pushEvent(KeyEvent{Window: aw, Key: k, Pressed: pressed, Repeat: repeat})
+				u.pushEvent(KeyEvent{Window: aw, Key: k, Pressed: pressed, Repeat: repeat, Modifiers: KeyModifiers{
+					Shift: e.Get("shiftKey").Bool(), Control: e.Get("ctrlKey").Bool(), Alt: e.Get("altKey").Bool(), Meta: e.Get("metaKey").Bool(),
+				}})
 			}
 		}
 		if pressed {
