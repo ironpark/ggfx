@@ -29,9 +29,9 @@ import (
 	"testing"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/examples/resources/images"
 	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
 	t "github.com/hajimehoshi/ebiten/v2/internal/testing"
+	"github.com/hajimehoshi/ebiten/v2/internal/testresources"
 	"github.com/hajimehoshi/ebiten/v2/internal/ui"
 )
 
@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 }
 
 func openEbitenImage() (*ebiten.Image, image.Image, error) {
-	img, _, err := image.Decode(bytes.NewReader(images.Ebiten_png))
+	img, _, err := image.Decode(bytes.NewReader(testresources.Ebiten_png))
 	if err != nil {
 		return nil, nil, err
 	}
