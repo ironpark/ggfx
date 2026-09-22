@@ -100,7 +100,7 @@ type usageCallback struct {
 
 func (i *Image) copyCheck() {
 	if i.addr != i {
-		panic("ebiten: illegal use of non-zero Image copied by value")
+		panic("ggfx: illegal use of non-zero Image copied by value")
 	}
 }
 
@@ -294,7 +294,7 @@ func (i *Image) DrawImage(img *Image, options *DrawImageOptions) {
 	i.copyCheck()
 
 	if img.isDisposed() {
-		panic("ebiten: the given image to DrawImage must not be disposed")
+		panic("ggfx: the given image to DrawImage must not be disposed")
 	}
 	if i.isDisposed() {
 		return
@@ -613,7 +613,7 @@ func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image,
 	i.copyCheck()
 
 	if img != nil && img.isDisposed() {
-		panic("ebiten: the given image to DrawTriangles must not be disposed")
+		panic("ggfx: the given image to DrawTriangles must not be disposed")
 	}
 	if i.isDisposed() {
 		return
@@ -639,11 +639,11 @@ func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image,
 		vertices = vertices[:graphicscommand.MaxVertexCount]
 	}
 	if len(indices)%3 != 0 {
-		panic("ebiten: len(indices) % 3 must be 0")
+		panic("ggfx: len(indices) % 3 must be 0")
 	}
 	for i, idx := range indices {
 		if idx >= uint32(len(vertices)) {
-			panic(fmt.Sprintf("ebiten: indices[%d] must be less than len(vertices) (%d) but was %d", i, len(vertices), idx))
+			panic(fmt.Sprintf("ggfx: indices[%d] must be less than len(vertices) (%d) but was %d", i, len(vertices), idx))
 		}
 	}
 
@@ -838,7 +838,7 @@ func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shade
 	i.copyCheck()
 
 	if shader.isDisposed() {
-		panic("ebiten: the given shader to DrawTrianglesShader must not be disposed")
+		panic("ggfx: the given shader to DrawTrianglesShader must not be disposed")
 	}
 
 	if options != nil {
@@ -847,7 +847,7 @@ func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shade
 				continue
 			}
 			if img.isDisposed() {
-				panic("ebiten: the given image to DrawTrianglesShader must not be disposed")
+				panic("ggfx: the given image to DrawTrianglesShader must not be disposed")
 			}
 		}
 	}
@@ -890,11 +890,11 @@ func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shade
 		vertices = vertices[:graphicscommand.MaxVertexCount]
 	}
 	if len(indices)%3 != 0 {
-		panic("ebiten: len(indices) % 3 must be 0")
+		panic("ggfx: len(indices) % 3 must be 0")
 	}
 	for i, idx := range indices {
 		if idx >= uint32(len(vertices)) {
-			panic(fmt.Sprintf("ebiten: indices[%d] must be less than len(vertices) (%d) but was %d", i, len(vertices), idx))
+			panic(fmt.Sprintf("ggfx: indices[%d] must be less than len(vertices) (%d) but was %d", i, len(vertices), idx))
 		}
 	}
 
@@ -1019,7 +1019,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 	i.copyCheck()
 
 	if shader.isDisposed() {
-		panic("ebiten: the given shader to DrawRectShader must not be disposed")
+		panic("ggfx: the given shader to DrawRectShader must not be disposed")
 	}
 
 	if options != nil {
@@ -1028,7 +1028,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 				continue
 			}
 			if img.isDisposed() {
-				panic("ebiten: the given image to DrawRectShader must not be disposed")
+				panic("ggfx: the given image to DrawRectShader must not be disposed")
 			}
 		}
 	}
@@ -1074,7 +1074,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 			continue
 		}
 		if img.Bounds().Size() != image.Pt(width, height) {
-			panic("ebiten: all the source images must be the same size with the rectangle")
+			panic("ggfx: all the source images must be the same size with the rectangle")
 		}
 		imgs[i] = img.image
 	}
@@ -1198,7 +1198,7 @@ func (i *Image) SubImage(r image.Rectangle) image.Image {
 func (i *Image) RecyclableSubImage(r image.Rectangle) *Image {
 	i.copyCheck()
 	if i.isDisposed() {
-		panic("ebiten: the image is already disposed")
+		panic("ggfx: the image is already disposed")
 	}
 
 	if i.isSubImage() {
@@ -1226,7 +1226,7 @@ func (i *Image) RecyclableSubImage(r image.Rectangle) *Image {
 // Bounds implements the standard image.Image's Bounds.
 func (i *Image) Bounds() image.Rectangle {
 	if i.isDisposed() {
-		panic("ebiten: the image is already disposed")
+		panic("ggfx: the image is already disposed")
 	}
 	return i.bounds
 }
@@ -1258,7 +1258,7 @@ func (i *Image) ColorModel() color.Model {
 func (i *Image) ReadPixels(pixels []byte) {
 	b := i.Bounds()
 	if got, want := len(pixels), 4*b.Dx()*b.Dy(); got != want {
-		panic(fmt.Sprintf("ebiten: len(pixels) must be %d but %d at ReadPixels", want, got))
+		panic(fmt.Sprintf("ggfx: len(pixels) must be %d but %d at ReadPixels", want, got))
 	}
 
 	i.invokeUsageCallbacks()
@@ -1411,7 +1411,7 @@ func (i *Image) Deallocate() {
 func (i *Image) Recycle() {
 	i.copyCheck()
 	if !i.recyclable {
-		panic("ebiten: Recycle can only be called on an image created by RecyclableSubImage")
+		panic("ggfx: Recycle can only be called on an image created by RecyclableSubImage")
 	}
 
 	// Clear all fields to release references and reset state.
@@ -1538,10 +1538,10 @@ func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
 
 	width, height := bounds.Dx(), bounds.Dy()
 	if width <= 0 {
-		panic(fmt.Sprintf("ebiten: width at NewImage must be positive but %d", width))
+		panic(fmt.Sprintf("ggfx: width at NewImage must be positive but %d", width))
 	}
 	if height <= 0 {
-		panic(fmt.Sprintf("ebiten: height at NewImage must be positive but %d", height))
+		panic(fmt.Sprintf("ggfx: height at NewImage must be positive but %d", height))
 	}
 
 	i := &Image{}

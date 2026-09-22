@@ -137,7 +137,7 @@ func (c *ColorM) ChangeHSV(hueTheta float64, saturationScale float64, valueScale
 // Deprecated: as of v2.5. Use the colorm package instead.
 func (c *ColorM) Element(i, j int) float64 {
 	if i < 0 || ColorMDim-1 <= i || j < 0 || ColorMDim <= j {
-		panic("ebiten: i or j is out of index")
+		panic("ggfx: i or j is out of index")
 	}
 	return float64(c.affineColorM().At(i, j))
 }
@@ -150,7 +150,7 @@ func (c *ColorM) Element(i, j int) float64 {
 // Deprecated: as of v2.5. Use the colorm package instead.
 func (c *ColorM) SetElement(i, j int, element float64) {
 	if i < 0 || ColorMDim-1 <= i || j < 0 || ColorMDim <= j {
-		panic("ebiten: i or j is out of index")
+		panic("ggfx: i or j is out of index")
 	}
 	c.impl = affine.ColorMSetElement(c.affineColorM(), i, j, float32(element))
 }

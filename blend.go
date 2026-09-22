@@ -175,7 +175,7 @@ func (b BlendFactor) internalBlendFactor(source bool) graphicsdriver.BlendFactor
 	case BlendFactorOneMinusDestinationAlpha:
 		return graphicsdriver.BlendFactorOneMinusDestinationAlpha
 	default:
-		panic(fmt.Sprintf("ebiten: invalid blend factor: %d", b))
+		panic(fmt.Sprintf("ggfx: invalid blend factor: %d", b))
 	}
 }
 
@@ -202,7 +202,7 @@ func internalBlendFactorToBlendFactor(blendFactor graphicsdriver.BlendFactor) Bl
 	case graphicsdriver.BlendFactorOneMinusDestinationAlpha:
 		return BlendFactorOneMinusDestinationAlpha
 	default:
-		panic(fmt.Sprintf("ebiten: invalid blend factor: %d", blendFactor))
+		panic(fmt.Sprintf("ggfx: invalid blend factor: %d", blendFactor))
 	}
 }
 
@@ -256,7 +256,7 @@ func (b BlendOperation) internalBlendOperation() graphicsdriver.BlendOperation {
 	case BlendOperationMax:
 		return graphicsdriver.BlendOperationMax
 	default:
-		panic(fmt.Sprintf("ebiten: invalid blend operation: %d", b))
+		panic(fmt.Sprintf("ggfx: invalid blend operation: %d", b))
 	}
 }
 
@@ -273,7 +273,7 @@ func internalBlendOperationToBlendOperation(blendOperation graphicsdriver.BlendO
 	case graphicsdriver.BlendOperationMax:
 		return BlendOperationMax
 	default:
-		panic(fmt.Sprintf("ebiten: invalid blend operation: %d", blendOperation))
+		panic(fmt.Sprintf("ggfx: invalid blend operation: %d", blendOperation))
 	}
 }
 

@@ -153,17 +153,17 @@ func shaderFromFillRule(fillRule FillRule) *Shader {
 	case FillRuleNonZero:
 		s, err := ensureStencilBufferNonZeroShader()
 		if err != nil {
-			panic(fmt.Sprintf("ebiten: failed to ensure stencil buffer non-zero shader: %v", err))
+			panic(fmt.Sprintf("ggfx: failed to ensure stencil buffer non-zero shader: %v", err))
 		}
 		return s
 	case FillRuleEvenOdd:
 		s, err := ensureStencilBufferEvenOddShader()
 		if err != nil {
-			panic(fmt.Sprintf("ebiten: failed to ensure stencil buffer even-odd shader: %v", err))
+			panic(fmt.Sprintf("ggfx: failed to ensure stencil buffer even-odd shader: %v", err))
 		}
 		return s
 	default:
-		panic("ebiten: not reached")
+		panic("ggfx: not reached")
 	}
 }
 

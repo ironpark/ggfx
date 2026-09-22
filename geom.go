@@ -76,7 +76,7 @@ func (g *GeoM) Element(i, j int) float64 {
 	case i == 1 && j == 2:
 		return g.ty
 	default:
-		panic("ebiten: i or j is out of index")
+		panic("ggfx: i or j is out of index")
 	}
 }
 
@@ -180,7 +180,7 @@ func (g *GeoM) IsInvertible() bool {
 func (g *GeoM) Invert() {
 	det := g.det2x2()
 	if det == 0 {
-		panic("ebiten: g is not invertible")
+		panic("ggfx: g is not invertible")
 	}
 
 	a := (g.d_1 + 1) / det
@@ -215,6 +215,6 @@ func (g *GeoM) SetElement(i, j int, element float64) {
 	case i == 1 && j == 2:
 		g.ty = e
 	default:
-		panic("ebiten: i or j is out of index")
+		panic("ggfx: i or j is out of index")
 	}
 }

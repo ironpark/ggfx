@@ -33,8 +33,6 @@ import (
 var (
 	glfwKeyNameToGLFWKey            map[string]int
 	uiKeyNameToGLFWKeyName          map[string]string
-	androidKeyToUIKeyName           map[int]string
-	iosKeyToUIKeyName               map[int]string
 	uiKeyNameToJSCode               map[string]string
 	oldEbitengineKeyNameToUIKeyName map[string]string
 )
@@ -145,148 +143,6 @@ func init() {
 		"IntlBackslash":  "World1",
 	}
 
-	// https://developer.android.com/reference/android/view/KeyEvent
-	//
-	// Android doesn't distinguish these keys:
-	// - a US backslash key (HID: 0x31),
-	// - an international pound/tilde key (HID: 0x32), and
-	// - an international backslash key (HID: 0x64).
-	// These are mapped to the same key code KEYCODE_BACKSLASH (73).
-	// See https://source.android.com/docs/core/interaction/input/keyboard-devices
-	androidKeyToUIKeyName = map[int]string{
-		55:  "Comma",
-		56:  "Period",
-		57:  "AltLeft",
-		58:  "AltRight",
-		115: "CapsLock",
-		113: "ControlLeft",
-		114: "ControlRight",
-		59:  "ShiftLeft",
-		60:  "ShiftRight",
-		66:  "Enter",
-		62:  "Space",
-		61:  "Tab",
-		112: "Delete", // KEYCODE_FORWARD_DEL
-		123: "End",
-		122: "Home",
-		124: "Insert",
-		93:  "PageDown",
-		92:  "PageUp",
-		20:  "ArrowDown",
-		21:  "ArrowLeft",
-		22:  "ArrowRight",
-		19:  "ArrowUp",
-		111: "Escape",
-		67:  "Backspace", // KEYCODE_DEL
-		75:  "Quote",
-		69:  "Minus",
-		76:  "Slash",
-		74:  "Semicolon",
-		70:  "Equal",
-		71:  "BracketLeft",
-		73:  "Backslash",
-		72:  "BracketRight",
-		68:  "Backquote",
-		143: "NumLock",
-		121: "Pause",       // KEYCODE_BREAK
-		120: "PrintScreen", // KEYCODE_SYSRQ
-		116: "ScrollLock",
-		82:  "ContextMenu",
-		157: "NumpadAdd",
-		158: "NumpadDecimal",
-		154: "NumpadDivide",
-		155: "NumpadMultiply",
-		156: "NumpadSubtract",
-		160: "NumpadEnter",
-		161: "NumpadEqual",
-		117: "MetaLeft",
-		118: "MetaRight",
-	}
-
-	// https://developer.apple.com/documentation/uikit/uikeyboardhidusage?language=objc
-	iosKeyToUIKeyName = map[int]string{
-		0xE2: "AltLeft",
-		0xE6: "AltRight",
-		0x51: "ArrowDown",
-		0x50: "ArrowLeft",
-		0x4F: "ArrowRight",
-		0x52: "ArrowUp",
-		0x35: "Backquote",
-
-		// These three keys are:
-		// - US backslash-pipe key, and
-		// - non-US hashmark key (bottom left of return; on German layout, this is the #' key).
-		// On US layout configurations, they all map to the same characters - the backslash.
-		//
-		// See also: https://www.w3.org/TR/uievents-code/#keyboard-102
-		0x31: "Backslash", // UIKeyboardHIDUsageKeyboardBackslash
-		0x32: "Backslash", // UIKeyboardHIDUsageKeyboardNonUSPound
-
-		0x64: "IntlBackslash", // UIKeyboardHIDUsageKeyboardNonUSBackslash
-
-		0x2A: "Backspace",
-		0x2F: "BracketLeft",
-		0x30: "BracketRight",
-
-		// Caps Lock can either be a normal key or a hardware toggle.
-		0x39: "CapsLock", // UIKeyboardHIDUsageKeyboardCapsLock
-		0x82: "CapsLock", // UIKeyboardHIDUsageKeyboardLockingCapsLock
-
-		0x36: "Comma",
-		0xE0: "ControlLeft",
-		0xE4: "ControlRight",
-		0x4C: "Delete",
-		0x4D: "End",
-		0x28: "Enter",
-		0x2E: "Equal",
-		0x29: "Escape",
-		0x4A: "Home",
-		0x49: "Insert",
-		0x76: "ContextMenu",
-		0xE3: "MetaLeft",
-		0xE7: "MetaRight",
-		0x2D: "Minus",
-
-		// Num Lock can either be a normal key or a hardware toggle.
-		0x53: "NumLock", // UIKeyboardHIDUsageKeyboardNumLock
-		0x83: "NumLock", // UIKeyboardHIDUsageKeyboardLockingNumLock
-
-		0x57: "NumpadAdd",
-
-		// Some keyboard layouts have a comma, some a period on the numeric pad.
-		// They are the same key, though.
-		0x63: "NumpadDecimal", // UIKeyboardHIDUsageKeypadPeriod
-		0x85: "NumpadDecimal", // UIKeyboardHIDUsageKeypadComma
-
-		0x54: "NumpadDivide",
-		0x58: "NumpadEnter",
-
-		// Some numeric keypads also have an equals sign.
-		// There appear to be two separate keycodes for that.
-		0x67: "NumpadEqual", // UIKeyboardHIDUsageKeypadEqualSign
-		0x86: "NumpadEqual", // UIKeyboardHIDUsageKeypadEqualSignAS400
-
-		0x55: "NumpadMultiply",
-		0x56: "NumpadSubtract",
-		0x4E: "PageDown",
-		0x4B: "PageUp",
-		0x48: "Pause",
-		0x37: "Period",
-		0x46: "PrintScreen",
-		0x34: "Quote",
-
-		// Scroll Lock can either be a normal key or a hardware toggle.
-		0x47: "ScrollLock", // UIKeyboardHIDUsageKeyboardScrollLock
-		0x84: "ScrollLock", // UIKeyboardHIDUsageKeyboardLockingScrollLock
-
-		0x33: "Semicolon",
-		0xE1: "ShiftLeft",
-		0xE5: "ShiftRight",
-		0x38: "Slash",
-		0x2C: "Space",
-		0x2B: "Tab",
-	}
-
 	// The UI key and JS key are almost same but very slightly different (e.g., 'A' vs 'KeyA').
 	uiKeyNameToJSCode = map[string]string{
 		"Comma":          "Comma",
@@ -351,23 +207,12 @@ func init() {
 		glfwKeyNameToGLFWKey[string(c)] = int(glfwKey0 + c - '0')
 		name := "Digit" + string(c)
 		uiKeyNameToGLFWKeyName[name] = string(c)
-		androidKeyToUIKeyName[7+int(c)-'0'] = name
-		// Gomobile's key code (= USB HID key codes) has successive key codes for 1, 2, ..., 9, 0
-		// in this order. Same for iOS.
-		if c == '0' {
-			iosKeyToUIKeyName[0x27] = name
-		} else {
-			iosKeyToUIKeyName[0x1E+int(c)-'1'] = name
-		}
 		uiKeyNameToJSCode[name] = name
-
 	}
 	// ASCII: A - Z
 	for c := 'A'; c <= 'Z'; c++ {
 		glfwKeyNameToGLFWKey[string(c)] = int(glfwKeyA + c - 'A')
 		uiKeyNameToGLFWKeyName[string(c)] = string(c)
-		androidKeyToUIKeyName[29+int(c)-'A'] = string(c)
-		iosKeyToUIKeyName[0x04+int(c)-'A'] = string(c)
 		uiKeyNameToJSCode[string(c)] = "Key" + string(c)
 	}
 	// Function keys
@@ -375,19 +220,6 @@ func init() {
 		name := "F" + strconv.Itoa(i)
 		glfwKeyNameToGLFWKey[name] = glfwKeyF1 + i - 1
 		uiKeyNameToGLFWKeyName[name] = name
-		// Android doesn't support F13 and more as constants of KeyEvent:
-		// https://developer.android.com/reference/android/view/KeyEvent
-		//
-		// Note that F13 might be available if HID devices are available directly:
-		// https://source.android.com/docs/core/interaction/input/keyboard-devices
-		if i <= 12 {
-			androidKeyToUIKeyName[131+i-1] = name
-		}
-		if i <= 12 {
-			iosKeyToUIKeyName[0x3A+i-1] = name
-		} else {
-			iosKeyToUIKeyName[0x68+i-13] = name
-		}
 		uiKeyNameToJSCode[name] = name
 	}
 	// Numpad
@@ -396,14 +228,6 @@ func init() {
 		name := "Numpad" + string(c)
 		glfwKeyNameToGLFWKey["KP"+string(c)] = int(glfwKeyKP0 + c - '0')
 		uiKeyNameToGLFWKeyName[name] = "KP" + string(c)
-		androidKeyToUIKeyName[144+int(c)-'0'] = name
-		// Gomobile's key code (= USB HID key codes) has successive key codes for 1, 2, ..., 9, 0
-		// in this order. Same for iOS.
-		if c == '0' {
-			iosKeyToUIKeyName[0x62] = name
-		} else {
-			iosKeyToUIKeyName[0x59+int(c)-'1'] = name
-		}
 		uiKeyNameToJSCode[name] = name
 	}
 
@@ -509,7 +333,7 @@ func (k Key) MarshalText() ([]byte, error) {
 func (k *Key) UnmarshalText(text []byte) error {
 	key, ok := keyNameToKeyCode(string(text))
 	if !ok {
-		return fmt.Errorf("ebiten: unexpected key name: %s", string(text))
+		return fmt.Errorf("ggfx: unexpected key name: %s", string(text))
 	}
 	*k = key
 	return nil
@@ -617,42 +441,6 @@ const (
 {{range $name, $key := .GLFWKeyNameToGLFWKey}}Key{{$name}} = Key({{$key}})
 {{end}}
 )
-`
-
-const mobileAndroidKeysTmpl = `{{.License}}
-
-{{.DoNotEdit}}
-
-{{.BuildConstraints}}
-
-package ebitenmobileview
-
-import (
-	"github.com/ironpark/ggfx/internal/ui"
-)
-
-var androidKeyToUIKey = map[int]ui.Key{
-{{range $key, $name := .AndroidKeyToUIKeyName}}{{$key}}: ui.Key{{$name}},
-{{end}}
-}
-`
-
-const mobileIOSKeysTmpl = `{{.License}}
-
-{{.DoNotEdit}}
-
-{{.BuildConstraints}}
-
-package ebitenmobileview
-
-import (
-	"github.com/ironpark/ggfx/internal/ui"
-)
-
-var iosKeyToUIKey = map[int]ui.Key{
-{{range $key, $name := .IOSKeyToUIKeyName}}{{$key}}: ui.Key{{$name}},
-{{end}}
-}
 `
 
 func digitKey(name string) int {
@@ -769,13 +557,11 @@ func main() {
 	//     filepath.Join("event", "keys.go"):                              eventKeysTmpl,
 
 	for path, tmpl := range map[string]string{
-		filepath.Join("internal", "glfw", "keys.go"):                   glfwKeysTmpl,
-		filepath.Join("internal", "ui", "keys.go"):                     uiKeysTmpl,
-		filepath.Join("internal", "ui", "keys_glfw.go"):                uiGLFWKeysTmpl,
-		filepath.Join("internal", "ui", "keys_js.go"):                  uiJSKeysTmpl,
-		filepath.Join("keys.go"):                                       ebitengineKeysTmpl,
-		filepath.Join("mobile", "ebitenmobileview", "keys_android.go"): mobileAndroidKeysTmpl,
-		filepath.Join("mobile", "ebitenmobileview", "keys_ios.go"):     mobileIOSKeysTmpl,
+		filepath.Join("internal", "glfw", "keys.go"):    glfwKeysTmpl,
+		filepath.Join("internal", "ui", "keys.go"):      uiKeysTmpl,
+		filepath.Join("internal", "ui", "keys_glfw.go"): uiGLFWKeysTmpl,
+		filepath.Join("internal", "ui", "keys_js.go"):   uiJSKeysTmpl,
+		filepath.Join("keys.go"):                        ebitengineKeysTmpl,
 	} {
 		f, err := os.Create(path)
 		if err != nil {
@@ -797,8 +583,6 @@ func main() {
 		switch path {
 		case filepath.Join("internal", "glfw", "keys.go"):
 			buildConstraints = "//go:build darwin || freebsd || linux || netbsd || windows"
-		case filepath.Join("internal", "ui", "keys_mobile.go"):
-			buildConstraints = "//go:build android || ios"
 		case filepath.Join("internal", "ui", "keys_glfw.go"):
 			buildConstraints = "//go:build !android && !ios && !js && !nintendosdk && !playstation5"
 		}
@@ -815,8 +599,6 @@ func main() {
 			GLFWKeyNameToGLFWKey            map[string]int
 			UIKeyNames                      []string
 			UIKeyNameToGLFWKeyName          map[string]string
-			AndroidKeyToUIKeyName           map[int]string
-			IOSKeyToUIKeyName               map[int]string
 			OldEbitengineKeyNameToUIKeyName map[string]string
 		}{
 			License:                         license,
@@ -829,8 +611,6 @@ func main() {
 			GLFWKeyNameToGLFWKey:            glfwKeyNameToGLFWKey,
 			UIKeyNames:                      uiKeyNames,
 			UIKeyNameToGLFWKeyName:          uiKeyNameToGLFWKeyName,
-			AndroidKeyToUIKeyName:           androidKeyToUIKeyName,
-			IOSKeyToUIKeyName:               iosKeyToUIKeyName,
 			OldEbitengineKeyNameToUIKeyName: oldEbitengineKeyNameToUIKeyName,
 		}); err != nil {
 			log.Fatal(err)

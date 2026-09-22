@@ -108,6 +108,6 @@ func (c CompositeMode) blend() Blend {
 			BlendOperationAlpha:         BlendOperationAdd,
 		}
 	default:
-		panic(fmt.Sprintf("ebiten: invalid composite mode: %d", c))
+		panic(fmt.Sprintf("ggfx: invalid composite mode: %d", c))
 	}
 }

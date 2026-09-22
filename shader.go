@@ -137,7 +137,7 @@ func builtinShader(filter builtinshader.Filter, address builtinshader.Address, u
 		}
 		s, err := newShader(src, name)
 		if err != nil {
-			panic(fmt.Sprintf("ebiten: NewShader for a built-in shader failed: %v", err))
+			panic(fmt.Sprintf("ggfx: NewShader for a built-in shader failed: %v", err))
 		}
 		shader = s
 	}

@@ -72,6 +72,8 @@ monitor and window APIs. Everything outside that was dropped.
   `internal/vmguest`, `internal/vmprotocol`, `internal/graphicsdriver/remote`)
   and the `RunGameOptions.VMGuestEndpoint` option.
 - The Linux framebuffer backend (`internal/fbdev`).
+- The mobile key tables and templates in `genkeys.go`: it no longer generates
+  `mobile/ebitenmobileview/keys_android.go` or `keys_ios.go`.
 - Tooling: `internal/vettools`, `internal/processtest`,
   `internal/beforemaintest`, `internal/shadercollector`, `exp/shaderprecomp`.
 - Test fonts and images that lived under `examples/resources` moved to
@@ -127,5 +129,7 @@ WebGL feels.
   WM_GETOBJECT); they are implemented and cross-built. macOS native hooks have
   a two-window smoke test in `examples/nativehooks`.
 - Deciding whether gamepad support stays.
-- `genkeys.go` still generates key tables for the removed mobile platforms.
-- The `ebiten:` prefix in error messages and documentation wording.
+- The `!android && !ios && !js && !nintendosdk && !playstation5` build
+  constraint is still spelled out across `internal/ui`, where `!js` would do.
+- The deprecated v2.1 key aliases (`KeyDown`, `Key0`, ...) that `genkeys.go`
+  emits into `keys.go`.

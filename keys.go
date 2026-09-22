@@ -778,7 +778,7 @@ func (k Key) MarshalText() ([]byte, error) {
 func (k *Key) UnmarshalText(text []byte) error {
 	key, ok := keyNameToKeyCode(string(text))
 	if !ok {
-		return fmt.Errorf("ebiten: unexpected key name: %s", string(text))
+		return fmt.Errorf("ggfx: unexpected key name: %s", string(text))
 	}
 	*k = key
 	return nil
