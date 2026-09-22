@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gogpu/naga"
 	"github.com/gogpu/naga/ir"
@@ -65,6 +66,10 @@ type Program struct {
 
 	// UniformDwordCount is the size of the user's uniform block in dwords, or 0 without one.
 	UniformDwordCount int
+
+	// mask is the internal uniform dwords the program reads; see internalUniformMask.
+	mask     []uint32
+	maskOnce sync.Once
 }
 
 // Compile compiles a user shader. textureCount is how many source textures the prelude declares.

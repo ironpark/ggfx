@@ -162,6 +162,10 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 	// TODO: This might cause a performance issue (#2601).
 	uniforms = q.prependPreservedUniforms(uniforms, shader, dst, srcs, dstRegion, srcRegions)
 
+	// Zero the internal uniforms the shader never reads, so that draws which differ only in
+	// their regions can be merged.
+	shader.ir.FilterInternalUniforms(uniforms[:graphics.PreservedUniformDwordCount])
+
 	// TODO: If dst is the screen, reorder the command to be the last.
 	if !split && 0 < len(q.commands) {
 		if last, ok := q.commands[len(q.commands)-1].(*drawTrianglesCommand); ok {

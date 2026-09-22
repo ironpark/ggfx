@@ -87,6 +87,17 @@ design and the per-driver status are in [docs/window.md](docs/window.md).
 `Game`/`RunGame` still work and drive the test suite; internally a game is
 one window that asks for a frame every iteration.
 
+## Draw call merging
+
+The command queue merges consecutive draws that share destination, sources,
+shader, blend and uniforms. The internal uniform block carries the destination
+and source regions, which differ from draw to draw, so a shader that never
+reads them would still keep every draw apart. `shader.Program.FilterInternalUniforms`
+zeroes the dwords the program cannot reach (computed from the compacted naga
+IR once per program), which is what ebiten's `FilterUniformVariables` did for
+Kage. Without it the gallery example issued seven times the draw calls, which
+WebGL feels.
+
 ## Not done yet
 
 - More than one window on OpenGL and WebGL (`docs/window.md`). Only Metal
