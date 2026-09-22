@@ -162,9 +162,6 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 	// TODO: This might cause a performance issue (#2601).
 	uniforms = q.prependPreservedUniforms(uniforms, shader, dst, srcs, dstRegion, srcRegions)
 
-	// Remove unused uniform variables so that more commands can be merged.
-	shader.ir.FilterUniformVariables(uniforms)
-
 	// TODO: If dst is the screen, reorder the command to be the last.
 	if !split && 0 < len(q.commands) {
 		if last, ok := q.commands[len(q.commands)-1].(*drawTrianglesCommand); ok {
@@ -386,105 +383,64 @@ func (q *commandQueue) prependPreservedUniforms(uniforms []uint32, shader *Shade
 }
 
 func prependPreservedUniforms(uniforms []uint32, shader *Shader, dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) []uint32 {
-	// Set the destination texture size.
-	// Hard-code indices for BCE optimization.
+	// The layout is documented at graphics.PreservedUniformDwordCount.
 	_ = uniforms[graphics.PreservedUniformDwordCount-1]
 
 	dw, dh := dst.InternalSize()
-	uniforms[0] = math.Float32bits(float32(dw))
-	uniforms[1] = math.Float32bits(float32(dh))
+	uniforms[graphics.DstTextureSizeUniformDwordIndex] = math.Float32bits(float32(dw))
+	uniforms[graphics.DstTextureSizeUniformDwordIndex+1] = math.Float32bits(float32(dh))
 
-	if srcs[0] != nil {
-		w, h := srcs[0].InternalSize()
-		uniforms[2] = math.Float32bits(float32(w))
-		uniforms[3] = math.Float32bits(float32(h))
-	} else {
-		uniforms[2] = 0
-		uniforms[3] = 0
-	}
-	if srcs[1] != nil {
-		w, h := srcs[1].InternalSize()
-		uniforms[4] = math.Float32bits(float32(w))
-		uniforms[5] = math.Float32bits(float32(h))
-	} else {
-		uniforms[4] = 0
-		uniforms[5] = 0
-	}
-	if srcs[2] != nil {
-		w, h := srcs[2].InternalSize()
-		uniforms[6] = math.Float32bits(float32(w))
-		uniforms[7] = math.Float32bits(float32(h))
-	} else {
-		uniforms[6] = 0
-		uniforms[7] = 0
-	}
-	if srcs[3] != nil {
-		w, h := srcs[3].InternalSize()
-		uniforms[8] = math.Float32bits(float32(w))
-		uniforms[9] = math.Float32bits(float32(h))
-	} else {
-		uniforms[8] = 0
-		uniforms[9] = 0
+	for i, src := range srcs {
+		idx := graphics.SourceTextureSizeUniformDwordIndex + 4*i
+		if src != nil {
+			w, h := src.InternalSize()
+			uniforms[idx] = math.Float32bits(float32(w))
+			uniforms[idx+1] = math.Float32bits(float32(h))
+		} else {
+			uniforms[idx] = 0
+			uniforms[idx+1] = 0
+		}
+		uniforms[idx+2] = 0
+		uniforms[idx+3] = 0
 	}
 
 	dr := imageRectangleToRectangleF32(dstRegion)
+	uniforms[graphics.DstRegionOriginUniformDwordIndex] = math.Float32bits(dr.x)
+	uniforms[graphics.DstRegionOriginUniformDwordIndex+1] = math.Float32bits(dr.y)
+	uniforms[graphics.DstRegionSizeUniformDwordIndex] = math.Float32bits(dr.width)
+	uniforms[graphics.DstRegionSizeUniformDwordIndex+1] = math.Float32bits(dr.height)
+	uniforms[graphics.DstRegionSizeUniformDwordIndex+2] = 0
+	uniforms[graphics.DstRegionSizeUniformDwordIndex+3] = 0
 
-	// Set the destination region origin.
-	uniforms[10] = math.Float32bits(dr.x)
-	uniforms[11] = math.Float32bits(dr.y)
-
-	// Set the destination region size.
-	uniforms[12] = math.Float32bits(dr.width)
-	uniforms[13] = math.Float32bits(dr.height)
-
-	var srs [graphics.ShaderSrcImageCount]rectangleF32
 	for i, r := range srcRegions {
-		srs[i] = imageRectangleToRectangleF32(r)
+		sr := imageRectangleToRectangleF32(r)
+		idx := graphics.SourceImageRegionOriginUniformDwordIndex + 4*i
+		uniforms[idx] = math.Float32bits(sr.x)
+		uniforms[idx+1] = math.Float32bits(sr.y)
+		uniforms[idx+2] = 0
+		uniforms[idx+3] = 0
+		idx = graphics.SourceImageRegionSizeUniformDwordIndex + 4*i
+		uniforms[idx] = math.Float32bits(sr.width)
+		uniforms[idx+1] = math.Float32bits(sr.height)
+		uniforms[idx+2] = 0
+		uniforms[idx+3] = 0
 	}
 
-	// Set the source region origins.
-	uniforms[14] = math.Float32bits(srs[0].x)
-	uniforms[15] = math.Float32bits(srs[0].y)
-	uniforms[16] = math.Float32bits(srs[1].x)
-	uniforms[17] = math.Float32bits(srs[1].y)
-	uniforms[18] = math.Float32bits(srs[2].x)
-	uniforms[19] = math.Float32bits(srs[2].y)
-	uniforms[20] = math.Float32bits(srs[3].x)
-	uniforms[21] = math.Float32bits(srs[3].y)
-
-	// Set the source region sizes.
-	uniforms[22] = math.Float32bits(srs[0].width)
-	uniforms[23] = math.Float32bits(srs[0].height)
-	uniforms[24] = math.Float32bits(srs[1].width)
-	uniforms[25] = math.Float32bits(srs[1].height)
-	uniforms[26] = math.Float32bits(srs[2].width)
-	uniforms[27] = math.Float32bits(srs[2].height)
-	uniforms[28] = math.Float32bits(srs[3].width)
-	uniforms[29] = math.Float32bits(srs[3].height)
-
-	// Set the projection matrix.
-	uniforms[30] = math.Float32bits(2 / float32(dw))
-	uniforms[31] = 0
-	uniforms[32] = 0
-	uniforms[33] = 0
-	uniforms[34] = 0
-	uniforms[35] = math.Float32bits(2 / float32(dh))
-	uniforms[36] = 0
-	uniforms[37] = 0
-	uniforms[38] = 0
-	uniforms[39] = 0
-	uniforms[40] = math.Float32bits(1)
-	uniforms[41] = 0
-	uniforms[42] = math.Float32bits(-1)
-	uniforms[43] = math.Float32bits(-1)
-	uniforms[44] = 0
-	uniforms[45] = math.Float32bits(1)
+	// The projection matrix maps texture pixels to clip space, column-major.
+	p := uniforms[graphics.ProjectionMatrixUniformDwordIndex : graphics.ProjectionMatrixUniformDwordIndex+16]
+	clear(p)
+	p[0] = math.Float32bits(2 / float32(dw))
+	p[5] = math.Float32bits(2 / float32(dh))
+	p[10] = math.Float32bits(1)
+	p[12] = math.Float32bits(-1)
+	p[13] = math.Float32bits(-1)
+	p[15] = math.Float32bits(1)
 
 	return uniforms
 }
 
 // Confirm the concrete value of graphics.PreservedUniformDwordCount.
-var _ [0]struct{} = [graphics.PreservedUniformDwordCount - 46]struct{}{}
+var _ [0]struct{} = [graphics.PreservedUniformDwordCount - 72]struct{}{}
 
 type commandQueuePool struct {
 	cache []*commandQueue

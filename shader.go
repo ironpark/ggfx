@@ -21,7 +21,7 @@ import (
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/colormshader"
-	"github.com/ironpark/ggfx/internal/legacyshader"
+	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/ui"
 )
 
@@ -30,42 +30,22 @@ import (
 // For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
 type Shader struct {
 	shader *ui.Shader
-
-	// unit is the unit the shader was authored in (//kage:unit). The compiled shader always runs in
-	// the pixel unit; this is kept only to enforce the user-facing rules of the texel unit, such as
-	// requiring source images to be the same size.
-	unit legacyshader.Unit
 }
 
-// unitIsTexels reports whether the shader was authored in the texel unit.
-func (s *Shader) unitIsTexels() bool {
-	return s.unit == legacyshader.Texels
-}
-
-// NewShader compiles a shader program in the shading language Kage, and returns the result.
-//
-// If the compilation fails, NewShader returns an error.
-//
-// For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
 func NewShader(src []byte) (*Shader, error) {
 	return newShader(src, "")
 }
 
 func newShader(src []byte, name string) (*Shader, error) {
-	ir, unit, err := legacyshader.CompileShader(src)
+	program, err := graphics.CompileShader(src)
 	if err != nil {
 		return nil, err
 	}
 	return &Shader{
-		shader: ui.NewShader(ir, name),
-		unit:   unit,
+		shader: ui.NewShader(program, name),
 	}, nil
 }
 
-// Dispose disposes the shader program.
-// After disposing, the shader is no longer available.
-//
-// Deprecated: as of v2.7. Use Deallocate instead.
 func (s *Shader) Dispose() {
 	s.shader.Deallocate()
 	s.shader = nil

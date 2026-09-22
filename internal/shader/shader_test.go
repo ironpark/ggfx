@@ -1,4 +1,4 @@
-// Copyright 2020 The Ebiten Authors
+// Copyright 2026 The ggfx Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,289 +15,161 @@
 package shader_test
 
 import (
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/gogpu/naga/ir"
+
 	"github.com/ironpark/ggfx/internal/shader"
-	"github.com/ironpark/ggfx/internal/shaderir/glsl"
-	"github.com/ironpark/ggfx/internal/shaderir/hlsl"
-	"github.com/ironpark/ggfx/internal/shaderir/msl"
 )
 
-func glslVertexNormalize(str string) string {
-	p := glsl.VertexPrelude(glsl.GLSLVersionDefault)
-	str = strings.TrimPrefix(str, p)
-	return strings.TrimSpace(str)
-}
-
-func glslFragmentNormalize(str string) string {
-	p := glsl.FragmentPrelude(glsl.GLSLVersionDefault)
-	str = strings.TrimPrefix(str, p)
-	return strings.TrimSpace(str)
-}
-
-func hlslNormalize(str string, prelude string) string {
-	str = strings.TrimPrefix(str, prelude)
-	return strings.TrimSpace(str)
-}
-
-func metalNormalize(str string) string {
-	prelude := msl.Prelude()
-	str = strings.TrimPrefix(str, prelude)
-	return strings.TrimSpace(str)
-}
-
-func compare(t *testing.T, title, got, want string) {
-	var msg string
-	gotlines := strings.Split(got, "\n")
-	wantlines := strings.Split(want, "\n")
-	for i := range gotlines {
-		if len(wantlines) <= i {
-			msg = fmt.Sprintf(`lines %d:
-got:  %s
-want: (out of range)`, i+1, gotlines[i])
-			break
-		}
-		if gotlines[i] != wantlines[i] {
-			msg = fmt.Sprintf(`lines %d:
-got:  %s
-want: %s`, i+1, gotlines[i], wantlines[i])
-			break
-		}
-	}
-	t.Errorf("%s: got: %v, want: %v\n\n%s", title, got, want, msg)
-}
-
 func TestCompile(t *testing.T) {
-	if runtime.GOOS == "js" {
-		t.Skip("file open might not be implemented in this environment")
-	}
-
-	files, err := os.ReadDir("testdata")
+	p, err := shader.Compile([]byte(`
+fn fragment(v: Vertex) -> vec4f {
+	return src0_at(v.src_pos) * v.color + src3_at_from_src0(v.src_pos) * f32(front_facing());
+}
+`), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	type testcase struct {
-		Name  string
-		Src   []byte
-		VS    []byte
-		FS    []byte
-		HLSL  []byte
-		Metal []byte
+	if p.UniformDwordCount != 0 || len(p.Uniforms) != 0 {
+		t.Errorf("a shader without uniforms must have no uniform block: got %d dwords, %d uniforms", p.UniformDwordCount, len(p.Uniforms))
 	}
-
-	fnames := map[string]struct{}{}
-	for _, f := range files {
-		if f.IsDir() {
-			continue
-		}
-		fnames[f.Name()] = struct{}{}
+	var names []string
+	for _, ep := range p.Module.EntryPoints {
+		names = append(names, ep.Name)
 	}
-
-	tests := []testcase{}
-	for n := range fnames {
-		if !strings.HasSuffix(n, ".go") {
-			continue
-		}
-
-		src, err := os.ReadFile(filepath.Join("testdata", n))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		name := n[:len(n)-len(".go")]
-		tc := testcase{
-			Name: name,
-			Src:  src,
-		}
-
-		vsn := name + ".expected.vs"
-		if _, ok := fnames[vsn]; ok {
-			vs, err := os.ReadFile(filepath.Join("testdata", vsn))
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.VS = vs
-		}
-
-		fsn := name + ".expected.fs"
-		if _, ok := fnames[fsn]; ok {
-			fs, err := os.ReadFile(filepath.Join("testdata", fsn))
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.FS = fs
-		}
-
-		if tc.VS == nil && tc.FS == nil {
-			t.Fatalf("no expected file for %s", name)
-		}
-
-		hlsln := name + ".expected.hlsl"
-		if _, ok := fnames[hlsln]; ok {
-			hlsl, err := os.ReadFile(filepath.Join("testdata", hlsln))
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.HLSL = hlsl
-		}
-
-		metaln := name + ".expected.metal"
-		if _, ok := fnames[metaln]; ok {
-			metal, err := os.ReadFile(filepath.Join("testdata", metaln))
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.Metal = metal
-		}
-
-		tests = append(tests, tc)
+	slices.Sort(names)
+	if want := []string{shader.FragmentEntryPoint, shader.VertexEntryPoint}; !slices.Equal(names, want) {
+		t.Errorf("entry points: got %v, want %v", names, want)
 	}
+}
 
-	for _, tc := range tests {
-		t.Run(tc.Name, func(t *testing.T) {
-			s, err := shader.Compile(tc.Src, "Vertex", "Fragment", 0)
-			if err != nil {
-				t.Error(err)
-				return
+func TestCompileErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "no fragment",
+			src:  `fn other(v: Vertex) -> vec4f { return v.color; }`,
+			want: "fragment",
+		},
+		{
+			name: "syntax error on line 2",
+			src:  "\nfn fragment(v: Vertex) -> vec4f { return v.color }",
+			want: "line 2",
+		},
+		{
+			name: "unknown member on line 3",
+			src:  "\n\nfn fragment(v: Vertex) -> vec4f { return v.colour; }",
+			want: "3:",
+		},
+		{
+			name: "two uniform blocks",
+			src: `
+@group(1) @binding(0) var<uniform> a: vec4f;
+@group(1) @binding(1) var<uniform> b: vec4f;
+fn fragment(v: Vertex) -> vec4f { return a + b; }`,
+			want: "@group(1) @binding(0)",
+		},
+		{
+			name: "storage buffer",
+			src: `
+@group(1) @binding(0) var<storage> a: array<vec4f>;
+fn fragment(v: Vertex) -> vec4f { return a[0]; }`,
+			want: "storage",
+		},
+		{
+			name: "own entry point",
+			src: `
+@fragment fn fragment(@location(0) p: vec2f) -> @location(0) vec4f { return vec4f(p, 0.0, 1.0); }`,
+			want: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := shader.Compile([]byte(tc.src), 4)
+			if err == nil {
+				t.Fatal("Compile must fail")
 			}
-
-			// GLSL
-			vs, fs := glsl.Compile(s, glsl.GLSLVersionDefault)
-			if got, want := glslVertexNormalize(vs), glslVertexNormalize(string(tc.VS)); got != want {
-				compare(t, "GLSL Vertex", got, want)
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q must mention %q", err, tc.want)
 			}
-			if tc.FS != nil {
-				if got, want := glslFragmentNormalize(fs), glslFragmentNormalize(string(tc.FS)); got != want {
-					compare(t, "GLSL Fragment", got, want)
-				}
-			}
-
-			if tc.HLSL != nil {
-				vs, _, vertexPrelude, _ := hlsl.Compile(s)
-				if got, want := hlslNormalize(vs, vertexPrelude), hlslNormalize(string(tc.HLSL), vertexPrelude); got != want {
-					compare(t, "HLSL", got, want)
-				}
-			}
-
-			if tc.Metal != nil {
-				m := msl.Compile(s)
-				if got, want := metalNormalize(m), metalNormalize(string(tc.Metal)); got != want {
-					compare(t, "Metal", got, want)
-				}
-			}
-
-			// Just check that Compile doesn't cause panic.
-			// TODO: Should the results be tested?
-			msl.Compile(s)
 		})
 	}
 }
 
-func TestCompileAssignFromNoReturnValue(t *testing.T) {
-	srcs := []string{
-		`package main
-
-func bar() {
+func TestUniformLayout(t *testing.T) {
+	p, err := shader.Compile([]byte(`
+struct Uniforms {
+	center: vec2f,
+	radius: f32,
+	tint: vec4f,
+	m: mat3x3f,
+	arr: array<vec4f, 3>,
+	flag: i32,
+	m2: mat2x2f,
+	count: u32,
+	v3: vec3f,
 }
-
-func Fragment(position vec4, texCoord vec2, color vec4) vec4 {
-	x := bar()
-	return vec4(1)
-}`,
-		`package main
-
-func bar() {
+@group(1) @binding(0) var<uniform> u: Uniforms;
+fn fragment(v: Vertex) -> vec4f {
+	return u.tint * u.radius + vec4f(u.center, 0.0, 0.0) + vec4f(u.m[0], 0.0) + u.arr[u.flag] + vec4f(u.m2[1], 0.0, 0.0) * f32(u.count) + vec4f(u.v3, 0.0);
 }
-
-func Fragment(position vec4, texCoord vec2, color vec4) vec4 {
-	var x = bar()
-	return vec4(1)
-}`,
-	}
-	for _, src := range srcs {
-		_, err := shader.Compile([]byte(src), "Vertex", "Fragment", 0)
-		if err == nil {
-			t.Errorf("Compile must return an error for a function call with no return values, but got nil")
-		}
-	}
-}
-
-func TestCompileHLSLIntModulo(t *testing.T) {
-	src := []byte(`//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	a := int(src0Pos.x)
-	b := a % 3
-	return vec4(float(b))
-}`)
-	s, err := graphics.CompileShader(src)
+`), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ps, _, _ := hlsl.Compile(s)
-	if !strings.Contains(ps, "modInt(") {
-		t.Errorf("HLSL pixel shader should use modInt for integer modulo, but got:\n%s", ps)
+	// The WGSL uniform layout: mat3x3 columns are 16 bytes apart, arrays of vec4 are 16 bytes per
+	// element, mat2x2 columns are 8 bytes apart, vec3 is 16-byte aligned, and the whole block is
+	// padded to 16 bytes: 176 bytes.
+	if got, want := p.UniformDwordCount, 44; got != want {
+		t.Errorf("UniformDwordCount: got %d, want %d", got, want)
 	}
-	// The PSMain body must not use the '%' operator directly. modInt's own definition
-	// uses '%' on uints (which fxc does not warn about), so check only the body.
-	i := strings.Index(ps, "PSMain")
-	if i < 0 {
-		t.Fatalf("HLSL pixel shader should have a PSMain function, but got:\n%s", ps)
+	want := []shader.Uniform{
+		{Name: "center", Slots: []int{0, 1}, Kinds: []ir.ScalarKind{ir.ScalarFloat, ir.ScalarFloat}},
+		{Name: "radius", Slots: []int{2}, Kinds: []ir.ScalarKind{ir.ScalarFloat}},
+		{Name: "tint", Slots: []int{4, 5, 6, 7}, Kinds: []ir.ScalarKind{ir.ScalarFloat, ir.ScalarFloat, ir.ScalarFloat, ir.ScalarFloat}},
+		{Name: "m", Slots: []int{8, 9, 10, 12, 13, 14, 16, 17, 18}, Kinds: slices.Repeat([]ir.ScalarKind{ir.ScalarFloat}, 9)},
+		{Name: "arr", Slots: []int{20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}, Kinds: slices.Repeat([]ir.ScalarKind{ir.ScalarFloat}, 12)},
+		{Name: "flag", Slots: []int{32}, Kinds: []ir.ScalarKind{ir.ScalarSint}},
+		{Name: "m2", Slots: []int{34, 35, 36, 37}, Kinds: slices.Repeat([]ir.ScalarKind{ir.ScalarFloat}, 4)},
+		{Name: "count", Slots: []int{38}, Kinds: []ir.ScalarKind{ir.ScalarUint}},
+		{Name: "v3", Slots: []int{40, 41, 42}, Kinds: slices.Repeat([]ir.ScalarKind{ir.ScalarFloat}, 3)},
 	}
-	if body := ps[i:]; strings.Contains(body, " % ") {
-		t.Errorf("HLSL PSMain should not use the '%%' operator for integer modulo, but got:\n%s", body)
+	if len(p.Uniforms) != len(want) {
+		t.Fatalf("Uniforms: got %d, want %d", len(p.Uniforms), len(want))
 	}
-}
-
-func TestCompileVaryingTypeMismatchPosition(t *testing.T) {
-	src := `package main
-
-func Vertex(position vec4, texCoord vec2, color vec4) (vec4, vec2) {
-	return position, texCoord
-}
-
-func Fragment(position vec4, texCoord vec3, color vec4) vec4 {
-	return vec4(1)
-}`
-	_, err := shader.Compile([]byte(src), "Vertex", "Fragment", 0)
-	if err == nil {
-		t.Fatalf("Compile must return an error for a mismatched fragment argument, but got nil")
-	}
-	var perr *shader.ParseError
-	if !errors.As(err, &perr) {
-		t.Fatalf("Compile must return a *shader.ParseError, but got %v", err)
-	}
-	positions := perr.Positions()
-	if len(positions) == 0 {
-		t.Fatalf("Compile must report at least one error position, but got none")
-	}
-	// The errors must point at the fragment entry point, not at the beginning of the source.
-	for _, p := range positions {
-		if got, want := p.Line, 7; got != want {
-			t.Errorf("the error line: got: %d, want: %d (%v)", got, want, err)
+	for i, u := range p.Uniforms {
+		if u.Name != want[i].Name || !slices.Equal(u.Slots, want[i].Slots) || !slices.Equal(u.Kinds, want[i].Kinds) {
+			t.Errorf("Uniforms[%d]: got %+v, want %+v", i, u, want[i])
 		}
 	}
 }
 
-func TestCompileHugeShift(t *testing.T) {
-	src := `package main
+func TestNonStructUniform(t *testing.T) {
+	p, err := shader.Compile([]byte(`
+@group(1) @binding(0) var<uniform> tint: vec4f;
+fn fragment(v: Vertex) -> vec4f { return tint; }
+`), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Uniforms) != 1 || p.Uniforms[0].Name != "tint" || !slices.Equal(p.Uniforms[0].Slots, []int{0, 1, 2, 3}) {
+		t.Errorf("Uniforms: got %+v", p.Uniforms)
+	}
+	if p.UniformDwordCount != 4 {
+		t.Errorf("UniformDwordCount: got %d, want 4", p.UniformDwordCount)
+	}
+}
 
-func Fragment(position vec4, texCoord vec2, color vec4) vec4 {
-	x := 1 << (1 << 40)
-	return vec4(x)
-}`
-	_, err := shader.Compile([]byte(src), "Vertex", "Fragment", 0)
-	if err == nil {
-		t.Errorf("Compile must return an error for a huge constant shift, but got nil")
+func TestPreludeTextureCount(t *testing.T) {
+	if _, err := shader.Compile([]byte(`fn fragment(v: Vertex) -> vec4f { return src1_at(v.src_pos); }`), 2); err != nil {
+		t.Errorf("src1_at must exist with 2 textures: %v", err)
+	}
+	if _, err := shader.Compile([]byte(`fn fragment(v: Vertex) -> vec4f { return src2_at(v.src_pos); }`), 2); err == nil {
+		t.Error("src2_at must not exist with 2 textures")
 	}
 }

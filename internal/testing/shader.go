@@ -19,17 +19,14 @@ import (
 	"strings"
 
 	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
-// ShaderProgramFill returns a shader source to fill the frambuffer.
-func ShaderProgramFill(r, g, b, a byte) *shaderir.Program {
-	ir, err := graphics.CompileShader(fmt.Appendf(nil, `//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return vec4(%0.9f, %0.9f, %0.9f, %0.9f)
+// ShaderProgramFill returns a shader to fill the framebuffer with a color.
+func ShaderProgramFill(r, g, b, a byte) *shader.Program {
+	ir, err := graphics.CompileShader(fmt.Appendf(nil, `
+fn fragment(v: Vertex) -> vec4f {
+	return vec4f(%0.9f, %0.9f, %0.9f, %0.9f);
 }
 `, float64(r)/0xff, float64(g)/0xff, float64(b)/0xff, float64(a)/0xff))
 	if err != nil {
@@ -38,23 +35,24 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 	return ir
 }
 
-// ShaderProgramImages returns a shader source to render the frambuffer with the given images.
-func ShaderProgramImages(numImages int) *shaderir.Program {
+// ShaderProgramImages returns a shader to render the framebuffer with the sum of the given images.
+func ShaderProgramImages(numImages int) *shader.Program {
 	if numImages <= 0 {
 		panic("testing: numImages must be >= 1")
 	}
 
 	var exprs []string
 	for i := range numImages {
-		exprs = append(exprs, fmt.Sprintf("imageSrc%dUnsafeAt(src0Pos)", i))
+		if i == 0 {
+			exprs = append(exprs, "src0_unsafe_at(v.src_pos)")
+		} else {
+			exprs = append(exprs, fmt.Sprintf("src%d_unsafe_at_from_src0(v.src_pos)", i))
+		}
 	}
 
-	ir, err := graphics.CompileShader(fmt.Appendf(nil, `//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	return %s
+	ir, err := graphics.CompileShader(fmt.Appendf(nil, `
+fn fragment(v: Vertex) -> vec4f {
+	return %s;
 }
 `, strings.Join(exprs, " + ")))
 	if err != nil {

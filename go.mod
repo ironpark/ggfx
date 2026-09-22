@@ -6,6 +6,7 @@ require (
 	github.com/ebitengine/hideconsole v1.0.0
 	github.com/ebitengine/purego v0.11.0
 	github.com/go-text/typesetting v0.3.5
+	github.com/gogpu/naga v0.19.0
 	github.com/hajimehoshi/bitmapfont/v4 v4.2.0
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	golang.org/x/image v0.45.0

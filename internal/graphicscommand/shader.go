@@ -16,7 +16,7 @@ package graphicscommand
 
 import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 var nextShaderID = 1
@@ -29,14 +29,14 @@ func genNextShaderID() int {
 
 type Shader struct {
 	shader graphicsdriver.Shader
-	ir     *shaderir.Program
+	ir     *shader.Program
 	id     int
 
 	// name is used only for logging.
 	name string
 }
 
-func NewShader(ir *shaderir.Program, name string) *Shader {
+func NewShader(ir *shader.Program, name string) *Shader {
 	s := &Shader{
 		ir:   ir,
 		id:   genNextShaderID(),

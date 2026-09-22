@@ -14,9 +14,7 @@
 
 package atlas
 
-import (
-	"github.com/ironpark/ggfx/internal/shaderir"
-)
+import ()
 
 const (
 	BaseCountToPutOnSourceBackend = baseCountToPutOnSourceBackend
@@ -91,10 +89,6 @@ func BackendCountForTesting() int {
 
 func ClearShaderForTesting() *Shader {
 	return clearShader
-}
-
-func (s *Shader) SourceIDForTesting() shaderir.SourceID {
-	return s.ir.SourceID
 }
 
 func ShaderCountWithInternalShaderForTesting() int {

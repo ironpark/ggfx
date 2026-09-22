@@ -32,50 +32,30 @@ var (
 	stencilBufferEvenOddShader *Shader
 )
 
-//ebitengine:shadersource
-const stencilBufferFillShaderSrc = `//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4, custom vec4) vec4 {
-	if frontfacing() {
-		return vec4(0, 1.0 / 255.0, 0, 0)
+const stencilBufferFillShaderSrc = `
+fn fragment(v: Vertex) -> vec4f {
+	if (front_facing()) {
+		return vec4f(0.0, 1.0 / 255.0, 0.0, 0.0);
 	}
-	return vec4(1.0 / 255.0, 0, 0, 0)
+	return vec4f(1.0 / 255.0, 0.0, 0.0, 0.0);
 }
 `
 
-//ebitengine:shadersource
-const stencilBufferNonZeroShaderSrc = `//kage:unit pixels
-
-package main
-
-func round(x float) float {
-	return floor(x + 0.5)
-}
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	c := imageSrc0UnsafeAt(src0Pos)
-	w := abs(int(round(c.g*255)) - int(round(c.r*255)))
-	v := min(float(w), 1)
-	return v * imageSrc1UnsafeAtFromSrc0Pos(src0Pos) * color
+const stencilBufferNonZeroShaderSrc = `
+fn fragment(v: Vertex) -> vec4f {
+	let c = src0_unsafe_at(v.src_pos);
+	let w = abs(i32(floor(c.g * 255.0 + 0.5)) - i32(floor(c.r * 255.0 + 0.5)));
+	let value = min(f32(w), 1.0);
+	return value * src1_unsafe_at_from_src0(v.src_pos) * v.color;
 }
 `
 
-//ebitengine:shadersource
-const stencilBufferEvenOddShaderSrc = `//kage:unit pixels
-
-package main
-
-func round(x float) float {
-	return floor(x + 0.5)
-}
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	c := imageSrc0UnsafeAt(src0Pos)
-	w := abs(int(round(c.g*255)) - int(round(c.r*255)))
-	v := float(w % 2)
-	return v * imageSrc1UnsafeAtFromSrc0Pos(src0Pos) * color
+const stencilBufferEvenOddShaderSrc = `
+fn fragment(v: Vertex) -> vec4f {
+	let c = src0_unsafe_at(v.src_pos);
+	let w = abs(i32(floor(c.g * 255.0 + 0.5)) - i32(floor(c.r * 255.0 + 0.5)));
+	let value = f32(w % 2);
+	return value * src1_unsafe_at_from_src0(v.src_pos) * v.color;
 }
 `
 

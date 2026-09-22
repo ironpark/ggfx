@@ -23,7 +23,7 @@ import (
 
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 // command represents a drawing command.
@@ -366,7 +366,7 @@ func (c *newImageCommand) NeedsSync() bool {
 // newShaderCommand is a command to create a shader.
 type newShaderCommand struct {
 	result *Shader
-	ir     *shaderir.Program
+	ir     *shader.Program
 }
 
 func (c *newShaderCommand) String() string {

@@ -21,10 +21,8 @@ import (
 	"testing"
 
 	"github.com/ironpark/ggfx/internal/atlas"
-	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/legacyshader"
 	etesting "github.com/ironpark/ggfx/internal/testing"
 	"github.com/ironpark/ggfx/internal/ui"
 )
@@ -146,39 +144,5 @@ func TestGCShaderRemovesRegistryEntry(t *testing.T) {
 
 	if got, want := atlas.ShaderCountWithInternalShaderForTesting(), base; got != want {
 		t.Errorf("shader count after GC: got: %d, want: %d", got, want)
-	}
-}
-
-func TestBuiltinShaderSourceIDs(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		src    []byte
-		shader *atlas.Shader
-	}{
-		{
-			name:   "nearest",
-			src:    builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe),
-			shader: atlas.NearestFilterShader,
-		},
-		{
-			name:   "linear",
-			src:    builtinshader.ShaderSource(builtinshader.FilterLinear, builtinshader.AddressUnsafe),
-			shader: atlas.LinearFilterShader,
-		},
-		{
-			name:   "clear",
-			src:    []byte(builtinshader.ClearShaderSource),
-			shader: atlas.ClearShaderForTesting(),
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			want, err := legacyshader.CalcSourceID(tc.src)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := tc.shader.SourceIDForTesting(); got != want {
-				t.Errorf("source ID: got: %s, want: %s", got, want)
-			}
-		})
 	}
 }

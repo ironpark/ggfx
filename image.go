@@ -370,7 +370,7 @@ type Vertex struct {
 	// Be careful that SrcX/SrcY coordinates are on the image's bounds.
 	// This means that an upper-left point of a sub-image might not be (0, 0).
 	//
-	// Before passing vertices to a Kage shader, SrcX/SrcY are converted to texture coordinates of the first image,
+	// Before passing vertices to a shader, SrcX/SrcY are converted to texture coordinates of the first image,
 	// which is DrawRectShaderOptions.Image[0] or DrawTrianglesShaderOptions.Images[0].
 	// If the image is nil, SrcX/SrcY are not converted and used as-is.
 	SrcX float32
@@ -744,9 +744,7 @@ type DrawTrianglesShaderOptions struct {
 	// If a uniform variable's name doesn't exist in Uniforms, this is treated as if zero values are specified.
 	Uniforms map[string]any
 
-	// Images is a set of the source images.
-	// In the texel mode, all the image sizes must be the same.
-	// The pixel mode allows images of different sizes.
+	// Images is a set of the source images. The images may have different sizes.
 	Images [4]*Image
 
 	// FillRule indicates the rule how an overlapped region is rendered.
@@ -781,7 +779,6 @@ var _ [len(DrawTrianglesShaderOptions{}.Images) - graphics.ShaderSrcImageCount]s
 //
 // For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
 //
-// If the shader unit is texels, DrawTrianglesShader panics when a non-nil image's size is different from
 // the size of the image at index 0 of the specified images.
 // If the image at index 0 is nil, its size is treated as (0, 0) for this comparison.
 // If one of the specified image is non-nil and is disposed, DrawTrianglesShader panics.
@@ -817,7 +814,6 @@ func (i *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shader 
 //
 // For the details about the shader, see https://ebitengine.org/en/documents/shader.html.
 //
-// If the shader unit is texels, DrawTrianglesShader32 panics when a non-nil image's size is different from
 // the size of the image at index 0 of the specified images.
 // If the image at index 0 is nil, its size is treated as (0, 0) for this comparison.
 // If one of the specified image is non-nil and is disposed, DrawTrianglesShader32 panics.
@@ -940,20 +936,9 @@ func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shade
 	}
 
 	var imgs [graphics.ShaderSrcImageCount]*ui.Image
-	var imgSize image.Point
 	for i, img := range options.Images {
 		if img == nil {
 			continue
-		}
-		if shader.unitIsTexels() {
-			if i == 0 {
-				imgSize = img.Bounds().Size()
-			} else {
-				// TODO: Check imgw > 0 && imgh > 0
-				if img.Bounds().Size() != imgSize {
-					panic("ebiten: all the source images must be the same size")
-				}
-			}
 		}
 		imgs[i] = img.image
 	}
@@ -979,7 +964,7 @@ type DrawRectShaderOptions struct {
 	GeoM GeoM
 
 	// ColorScale is a scale of color.
-	// This scaling values are passed to the `color vec4` argument of the Fragment function in a Kage program.
+	// This scaling values are passed to the shader as v.color in fragment.
 	// The default (zero) value is identity, which is (1, 1, 1, 1).
 	ColorScale ColorScale
 
@@ -1022,15 +1007,9 @@ var _ [len(DrawRectShaderOptions{}.Images)]struct{} = [graphics.ShaderSrcImageCo
 //
 // If a specified uniform variable's length or type doesn't match with an expected one, DrawRectShader panics.
 //
-// In a shader, src0Pos in Fragment represents a position in a source image.
-// If no source images are specified, src0Pos represents the position from (0, 0) to (width, height) in pixels.
-// If the unit is pixels by a compiler directive `//kage:unit pixels`, src0Pos values are valid.
-// If the unit is texels (default), src0Pos values still take from (0, 0) to (width, height),
-// but these are invalid since src0Pos is expected to be in texels in the texel-unit mode.
-// This behavior is preserved for backward compatibility. It is recommended to use the pixel-unit mode to avoid confusion.
-//
-// If no source images are specified, imageSrc0Size returns a valid size only when the unit is pixels,
-// but always returns 0 when the unit is texels (default).
+// In a shader, v.src_pos in fragment represents a position in a source image.
+// If no source images are specified, v.src_pos represents the position from (0, 0) to (width, height) in pixels,
+// and src0_size returns (width, height).
 //
 // Even if a result is an invalid color as a premultiplied-alpha color, i.e. an alpha value exceeds other color values,
 // the value is kept and is not clamped.
@@ -1103,9 +1082,8 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 	var srcRegions [graphics.ShaderSrcImageCount]image.Rectangle
 	for i, img := range options.Images {
 		if img == nil {
-			if !shader.unitIsTexels() && i == 0 {
-				// Give the source size as pixels only when the unit is pixels so that users can get the source size via imageSrc0Size (#2166).
-				// With the texel mode, the imageSrc0Origin and imageSrc0Size values should be in texels so the source position in pixels would not match.
+			if i == 0 {
+				// Give the source size so that users can get the source size via src0_size (#2166).
 				srcRegions[i] = image.Rect(0, 0, width, height)
 			}
 			continue

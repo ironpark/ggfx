@@ -31,13 +31,15 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
-	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 var sel_supportsFamily = objc.RegisterName("supportsFamily:")
 
 type Graphics struct {
 	view view
+
+	tmpUniforms []uint32
 
 	colorSpace color.ColorSpace
 
@@ -516,11 +518,22 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	})
 	g.rce.SetVertexBuffer(g.vb, 0, 0)
 
-	if len(uniforms) > 0 {
-		uniforms := adjustUniformVariablesLayout(shader.ir.Uniforms, uniforms)
-		head := unsafe.SliceData(uniforms)
-		g.rce.SetVertexBytes(unsafe.Pointer(head), unsafe.Sizeof(uniforms[0])*uintptr(len(uniforms)), 1)
-		g.rce.SetFragmentBytes(unsafe.Pointer(head), unsafe.Sizeof(uniforms[0])*uintptr(len(uniforms)), 0)
+	// The internal uniform block comes first, then the user's block. Both are already laid out as
+	// the shader expects. In Metal, the NDC's Y direction (upward) and the framebuffer's Y
+	// direction (downward) don't match, so the projection matrix's Y is inverted on a copy.
+	g.tmpUniforms = append(g.tmpUniforms[:0], uniforms[:graphics.PreservedUniformDwordCount]...)
+	const p = graphics.ProjectionMatrixUniformDwordIndex
+	g.tmpUniforms[p+1] ^= 1 << 31
+	g.tmpUniforms[p+5] ^= 1 << 31
+	g.tmpUniforms[p+9] ^= 1 << 31
+	g.tmpUniforms[p+13] ^= 1 << 31
+	head := unsafe.SliceData(g.tmpUniforms)
+	g.rce.SetVertexBytes(unsafe.Pointer(head), unsafe.Sizeof(uniforms[0])*uintptr(len(g.tmpUniforms)), internalUniformBufferIndex)
+	g.rce.SetFragmentBytes(unsafe.Pointer(head), unsafe.Sizeof(uniforms[0])*uintptr(len(g.tmpUniforms)), internalUniformBufferIndex)
+	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 {
+		head := unsafe.SliceData(user)
+		g.rce.SetVertexBytes(unsafe.Pointer(head), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
+		g.rce.SetFragmentBytes(unsafe.Pointer(head), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
 	}
 
 	for i, src := range srcs {
@@ -634,7 +647,7 @@ func (g *Graphics) MaxImageSize() int {
 	return g.maxImageSize
 }
 
-func (g *Graphics) NewShader(program *shaderir.Program) (graphicsdriver.Shader, error) {
+func (g *Graphics) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
 	s, err := newShader(g.genNextShaderID(), g, g.view.getMTLDevice(), program)
 	if err != nil {
 		return nil, err
@@ -810,132 +823,4 @@ func (i *Image) ensureStencil() {
 		Usage:       mtl.TextureUsageRenderTarget,
 	}
 	i.stencil = i.graphics.view.getMTLDevice().NewTextureWithDescriptor(td)
-}
-
-// adjustUniformVariablesLayout returns adjusted uniform variables to match the Metal's memory layout.
-func adjustUniformVariablesLayout(uniformTypes []shaderir.Type, uniforms []uint32) []uint32 {
-	// Each type's alignment is defined by the specification.
-	// See https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
-
-	var values []uint32
-	fillZerosToFitAlignment := func(values []uint32, align int) []uint32 {
-		if len(values) == 0 {
-			return values
-		}
-		n0 := len(values)
-		n1 := ((len(values)-1)/align + 1) * align
-		if n0 == n1 {
-			return values
-		}
-		return append(values, make([]uint32, n1-n0)...)
-	}
-
-	var idx int
-	var byteAlign int
-	for i, typ := range uniformTypes {
-		n := typ.DwordCount()
-		switch typ.Main {
-		case shaderir.Bool:
-			if byteAlign == 0 {
-				values = append(values, uniforms[idx:idx+1]...)
-			} else {
-				values[len(values)-1] |= uniforms[idx] << (8 * byteAlign)
-			}
-		case shaderir.Float, shaderir.Int:
-			values = append(values, uniforms[idx:idx+n]...)
-		case shaderir.Vec2, shaderir.IVec2:
-			values = fillZerosToFitAlignment(values, 2)
-			values = append(values, uniforms[idx:idx+n]...)
-		case shaderir.Vec3, shaderir.IVec3:
-			values = fillZerosToFitAlignment(values, 4)
-			values = append(values, uniforms[idx:idx+n]...)
-			values = append(values, 0)
-		case shaderir.Vec4, shaderir.IVec4:
-			values = fillZerosToFitAlignment(values, 4)
-			values = append(values, uniforms[idx:idx+n]...)
-		case shaderir.Mat2:
-			values = fillZerosToFitAlignment(values, 2)
-			values = append(values, uniforms[idx:idx+n]...)
-		case shaderir.Mat3:
-			values = fillZerosToFitAlignment(values, 4)
-			values = append(values, uniforms[idx:idx+3]...)
-			values = append(values, 0)
-			values = append(values, uniforms[idx+3:idx+6]...)
-			values = append(values, 0)
-			values = append(values, uniforms[idx+6:idx+9]...)
-			values = append(values, 0)
-		case shaderir.Mat4:
-			values = fillZerosToFitAlignment(values, 4)
-			if i == graphics.ProjectionMatrixUniformVariableIndex {
-				// In Metal, the NDC's Y direction (upward) and the framebuffer's Y direction (downward) don't
-				// match. Then, the Y direction must be inverted.
-				// Invert the sign bits as float32 values.
-				u := uniforms[idx : idx+16]
-				values = append(values,
-					u[0], u[1]^uint32(1<<31), u[2], u[3],
-					u[4], u[5]^uint32(1<<31), u[6], u[7],
-					u[8], u[9]^uint32(1<<31), u[10], u[11],
-					u[12], u[13]^uint32(1<<31), u[14], u[15],
-				)
-			} else {
-				values = append(values, uniforms[idx:idx+n]...)
-			}
-		case shaderir.Array:
-			switch typ.Sub[0].Main {
-			case shaderir.Bool:
-				for i := range n {
-					if (i+byteAlign)%4 == 0 {
-						values = append(values, uniforms[idx+i])
-					} else {
-						values[len(values)-1] |= uniforms[idx+i] << (8 * ((i + byteAlign) % 4))
-					}
-				}
-			case shaderir.Float, shaderir.Int:
-				values = append(values, uniforms[idx:idx+n]...)
-			case shaderir.Vec2, shaderir.IVec2:
-				values = fillZerosToFitAlignment(values, 2)
-				values = append(values, uniforms[idx:idx+n]...)
-			case shaderir.Vec3, shaderir.IVec3:
-				values = fillZerosToFitAlignment(values, 4)
-				for j := 0; j < typ.Length; j++ {
-					values = append(values, uniforms[idx+3*j:idx+3*(j+1)]...)
-					values = append(values, 0)
-				}
-			case shaderir.Vec4, shaderir.IVec4:
-				values = fillZerosToFitAlignment(values, 4)
-				values = append(values, uniforms[idx:idx+n]...)
-			case shaderir.Mat2:
-				values = fillZerosToFitAlignment(values, 2)
-				values = append(values, uniforms[idx:idx+n]...)
-			case shaderir.Mat3:
-				values = fillZerosToFitAlignment(values, 4)
-				for j := 0; j < typ.Length; j++ {
-					values = append(values, uniforms[idx+9*j:idx+9*j+3]...)
-					values = append(values, 0)
-					values = append(values, uniforms[idx+9*j+3:idx+9*j+6]...)
-					values = append(values, 0)
-					values = append(values, uniforms[idx+9*j+6:idx+9*j+9]...)
-					values = append(values, 0)
-				}
-			case shaderir.Mat4:
-				values = fillZerosToFitAlignment(values, 4)
-				values = append(values, uniforms[idx:idx+n]...)
-			default:
-				panic(fmt.Sprintf("metal: not implemented type for uniform variables: %s", typ.String()))
-			}
-		default:
-			panic(fmt.Sprintf("metal: not implemented type for uniform variables: %s", typ.String()))
-		}
-
-		idx += n
-
-		if typ.Main == shaderir.Bool || (typ.Main == shaderir.Array && typ.Sub[0].Main == shaderir.Bool) {
-			byteAlign += n
-			byteAlign %= 4
-		} else {
-			byteAlign = 0
-		}
-	}
-
-	return values
 }

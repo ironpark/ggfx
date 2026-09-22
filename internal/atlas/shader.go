@@ -23,9 +23,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
+	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
-	"github.com/ironpark/ggfx/internal/legacyshader"
-	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 // shadersWithInternalShader keeps track of shaders that have internal graphicscommand.Shader.
@@ -79,13 +79,13 @@ func (s *shadersWithInternalShader) deallocateInternalShaders() {
 var theShadersWithInternalShader shadersWithInternalShader
 
 type Shader struct {
-	ir      *shaderir.Program
+	ir      *shader.Program
 	shader  *graphicscommand.Shader
 	name    string
 	cleanup runtime.Cleanup
 }
 
-func NewShader(ir *shaderir.Program, name string) *Shader {
+func NewShader(ir *shader.Program, name string) *Shader {
 	// A shader is initialized lazily, and the lock is not needed.
 	return &Shader{
 		ir:   ir,
@@ -153,11 +153,9 @@ var (
 
 func init() {
 	var wg errgroup.Group
-	var nearestIR, linearIR, clearIR *shaderir.Program
-	// Compile through legacyshader, the same path a user's shader takes. A source ID identifies the
-	// source the core compiles, and shader precompilation knows only the IDs from that path.
+	var nearestIR, linearIR, clearIR *shader.Program
 	wg.Go(func() error {
-		ir, _, err := legacyshader.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+		ir, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
 		if err != nil {
 			return fmt.Errorf("atlas: compiling the nearest shader failed: %w", err)
 		}
@@ -165,7 +163,7 @@ func init() {
 		return nil
 	})
 	wg.Go(func() error {
-		ir, _, err := legacyshader.CompileShader(builtinshader.ShaderSource(builtinshader.FilterLinear, builtinshader.AddressUnsafe))
+		ir, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterLinear, builtinshader.AddressUnsafe))
 		if err != nil {
 			return fmt.Errorf("atlas: compiling the linear shader failed: %w", err)
 		}
@@ -173,7 +171,7 @@ func init() {
 		return nil
 	})
 	wg.Go(func() error {
-		ir, _, err := legacyshader.CompileShader([]byte(builtinshader.ClearShaderSource))
+		ir, err := graphics.CompileShader([]byte(builtinshader.ClearShaderSource))
 		if err != nil {
 			return fmt.Errorf("atlas: compiling the clear shader failed: %w", err)
 		}

@@ -17,36 +17,29 @@ package graphics
 const (
 	ShaderSrcImageCount = 4
 
-	// PreservedUniformVariablesCount represents the number of preserved uniform variables.
-	// Any shaders in Ebitengine must have these uniform variables.
-	PreservedUniformVariablesCount = 1 + // the destination texture size
-		1 + // the source texture sizes array
-		1 + // the destination image region origin
-		1 + // the destination image region size
-		1 + // the source image region origins
-		1 + // the source image region sizes array
-		1 // the projection matrix
+	// The internal uniform block, as the shader prelude declares it (see shader.Prelude). Every
+	// value is a float32 dword; the layout follows WGSL's uniform address space rules, so vec2
+	// arrays are stored as vec4 arrays.
+	//
+	//	dst_texture_size:  vec2f
+	//	dst_origin:        vec2f
+	//	dst_size:          vec2f
+	//	(padding)
+	//	src_texture_sizes: array<vec4f, ShaderSrcImageCount>
+	//	src_origins:       array<vec4f, ShaderSrcImageCount>
+	//	src_sizes:         array<vec4f, ShaderSrcImageCount>
+	//	projection:        mat4x4f
+	DstTextureSizeUniformDwordIndex          = 0
+	DstRegionOriginUniformDwordIndex         = 2
+	DstRegionSizeUniformDwordIndex           = 4
+	SourceTextureSizeUniformDwordIndex       = 8
+	SourceImageRegionOriginUniformDwordIndex = SourceTextureSizeUniformDwordIndex + 4*ShaderSrcImageCount
+	SourceImageRegionSizeUniformDwordIndex   = SourceImageRegionOriginUniformDwordIndex + 4*ShaderSrcImageCount
+	ProjectionMatrixUniformDwordIndex        = SourceImageRegionSizeUniformDwordIndex + 4*ShaderSrcImageCount
 
-	ProjectionMatrixUniformVariableIndex = 6
-
-	PreservedUniformDwordCount = 2 + // the destination texture size
-		2*ShaderSrcImageCount + // the source texture sizes array
-		2 + // the destination image region origin
-		2 + // the destination image region size
-		2*ShaderSrcImageCount + // the source image region origins array
-		2*ShaderSrcImageCount + // the source image region sizes array
-		16 // the projection matrix
-
-	SourceImageRegionOriginUniformDwordIndex = 2 + // the destination texture size
-		2*ShaderSrcImageCount + // the source texture sizes array
-		2 + // the destination image region origin
-		2 // the destination image region size
-
-	SourceImageRegionSizeUniformDwordIndex = SourceImageRegionOriginUniformDwordIndex +
-		2*ShaderSrcImageCount // the source image region origins array
-
-	ProjectionMatrixUniformDwordIndex = SourceImageRegionSizeUniformDwordIndex +
-		2*ShaderSrcImageCount // the source image region sizes array
+	// PreservedUniformDwordCount is the size of the internal uniform block in dwords. A user's
+	// uniform block follows it in the uniform values passed to a graphics driver.
+	PreservedUniformDwordCount = ProjectionMatrixUniformDwordIndex + 16
 )
 
 const (

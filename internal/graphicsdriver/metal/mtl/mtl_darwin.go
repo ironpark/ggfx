@@ -368,9 +368,49 @@ type Resource interface {
 // RenderPipelineDescriptor configures new RenderPipelineState objects.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrenderpipelinedescriptor?language=objc.
+// VertexFormat is the format of a vertex attribute.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlvertexformat.
+type VertexFormat uint
+
+const (
+	VertexFormatFloat  VertexFormat = 28
+	VertexFormatFloat2 VertexFormat = 29
+	VertexFormatFloat3 VertexFormat = 30
+	VertexFormatFloat4 VertexFormat = 31
+)
+
+// VertexAttributeDescriptor describes one vertex attribute.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlvertexattributedescriptor.
+type VertexAttributeDescriptor struct {
+	Format      VertexFormat
+	Offset      int
+	BufferIndex int
+}
+
+// VertexBufferLayoutDescriptor describes how a vertex buffer is stepped through, per vertex.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlvertexbufferlayoutdescriptor.
+type VertexBufferLayoutDescriptor struct {
+	Stride int
+}
+
+// VertexDescriptor describes the vertex inputs of a render pipeline. Attributes[i] is attribute
+// i and Layouts[i] is the layout of buffer i.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlvertexdescriptor.
+type VertexDescriptor struct {
+	Attributes []VertexAttributeDescriptor
+	Layouts    []VertexBufferLayoutDescriptor
+}
+
 type RenderPipelineDescriptor struct {
 	// VertexFunction is a programmable function that processes individual vertices in a rendering pass.
 	VertexFunction Function
+
+	// VertexDescriptor describes the vertex inputs, or nil when the vertex function reads them itself.
+	VertexDescriptor *VertexDescriptor
 
 	// FragmentFunction is a programmable function that processes individual fragments in a rendering pass.
 	FragmentFunction Function
@@ -480,6 +520,7 @@ type Device struct {
 
 var (
 	class_MTLRenderPipelineDescriptor = objc.GetClass("MTLRenderPipelineDescriptor")
+	class_MTLVertexDescriptor         = objc.GetClass("MTLVertexDescriptor")
 	class_MTLTextureDescriptor        = objc.GetClass("MTLTextureDescriptor")
 	class_MTLDepthStencilDescriptor   = objc.GetClass("MTLDepthStencilDescriptor")
 	class_MTLRenderPassDescriptor     = objc.GetClass("MTLRenderPassDescriptor")
@@ -501,6 +542,14 @@ var (
 	sel_localizedDescription                                                                                                          = objc.RegisterName("localizedDescription")
 	sel_setVertexFunction                                                                                                             = objc.RegisterName("setVertexFunction:")
 	sel_setFragmentFunction                                                                                                           = objc.RegisterName("setFragmentFunction:")
+	sel_setVertexDescriptor                                                                                                           = objc.RegisterName("setVertexDescriptor:")
+	sel_vertexDescriptor                                                                                                              = objc.RegisterName("vertexDescriptor")
+	sel_attributes                                                                                                                    = objc.RegisterName("attributes")
+	sel_layouts                                                                                                                       = objc.RegisterName("layouts")
+	sel_setFormat                                                                                                                     = objc.RegisterName("setFormat:")
+	sel_setOffset                                                                                                                     = objc.RegisterName("setOffset:")
+	sel_setBufferIndex                                                                                                                = objc.RegisterName("setBufferIndex:")
+	sel_setStride                                                                                                                     = objc.RegisterName("setStride:")
 	sel_colorAttachments                                                                                                              = objc.RegisterName("colorAttachments")
 	sel_objectAtIndexedSubscript                                                                                                      = objc.RegisterName("objectAtIndexedSubscript:")
 	sel_setPixelFormat                                                                                                                = objc.RegisterName("setPixelFormat:")
@@ -695,6 +744,22 @@ func (d Device) NewRenderPipelineStateWithDescriptor(rpd RenderPipelineDescripto
 	colorAttachments0.Send(sel_setRgbBlendOperation, uintptr(rpd.ColorAttachments[0].RGBBlendOperation))
 	colorAttachments0.Send(sel_setWriteMask, uintptr(rpd.ColorAttachments[0].WriteMask))
 	renderPipelineDescriptor.Send(sel_setStencilAttachmentPixelFormat, uintptr(rpd.StencilAttachmentPixelFormat))
+	if vd := rpd.VertexDescriptor; vd != nil {
+		vertexDescriptor := objc.ID(class_MTLVertexDescriptor).Send(sel_vertexDescriptor)
+		attributes := vertexDescriptor.Send(sel_attributes)
+		for i, a := range vd.Attributes {
+			attribute := attributes.Send(sel_objectAtIndexedSubscript, i)
+			attribute.Send(sel_setFormat, uintptr(a.Format))
+			attribute.Send(sel_setOffset, uintptr(a.Offset))
+			attribute.Send(sel_setBufferIndex, uintptr(a.BufferIndex))
+		}
+		layouts := vertexDescriptor.Send(sel_layouts)
+		for i, l := range vd.Layouts {
+			layout := layouts.Send(sel_objectAtIndexedSubscript, i)
+			layout.Send(sel_setStride, uintptr(l.Stride))
+		}
+		renderPipelineDescriptor.Send(sel_setVertexDescriptor, vertexDescriptor)
+	}
 	var err cocoa.NSError
 	renderPipelineState := d.device.Send(sel_newRenderPipelineStateWithDescriptor_error,
 		renderPipelineDescriptor,

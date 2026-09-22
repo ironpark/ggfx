@@ -120,118 +120,84 @@ func ensureStencilBufferEvenOddShader(antialias bool) (*ggfx.Shader, error) {
 	return stencilBufferEvenOddShader, nil
 }
 
-//ebitengine:shadersource
-const stencilBufferFillShaderSrc = `//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4, custom vec4) vec4 {
-	v := 1.0 / 255.0
-	if frontfacing() {
-		v *= 16
+const stencilBufferFillShaderSrc = `
+fn fragment(v: Vertex) -> vec4f {
+	var value = 1.0 / 255.0;
+	if (front_facing()) {
+		value *= 16.0;
 	}
-	return v * color
+	return value * v.color;
 }
 `
 
-//ebitengine:shadersource
-const stencilBufferBezierShaderSrc = `//kage:unit pixels
-
-package main
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4, custom vec4) vec4 {
-	// Loop-Blinn algorithm.
-	// https://developer.nvidia.com/gpugems/gpugems3/part-iv-image-effects/chapter-25-rendering-vector-art-gpu
-	uv := custom.xy
-	v := clamp(-sign(uv.x * uv.x - uv.y), 0, 1) * 1.0/255.0
-	// This is opposite to the fill shader, especially for the non-zero fill rule.
-	if !frontfacing() {
-		v *= 16
+const stencilBufferBezierShaderSrc = `
+fn fragment(v: Vertex) -> vec4f {
+	// See "Resolution Independent Curve Rendering using Programmable Graphics Hardware" by
+	// Charles Loop and Jim Blinn.
+	let uv = v.custom.xy;
+	var value = clamp(-sign(uv.x * uv.x - uv.y), 0.0, 1.0) * 1.0 / 255.0;
+	// The winding of a bezier's triangle is the opposite of a fill's triangle.
+	if (!front_facing()) {
+		value *= 16.0;
 	}
-	return v * color
+	return value * v.color;
 }
 `
 
-//ebitengine:shadersource
-const stencilBufferNonZeroShaderSrc = `//kage:unit pixels
-
-package main
-
-func round(x float) float {
-	return floor(x + 0.5)
-}
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	c := imageSrc0UnsafeAt(src0Pos)
-	r := int(round(c.r*255))
-	w := abs((r >> 4) - (r & 0x0F))
-	v := min(float(w), 1)
-	return v * color
+const stencilBufferNonZeroShaderSrc = `
+fn fragment(v: Vertex) -> vec4f {
+	let c = src0_unsafe_at(v.src_pos);
+	let r = i32(floor(c.r * 255.0 + 0.5));
+	let w = abs((r >> 4u) - (r & 15));
+	let value = min(f32(w), 1.0);
+	return value * v.color;
 }
 `
 
-//ebitengine:shadersource
-const stencilBufferNonZeroAAShaderSrc = `//kage:unit pixels
-
-package main
-
-func round(x vec4) vec4 {
-	return floor(x + 0.5)
+const stencilBufferNonZeroAAShaderSrc = `
+fn round4(x: vec4f) -> vec4f {
+	return floor(x + 0.5);
 }
 
-func Fragment(dstPos vec4, src0Pos vec2, color vec4, custom vec4) vec4 {
-	c0 := imageSrc0UnsafeAt(src0Pos)
-	// imageSrc1UnsafeAt uses the offset info, which would prevent batching.
-	// Use a custom offset instead.
-	c1 := imageSrc0UnsafeAt(src0Pos + custom.xy)
-	ci0 := ivec4(round(c0*255))
-	ci1 := ivec4(round(c1*255))
-	w0 := abs((ci0 >> 4) - (ci0 & 0x0F))
-	w1 := abs((ci1 >> 4) - (ci1 & 0x0F))
-	v0 := min(vec4(w0), 1)
-	v1 := min(vec4(w1), 1)
-	return (dot(v0, vec4(1.0/8.0)) + dot(v1, vec4(1.0/8.0))) * color
+fn fragment(v: Vertex) -> vec4f {
+	let c0 = src0_unsafe_at(v.src_pos);
+	// custom.xy is the offset to the second sample.
+	let c1 = src0_unsafe_at(v.src_pos + v.custom.xy);
+	let ci0 = vec4i(round4(c0 * 255.0));
+	let ci1 = vec4i(round4(c1 * 255.0));
+	let w0 = abs((ci0 >> vec4u(4u)) - (ci0 & vec4i(15)));
+	let w1 = abs((ci1 >> vec4u(4u)) - (ci1 & vec4i(15)));
+	let v0 = min(vec4f(w0), vec4f(1.0));
+	let v1 = min(vec4f(w1), vec4f(1.0));
+	return (dot(v0, vec4f(1.0 / 8.0)) + dot(v1, vec4f(1.0 / 8.0))) * v.color;
 }
 `
 
-//ebitengine:shadersource
-const stencilBufferEvenOddShaderSrc = `//kage:unit pixels
-
-package main
-
-func round(x float) float {
-	return floor(x + 0.5)
-}
-
-func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
-	c := imageSrc0UnsafeAt(src0Pos)
-	r := int(round(c.r*255))
-	w := abs((r >> 4) - (r & 0x0F))
-	v := float(w % 2)
-	return v * color
+const stencilBufferEvenOddShaderSrc = `
+fn fragment(v: Vertex) -> vec4f {
+	let c = src0_unsafe_at(v.src_pos);
+	let r = i32(floor(c.r * 255.0 + 0.5));
+	let w = abs((r >> 4u) - (r & 15));
+	let value = f32(w % 2);
+	return value * v.color;
 }
 `
 
-//ebitengine:shadersource
-const stencilBufferEvenOddAAShaderSrc = `//kage:unit pixels
-
-package main
-
-func round(x vec4) vec4 {
-	return floor(x + 0.5)
+const stencilBufferEvenOddAAShaderSrc = `
+fn round4(x: vec4f) -> vec4f {
+	return floor(x + 0.5);
 }
 
-func Fragment(dstPos vec4, src0Pos vec2, color vec4, custom vec4) vec4 {
-	c0 := imageSrc0UnsafeAt(src0Pos)
-	// imageSrc1UnsafeAt uses the offset info, which would prevent batching.
-	// Use a custom offset instead.
-	c1 := imageSrc0UnsafeAt(src0Pos + custom.xy)
-	ci0 := ivec4(round(c0*255))
-	ci1 := ivec4(round(c1*255))
-	w0 := abs((ci0 >> 4) - (ci0 & 0x0F))
-	w1 := abs((ci1 >> 4) - (ci1 & 0x0F))
-	v0 := vec4(w0 % 2)
-	v1 := vec4(w1 % 2)
-	return (dot(v0, vec4(1.0/8.0)) + dot(v1, vec4(1.0/8.0))) * color
+fn fragment(v: Vertex) -> vec4f {
+	let c0 = src0_unsafe_at(v.src_pos);
+	// custom.xy is the offset to the second sample.
+	let c1 = src0_unsafe_at(v.src_pos + v.custom.xy);
+	let ci0 = vec4i(round4(c0 * 255.0));
+	let ci1 = vec4i(round4(c1 * 255.0));
+	let w0 = abs((ci0 >> vec4u(4u)) - (ci0 & vec4i(15)));
+	let w1 = abs((ci1 >> vec4u(4u)) - (ci1 & vec4i(15)));
+	let v0 = vec4f(w0 % vec4i(2));
+	let v1 = vec4f(w1 % vec4i(2));
+	return (dot(v0, vec4f(1.0 / 8.0)) + dot(v1, vec4f(1.0 / 8.0))) * v.color;
 }
 `

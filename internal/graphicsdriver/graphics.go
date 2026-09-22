@@ -19,7 +19,7 @@ import (
 
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 type DstRegion struct {
@@ -58,7 +58,7 @@ type Graphics interface {
 	NeedsClearingScreen() bool
 	MaxImageSize() int
 
-	NewShader(program *shaderir.Program) (Shader, error)
+	NewShader(program *shader.Program) (Shader, error)
 
 	// DrawTriangles draws an image onto another image with the given parameters.
 	DrawTriangles(dst ImageID, srcs [graphics.ShaderSrcImageCount]ImageID, shader ShaderID, dstRegions []DstRegion, indexOffset int, blend Blend, uniforms []uint32) error
