@@ -23,54 +23,27 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/shaderir"
-	"github.com/ironpark/ggfx/internal/shaderir/hlsl"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 var inputElementDescsForDX11 []_D3D11_INPUT_ELEMENT_DESC
 
 func init() {
-	inputElementDescsForDX11 = []_D3D11_INPUT_ELEMENT_DESC{
-		{
-			SemanticName:         &([]byte("POSITION\000"))[0],
-			SemanticIndex:        0,
-			Format:               _DXGI_FORMAT_R32G32_FLOAT,
-			InputSlot:            0,
-			AlignedByteOffset:    _D3D11_APPEND_ALIGNED_ELEMENT,
-			InputSlotClass:       _D3D11_INPUT_PER_VERTEX_DATA,
-			InstanceDataStepRate: 0,
-		},
-		{
-			SemanticName:         &([]byte("TEXCOORD\000"))[0],
-			SemanticIndex:        0,
-			Format:               _DXGI_FORMAT_R32G32_FLOAT,
-			InputSlot:            0,
-			AlignedByteOffset:    _D3D11_APPEND_ALIGNED_ELEMENT,
-			InputSlotClass:       _D3D11_INPUT_PER_VERTEX_DATA,
-			InstanceDataStepRate: 0,
-		},
-		{
-			SemanticName:         &([]byte("COLOR\000"))[0],
-			SemanticIndex:        0,
-			Format:               _DXGI_FORMAT_R32G32B32A32_FLOAT,
-			InputSlot:            0,
-			AlignedByteOffset:    _D3D11_APPEND_ALIGNED_ELEMENT,
-			InputSlotClass:       _D3D11_INPUT_PER_VERTEX_DATA,
-			InstanceDataStepRate: 0,
-		},
-	}
+	// The semantics follow naga's HLSL output: attribute i is LOC with semantic index i.
+	loc := &([]byte("LOC\000"))[0]
+	formats := []_DXGI_FORMAT{_DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32B32A32_FLOAT}
 	diff := graphics.VertexFloatCount - 8
-	if diff == 0 {
-		return
-	}
 	if diff%4 != 0 {
 		panic("directx: unexpected attribute layout")
 	}
-	for i := range diff / 4 {
+	for range diff / 4 {
+		formats = append(formats, _DXGI_FORMAT_R32G32B32A32_FLOAT)
+	}
+	for i, f := range formats {
 		inputElementDescsForDX11 = append(inputElementDescsForDX11, _D3D11_INPUT_ELEMENT_DESC{
-			SemanticName:         &([]byte("COLOR\000"))[0],
-			SemanticIndex:        uint32(i) + 1,
-			Format:               _DXGI_FORMAT_R32G32B32A32_FLOAT,
+			SemanticName:         loc,
+			SemanticIndex:        uint32(i),
+			Format:               f,
 			InputSlot:            0,
 			AlignedByteOffset:    _D3D11_APPEND_ALIGNED_ELEMENT,
 			InputSlotClass:       _D3D11_INPUT_PER_VERTEX_DATA,
@@ -187,10 +160,9 @@ func newGraphics11(useWARP bool, useDebugLayer bool) (gr11 *graphics11, ferr err
 
 	// Avoid _D3D_FEATURE_LEVEL_11_1 as DirectX 11.0 doesn't recognize this.
 	// Avoid _D3D_FEATURE_LEVEL_9_* for some shaders features (#1431).
+	// Shader model 5.0 needs feature level 11.0.
 	featureLevels := []_D3D_FEATURE_LEVEL{
 		_D3D_FEATURE_LEVEL_11_0,
-		_D3D_FEATURE_LEVEL_10_1,
-		_D3D_FEATURE_LEVEL_10_0,
 	}
 
 	// Apparently, adapter must be nil if the driver type is not unknown. This is not documented explicitly.
@@ -496,19 +468,18 @@ func (g *graphics11) MaxImageSize() int {
 	}
 }
 
-func (g *graphics11) NewShader(program *shaderir.Program) (graphicsdriver.Shader, error) {
+func (g *graphics11) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
 	vsh, psh, err := compileShader(program)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &shader11{
-		graphics:         g,
-		id:               g.genNextShaderID(),
-		uniformTypes:     program.Uniforms,
-		uniformOffsets:   hlsl.UniformVariableOffsetsInDwords(program),
-		vertexShaderBlob: vsh,
-		pixelShaderBlob:  psh,
+		graphics:               g,
+		id:                     g.genNextShaderID(),
+		userConstantBufferSize: userConstantBufferSize(program),
+		vertexShaderBlob:       vsh,
+		pixelShaderBlob:        psh,
 	}
 	g.addShader(s)
 	return s, nil

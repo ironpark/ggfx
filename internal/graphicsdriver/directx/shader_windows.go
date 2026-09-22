@@ -1,4 +1,4 @@
-// Copyright 2023 The Ebitengine Authors
+// Copyright 2022 The Ebiten Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,28 +16,46 @@ package directx
 
 import (
 	"fmt"
-	"unsafe"
 
+	"github.com/gogpu/naga/hlsl"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/microsoftgdk"
-	"github.com/ironpark/ggfx/internal/shaderir"
-	"github.com/ironpark/ggfx/internal/shaderir/hlsl"
-	"github.com/ironpark/ggfx/internal/shaderprecomp"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 const (
-	VertexShaderProfile = "vs_4_0"
-	PixelShaderProfile  = "ps_4_0"
-
-	VertexShaderEntryPoint = "VSMain"
-	PixelShaderEntryPoint  = "PSMain"
+	VertexShaderProfile = "vs_5_0"
+	PixelShaderProfile  = "ps_5_0"
 )
+
+// The constant buffer registers the shader's uniform blocks are bound at, and the size of the
+// internal block's constant buffer in bytes.
+const (
+	internalConstantBufferRegister = 0
+	userConstantBufferRegister     = 1
+
+	internalConstantBufferSize = graphics.PreservedUniformDwordCount * 4
+)
+
+// hlslOptions maps the shader's resource bindings to HLSL registers.
+func hlslOptions(program *shader.Program) *hlsl.Options {
+	o := hlsl.DefaultOptions()
+	o.ShaderModel = hlsl.ShaderModel5_0
+	o.BindingMap = map[hlsl.ResourceBinding]hlsl.BindTarget{
+		{Group: shader.InternalUniformBinding.Group, Binding: shader.InternalUniformBinding.Binding}: {Register: internalConstantBufferRegister},
+		{Group: shader.UserUniformBinding.Group, Binding: shader.UserUniformBinding.Binding}:         {Register: userConstantBufferRegister},
+	}
+	for i := range program.TextureCount {
+		b := shader.TextureBinding(i)
+		o.BindingMap[hlsl.ResourceBinding{Group: b.Group, Binding: b.Binding}] = hlsl.BindTarget{Register: uint32(i)}
+	}
+	return o
+}
 
 var vertexShaderCache = map[string]*_ID3DBlob{}
 
-func compileShader(program *shaderir.Program) (_, _ *_ID3DBlob, ferr error) {
+func compileShader(program *shader.Program) (_, _ *_ID3DBlob, ferr error) {
 	var vsh, psh *_ID3DBlob
 	defer func() {
 		if ferr == nil {
@@ -51,32 +69,19 @@ func compileShader(program *shaderir.Program) (_, _ *_ID3DBlob, ferr error) {
 		}
 	}()
 
-	// Windows and Xbox precompiled binaries are registered separately as a precaution, since Xbox uses
-	// the GDK's own shader compiler and the binaries are not guaranteed to be interchangeable.
-	dxbcPlatform := shaderprecomp.DXBCPlatformWindows
-	if microsoftgdk.IsXbox() {
-		dxbcPlatform = shaderprecomp.DXBCPlatformXbox
+	src, info, err := hlsl.Compile(program.Module, hlslOptions(program))
+	if err != nil {
+		return nil, nil, fmt.Errorf("directx: translating the shader to HLSL failed: %w", err)
 	}
-	if vshBin, pshBin, ok := shaderprecomp.DXBCs(program.SourceID, dxbcPlatform); ok {
-		var err error
-		if vsh, err = _D3DCreateBlob(uint(len(vshBin))); err != nil {
-			return nil, nil, err
-		}
-		if psh, err = _D3DCreateBlob(uint(len(pshBin))); err != nil {
-			return nil, nil, err
-		}
-		copy(unsafe.Slice((*byte)(vsh.GetBufferPointer()), vsh.GetBufferSize()), vshBin)
-		copy(unsafe.Slice((*byte)(psh.GetBufferPointer()), psh.GetBufferSize()), pshBin)
-		return vsh, psh, nil
-	}
+	vsEntry := info.EntryPointNames[shader.VertexEntryPoint]
+	psEntry := info.EntryPointNames[shader.FragmentEntryPoint]
 
-	vs, ps, _, _ := hlsl.Compile(program)
 	var flag uint32 = uint32(_D3DCOMPILE_OPTIMIZATION_LEVEL3)
 
 	var wg errgroup.Group
 
 	// Vertex shaders are likely the same. If so, reuse the same _ID3DBlob.
-	if v, ok := vertexShaderCache[vs]; ok {
+	if v, ok := vertexShaderCache[src]; ok {
 		// Increment the reference count not to release this object unexpectedly.
 		// The value will be removed when the count reached 0.
 		// See (*Shader).disposeImpl.
@@ -85,22 +90,22 @@ func compileShader(program *shaderir.Program) (_, _ *_ID3DBlob, ferr error) {
 	} else {
 		defer func() {
 			if ferr == nil {
-				vertexShaderCache[vs] = vsh
+				vertexShaderCache[src] = vsh
 			}
 		}()
 		wg.Go(func() error {
-			v, err := _D3DCompile([]byte(vs), "shader", nil, nil, VertexShaderEntryPoint, VertexShaderProfile, flag, 0)
+			v, err := _D3DCompile([]byte(src), "shader", nil, nil, vsEntry, VertexShaderProfile, flag, 0)
 			if err != nil {
-				return fmt.Errorf("directx: D3DCompile for VSMain failed, original source: %s, %w", vs, err)
+				return fmt.Errorf("directx: D3DCompile for the vertex shader failed, original source: %s, %w", src, err)
 			}
 			vsh = v
 			return nil
 		})
 	}
 	wg.Go(func() error {
-		p, err := _D3DCompile([]byte(ps), "shader", nil, nil, PixelShaderEntryPoint, PixelShaderProfile, flag, 0)
+		p, err := _D3DCompile([]byte(src), "shader", nil, nil, psEntry, PixelShaderProfile, flag, 0)
 		if err != nil {
-			return fmt.Errorf("directx: D3DCompile for PSMain failed, original source: %s, %w", ps, err)
+			return fmt.Errorf("directx: D3DCompile for the pixel shader failed, original source: %s, %w", src, err)
 		}
 		psh = p
 		return nil
@@ -113,201 +118,8 @@ func compileShader(program *shaderir.Program) (_, _ *_ID3DBlob, ferr error) {
 	return vsh, psh, nil
 }
 
-func constantBufferSize(uniformTypes []shaderir.Type, uniformOffsets []int) int {
-	var size int
-	for i, typ := range uniformTypes {
-		if size < uniformOffsets[i] {
-			size = uniformOffsets[i]
-		}
-
-		switch typ.Main {
-		case shaderir.Bool:
-			// Bool is 4 bytes in HLSL.
-			size += 1
-		case shaderir.Float:
-			size += 1
-		case shaderir.Int:
-			size += 1
-		case shaderir.Vec2, shaderir.IVec2:
-			size += 2
-		case shaderir.Vec3, shaderir.IVec3:
-			size += 3
-		case shaderir.Vec4, shaderir.IVec4:
-			size += 4
-		case shaderir.Mat2:
-			size += 6
-		case shaderir.Mat3:
-			size += 11
-		case shaderir.Mat4:
-			size += 16
-		case shaderir.Array:
-			// Each element is aligned to the boundary.
-			switch typ.Sub[0].Main {
-			case shaderir.Bool:
-				size += 4*(typ.Length-1) + 1
-			case shaderir.Float:
-				size += 4*(typ.Length-1) + 1
-			case shaderir.Int:
-				size += 4*(typ.Length-1) + 1
-			case shaderir.Vec2, shaderir.IVec2:
-				size += 4*(typ.Length-1) + 2
-			case shaderir.Vec3, shaderir.IVec3:
-				size += 4*(typ.Length-1) + 3
-			case shaderir.Vec4, shaderir.IVec4:
-				size += 4 * typ.Length
-			case shaderir.Mat2:
-				size += 8*(typ.Length-1) + 6
-			case shaderir.Mat3:
-				size += 12*(typ.Length-1) + 11
-			case shaderir.Mat4:
-				size += 16 * typ.Length
-			default:
-				panic(fmt.Sprintf("directx: not implemented type for uniform variables: %s", typ.String()))
-			}
-		default:
-			panic(fmt.Sprintf("directx: not implemented type for uniform variables: %s", typ.String()))
-		}
-	}
-	return size
-}
-
-func appendAdjustedUniforms(dst []uint32, uniformTypes []shaderir.Type, uniformOffsets []int, uniforms []uint32) []uint32 {
-	// Note that HLSL's matrices are row-major, while GLSL and MSL are column-major.
-	// Transpose matrices so that users can access matrix indices in the same way as GLSL and MSL.
-	// For packing rule, see https://github.com/microsoft/DirectXShaderCompiler/wiki/Buffer-Packing
-
-	var idx int
-	for i, typ := range uniformTypes {
-		if len(dst) < uniformOffsets[i] {
-			dst = append(dst, make([]uint32, uniformOffsets[i]-len(dst))...)
-		}
-
-		n := typ.DwordCount()
-		switch typ.Main {
-		case shaderir.Bool:
-			// Bool is 4 bytes in HLSL.
-			dst = append(dst, uniforms[idx:idx+1]...)
-		case shaderir.Float:
-			dst = append(dst, uniforms[idx:idx+1]...)
-		case shaderir.Int:
-			dst = append(dst, uniforms[idx:idx+1]...)
-		case shaderir.Vec2, shaderir.IVec2:
-			dst = append(dst, uniforms[idx:idx+2]...)
-		case shaderir.Vec3, shaderir.IVec3:
-			dst = append(dst, uniforms[idx:idx+3]...)
-		case shaderir.Vec4, shaderir.IVec4:
-			dst = append(dst, uniforms[idx:idx+4]...)
-		case shaderir.Mat2:
-			dst = append(dst,
-				uniforms[idx+0], uniforms[idx+2], 0, 0,
-				uniforms[idx+1], uniforms[idx+3],
-			)
-		case shaderir.Mat3:
-			dst = append(dst,
-				uniforms[idx+0], uniforms[idx+3], uniforms[idx+6], 0,
-				uniforms[idx+1], uniforms[idx+4], uniforms[idx+7], 0,
-				uniforms[idx+2], uniforms[idx+5], uniforms[idx+8],
-			)
-		case shaderir.Mat4:
-			if i == graphics.ProjectionMatrixUniformVariableIndex {
-				// In DirectX, the NDC's Y direction (upward) and the framebuffer's Y direction (downward) don't
-				// match. Then, the Y direction must be inverted.
-				// Invert the sign bits as float32 values.
-				dst = append(dst,
-					uniforms[idx+0], uniforms[idx+4], uniforms[idx+8], uniforms[idx+12],
-					uniforms[idx+1]^(1<<31), uniforms[idx+5]^(1<<31), uniforms[idx+9]^(1<<31), uniforms[idx+13]^(1<<31),
-					uniforms[idx+2], uniforms[idx+6], uniforms[idx+10], uniforms[idx+14],
-					uniforms[idx+3], uniforms[idx+7], uniforms[idx+11], uniforms[idx+15],
-				)
-			} else {
-				dst = append(dst,
-					uniforms[idx+0], uniforms[idx+4], uniforms[idx+8], uniforms[idx+12],
-					uniforms[idx+1], uniforms[idx+5], uniforms[idx+9], uniforms[idx+13],
-					uniforms[idx+2], uniforms[idx+6], uniforms[idx+10], uniforms[idx+14],
-					uniforms[idx+3], uniforms[idx+7], uniforms[idx+11], uniforms[idx+15],
-				)
-			}
-		case shaderir.Array:
-			// Each element is aligned to the boundary.
-			switch typ.Sub[0].Main {
-			case shaderir.Bool:
-				for j := 0; j < typ.Length; j++ {
-					dst = append(dst, uniforms[idx+j])
-					if j < typ.Length-1 {
-						dst = append(dst, 0, 0, 0)
-					}
-				}
-			case shaderir.Float:
-				for j := 0; j < typ.Length; j++ {
-					dst = append(dst, uniforms[idx+j])
-					if j < typ.Length-1 {
-						dst = append(dst, 0, 0, 0)
-					}
-				}
-			case shaderir.Int:
-				for j := 0; j < typ.Length; j++ {
-					dst = append(dst, uniforms[idx+j])
-					if j < typ.Length-1 {
-						dst = append(dst, 0, 0, 0)
-					}
-				}
-			case shaderir.Vec2, shaderir.IVec2:
-				for j := 0; j < typ.Length; j++ {
-					dst = append(dst, uniforms[idx+2*j:idx+2*(j+1)]...)
-					if j < typ.Length-1 {
-						dst = append(dst, 0, 0)
-					}
-				}
-			case shaderir.Vec3, shaderir.IVec3:
-				for j := 0; j < typ.Length; j++ {
-					dst = append(dst, uniforms[idx+3*j:idx+3*(j+1)]...)
-					if j < typ.Length-1 {
-						dst = append(dst, 0)
-					}
-				}
-			case shaderir.Vec4, shaderir.IVec4:
-				dst = append(dst, uniforms[idx:idx+4*typ.Length]...)
-			case shaderir.Mat2:
-				for j := 0; j < typ.Length; j++ {
-					u := uniforms[idx+4*j : idx+4*(j+1)]
-					dst = append(dst,
-						u[0], u[2], 0, 0,
-						u[1], u[3],
-					)
-					if j < typ.Length-1 {
-						dst = append(dst, 0, 0)
-					}
-				}
-			case shaderir.Mat3:
-				for j := 0; j < typ.Length; j++ {
-					u := uniforms[idx+9*j : idx+9*(j+1)]
-					dst = append(dst,
-						u[0], u[3], u[6], 0,
-						u[1], u[4], u[7], 0,
-						u[2], u[5], u[8],
-					)
-					if j < typ.Length-1 {
-						dst = append(dst, 0)
-					}
-				}
-			case shaderir.Mat4:
-				for j := 0; j < typ.Length; j++ {
-					u := uniforms[idx+16*j : idx+16*(j+1)]
-					dst = append(dst,
-						u[0], u[4], u[8], u[12],
-						u[1], u[5], u[9], u[13],
-						u[2], u[6], u[10], u[14],
-						u[3], u[7], u[11], u[15],
-					)
-				}
-			default:
-				panic(fmt.Sprintf("directx: not implemented type for uniform variables: %s", typ.String()))
-			}
-		default:
-			panic(fmt.Sprintf("directx: not implemented type for uniform variables: %s", typ.String()))
-		}
-
-		idx += n
-	}
-	return dst
+// userConstantBufferSize returns the size of the constant buffer for the user's uniform block in
+// bytes, which is a multiple of 16, or 0 when the shader has no user uniform block.
+func userConstantBufferSize(program *shader.Program) uint32 {
+	return alignUp16(uint32(program.UniformDwordCount) * 4)
 }

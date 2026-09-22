@@ -26,8 +26,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/microsoftgdk"
-	"github.com/ironpark/ggfx/internal/shaderir"
-	"github.com/ironpark/ggfx/internal/shaderir/hlsl"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 type resourceWithSize struct {
@@ -103,7 +102,6 @@ type graphics12 struct {
 	shaders         map[graphicsdriver.ShaderID]*shader12
 	nextShaderID    graphicsdriver.ShaderID
 	disposedShaders [frameCount][]*shader12
-	tmpUniforms     []uint32
 
 	vsyncEnabled bool
 
@@ -1242,19 +1240,18 @@ func (g *graphics12) MaxImageSize() int {
 	return _D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION
 }
 
-func (g *graphics12) NewShader(program *shaderir.Program) (graphicsdriver.Shader, error) {
+func (g *graphics12) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
 	vsh, psh, err := compileShader(program)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &shader12{
-		graphics:       g,
-		id:             g.genNextShaderID(),
-		uniformTypes:   program.Uniforms,
-		uniformOffsets: hlsl.UniformVariableOffsetsInDwords(program),
-		vertexShader:   vsh,
-		pixelShader:    psh,
+		graphics:               g,
+		id:                     g.genNextShaderID(),
+		userConstantBufferSize: userConstantBufferSize(program),
+		vertexShader:           vsh,
+		pixelShader:            psh,
 	}
 	g.addShader(s)
 	return s, nil
@@ -1305,7 +1302,6 @@ func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.
 	}
 
 	shader := g.shaders[shaderID]
-	g.tmpUniforms = appendAdjustedUniforms(g.tmpUniforms[:0], shader.uniformTypes, shader.uniformOffsets, uniforms)
 
 	w, h := dst.internalSize()
 	g.needFlushDrawCommandList = true
@@ -1333,7 +1329,7 @@ func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.
 		Format:         _DXGI_FORMAT_R32_UINT,
 	})
 
-	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, g.frameIndex, dst.screen, srcImages, shader, dstRegions, g.tmpUniforms, blend, indexOffset); err != nil {
+	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, g.frameIndex, dst.screen, srcImages, shader, dstRegions, uniforms, blend, indexOffset); err != nil {
 		return err
 	}
 

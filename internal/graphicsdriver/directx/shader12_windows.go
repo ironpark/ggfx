@@ -16,7 +16,6 @@ package directx
 
 import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 type pipelineStateKey struct {
@@ -25,12 +24,11 @@ type pipelineStateKey struct {
 }
 
 type shader12 struct {
-	graphics       *graphics12
-	id             graphicsdriver.ShaderID
-	uniformTypes   []shaderir.Type
-	uniformOffsets []int
-	vertexShader   *_ID3DBlob
-	pixelShader    *_ID3DBlob
+	graphics               *graphics12
+	id                     graphicsdriver.ShaderID
+	userConstantBufferSize uint32
+	vertexShader           *_ID3DBlob
+	pixelShader            *_ID3DBlob
 
 	pipelineStates map[pipelineStateKey]*_ID3D12PipelineState
 }

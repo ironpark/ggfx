@@ -19,22 +19,22 @@ import (
 
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 type shader11 struct {
-	graphics         *graphics11
-	id               graphicsdriver.ShaderID
-	uniformTypes     []shaderir.Type
-	uniformOffsets   []int
-	vertexShaderBlob *_ID3DBlob
-	pixelShaderBlob  *_ID3DBlob
-	tmpUniforms      []uint32
+	graphics               *graphics11
+	id                     graphicsdriver.ShaderID
+	userConstantBufferSize uint32
+	vertexShaderBlob       *_ID3DBlob
+	pixelShaderBlob        *_ID3DBlob
 
-	inputLayout    *_ID3D11InputLayout
-	vertexShader   *_ID3D11VertexShader
-	pixelShader    *_ID3D11PixelShader
-	constantBuffer *_ID3D11Buffer
+	inputLayout  *_ID3D11InputLayout
+	vertexShader *_ID3D11VertexShader
+	pixelShader  *_ID3D11PixelShader
+
+	// constantBuffers are the constant buffers for the internal and the user's uniform blocks. The
+	// latter is nil when the shader has no user uniform block.
+	constantBuffers [2]*_ID3D11Buffer
 }
 
 func (s *shader11) ID() graphicsdriver.ShaderID {
@@ -73,9 +73,11 @@ func (s *shader11) disposeImpl() {
 		s.pixelShader.Release()
 		s.pixelShader = nil
 	}
-	if s.constantBuffer != nil {
-		s.constantBuffer.Release()
-		s.constantBuffer = nil
+	for i, cb := range s.constantBuffers {
+		if cb != nil {
+			cb.Release()
+			s.constantBuffers[i] = nil
+		}
 	}
 }
 
@@ -98,23 +100,25 @@ func (s *shader11) use(uniforms []uint32, srcs [graphics.ShaderSrcImageCount]*im
 	}
 	s.graphics.deviceContext.IASetInputLayout(il)
 
-	cb, err := s.ensureConstantBuffer()
+	cbs, err := s.ensureConstantBuffers()
 	if err != nil {
 		return err
 	}
-	s.graphics.deviceContext.VSSetConstantBuffers(0, []*_ID3D11Buffer{cb})
-	s.graphics.deviceContext.PSSetConstantBuffers(0, []*_ID3D11Buffer{cb})
+	s.graphics.deviceContext.VSSetConstantBuffers(0, cbs)
+	s.graphics.deviceContext.PSSetConstantBuffers(0, cbs)
 
-	// Send the constant buffer data.
-	s.tmpUniforms = appendAdjustedUniforms(s.tmpUniforms[:0], s.uniformTypes, s.uniformOffsets, uniforms)
-	var mapped _D3D11_MAPPED_SUBRESOURCE
-	if err := s.graphics.deviceContext.Map(unsafe.Pointer(cb), 0, _D3D11_MAP_WRITE_DISCARD, 0, &mapped); err != nil {
-		return err
+	// The internal uniform block comes first, then the user's block. Both are already laid out as
+	// the shader expects.
+	blocks := [][]uint32{uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:]}
+	for i, cb := range cbs {
+		var mapped _D3D11_MAPPED_SUBRESOURCE
+		if err := s.graphics.deviceContext.Map(unsafe.Pointer(cb), 0, _D3D11_MAP_WRITE_DISCARD, 0, &mapped); err != nil {
+			return err
+		}
+		copy(unsafe.Slice((*uint32)(mapped.pData), len(blocks[i])), blocks[i])
+		s.graphics.deviceContext.Unmap(unsafe.Pointer(cb), 0)
 	}
-	copy(unsafe.Slice((*uint32)(mapped.pData), len(s.tmpUniforms)), s.tmpUniforms)
-	s.graphics.deviceContext.Unmap(unsafe.Pointer(cb), 0)
 
-	// Set the render sources.
 	var srvs [graphics.ShaderSrcImageCount]*_ID3D11ShaderResourceView
 	for i, src := range srcs {
 		if src == nil {
@@ -177,20 +181,25 @@ func alignUp16(x uint32) uint32 {
 	return x + 16 - (x % 16)
 }
 
-func (s *shader11) ensureConstantBuffer() (*_ID3D11Buffer, error) {
-	if s.constantBuffer != nil {
-		return s.constantBuffer, nil
+func (s *shader11) ensureConstantBuffers() ([]*_ID3D11Buffer, error) {
+	sizes := []uint32{internalConstantBufferSize, s.userConstantBufferSize}
+	for i, size := range sizes {
+		if s.constantBuffers[i] != nil || size == 0 {
+			continue
+		}
+		cb, err := s.graphics.device.CreateBuffer(&_D3D11_BUFFER_DESC{
+			ByteWidth:      size,
+			Usage:          _D3D11_USAGE_DYNAMIC,
+			BindFlags:      uint32(_D3D11_BIND_CONSTANT_BUFFER),
+			CPUAccessFlags: uint32(_D3D11_CPU_ACCESS_WRITE),
+		}, nil)
+		if err != nil {
+			return nil, err
+		}
+		s.constantBuffers[i] = cb
 	}
-
-	cb, err := s.graphics.device.CreateBuffer(&_D3D11_BUFFER_DESC{
-		ByteWidth:      alignUp16(uint32(constantBufferSize(s.uniformTypes, s.uniformOffsets)) * 4),
-		Usage:          _D3D11_USAGE_DYNAMIC,
-		BindFlags:      uint32(_D3D11_BIND_CONSTANT_BUFFER),
-		CPUAccessFlags: uint32(_D3D11_CPU_ACCESS_WRITE),
-	}, nil)
-	if err != nil {
-		return nil, err
+	if s.constantBuffers[1] == nil {
+		return s.constantBuffers[:1], nil
 	}
-	s.constantBuffer = cb
-	return cb, nil
+	return s.constantBuffers[:], nil
 }

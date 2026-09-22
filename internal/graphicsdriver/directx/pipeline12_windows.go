@@ -26,47 +26,21 @@ import (
 var inputElementDescsForDX12 []_D3D12_INPUT_ELEMENT_DESC
 
 func init() {
-	inputElementDescsForDX12 = []_D3D12_INPUT_ELEMENT_DESC{
-		{
-			SemanticName:         &([]byte("POSITION\000"))[0],
-			SemanticIndex:        0,
-			Format:               _DXGI_FORMAT_R32G32_FLOAT,
-			InputSlot:            0,
-			AlignedByteOffset:    _D3D12_APPEND_ALIGNED_ELEMENT,
-			InputSlotClass:       _D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-			InstanceDataStepRate: 0,
-		},
-		{
-			SemanticName:         &([]byte("TEXCOORD\000"))[0],
-			SemanticIndex:        0,
-			Format:               _DXGI_FORMAT_R32G32_FLOAT,
-			InputSlot:            0,
-			AlignedByteOffset:    _D3D12_APPEND_ALIGNED_ELEMENT,
-			InputSlotClass:       _D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-			InstanceDataStepRate: 0,
-		},
-		{
-			SemanticName:         &([]byte("COLOR\000"))[0],
-			SemanticIndex:        0,
-			Format:               _DXGI_FORMAT_R32G32B32A32_FLOAT,
-			InputSlot:            0,
-			AlignedByteOffset:    _D3D12_APPEND_ALIGNED_ELEMENT,
-			InputSlotClass:       _D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-			InstanceDataStepRate: 0,
-		},
-	}
+	// The semantics follow naga's HLSL output: attribute i is LOC with semantic index i.
+	loc := &([]byte("LOC\000"))[0]
+	formats := []_DXGI_FORMAT{_DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32B32A32_FLOAT}
 	diff := graphics.VertexFloatCount - 8
-	if diff == 0 {
-		return
-	}
 	if diff%4 != 0 {
 		panic("directx: unexpected attribute layout")
 	}
-	for i := range diff / 4 {
+	for range diff / 4 {
+		formats = append(formats, _DXGI_FORMAT_R32G32B32A32_FLOAT)
+	}
+	for i, f := range formats {
 		inputElementDescsForDX12 = append(inputElementDescsForDX12, _D3D12_INPUT_ELEMENT_DESC{
-			SemanticName:         &([]byte("COLOR\000"))[0],
-			SemanticIndex:        uint32(i) + 1,
-			Format:               _DXGI_FORMAT_R32G32B32A32_FLOAT,
+			SemanticName:         loc,
+			SemanticIndex:        uint32(i),
+			Format:               f,
 			InputSlot:            0,
 			AlignedByteOffset:    _D3D12_APPEND_ALIGNED_ELEMENT,
 			InputSlotClass:       _D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
@@ -148,7 +122,21 @@ type pipelineStates struct {
 	constantBufferMaps [frameCount][]uintptr
 }
 
-const numConstantBufferAndSourceTextures = 1 + graphics.ShaderSrcImageCount
+// numConstantBuffers is how many constant buffer views a draw uses: the internal uniform block
+// and the user's uniform block.
+const numConstantBuffers = 2
+
+const numConstantBufferAndSourceTextures = numConstantBuffers + graphics.ShaderSrcImageCount
+
+// constantBufferAlignment is the alignment a constant buffer view's location and size need.
+const constantBufferAlignment = 256
+
+func alignUpConstantBuffer(x uint32) uint32 {
+	if x == 0 {
+		return 0
+	}
+	return ((x-1)/constantBufferAlignment + 1) * constantBufferAlignment
+}
 
 func (p *pipelineStates) initialize(device *_ID3D12Device) (ferr error) {
 	// Create a CBV/SRV/UAV descriptor heap.
@@ -197,11 +185,10 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		p.constantBufferMaps[frameIndex] = append(p.constantBufferMaps[frameIndex], 0)
 	}
 
-	const bufferSizeAlignment = 256
-	bufferSize := uint32(unsafe.Sizeof(uint32(0))) * uint32(len(uniforms))
-	if bufferSize > 0 {
-		bufferSize = ((bufferSize-1)/bufferSizeAlignment + 1) * bufferSizeAlignment
-	}
+	// One upload buffer holds both uniform blocks, each at an aligned offset.
+	internalSize := alignUpConstantBuffer(internalConstantBufferSize)
+	userSize := alignUpConstantBuffer(shader.userConstantBufferSize)
+	bufferSize := internalSize + userSize
 
 	cb := p.constantBuffers[frameIndex][idx]
 	m := p.constantBufferMaps[frameIndex][idx]
@@ -230,8 +217,18 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		h.Offset(offset, p.shaderDescriptorSize)
 		device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
 			BufferLocation: cb.GetGPUVirtualAddress(),
-			SizeInBytes:    bufferSize,
+			SizeInBytes:    internalSize,
 		}, h)
+		h.Offset(1, p.shaderDescriptorSize)
+		if userSize > 0 {
+			device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
+				BufferLocation: cb.GetGPUVirtualAddress() + _D3D12_GPU_VIRTUAL_ADDRESS(internalSize),
+				SizeInBytes:    userSize,
+			}, h)
+		} else {
+			// A null descriptor for a shader without a user uniform block.
+			device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{}, h)
+		}
 
 		m, err = cb.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
 		if err != nil {
@@ -248,7 +245,7 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		return err
 	}
 	offset := int32(numConstantBufferAndSourceTextures * (frameIndex*numDescriptorsPerFrame + idx))
-	h.Offset(offset, p.shaderDescriptorSize)
+	h.Offset(offset+numConstantBuffers-1, p.shaderDescriptorSize)
 	for _, src := range srcs {
 		h.Offset(1, p.shaderDescriptorSize)
 		if src == nil {
@@ -264,8 +261,11 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		}, h)
 	}
 
-	// Update the constant buffer.
-	copy(unsafe.Slice((*uint32)(unsafe.Pointer(m)), len(uniforms)), uniforms)
+	// Update the constant buffers: the internal uniform block, then the user's block.
+	copy(unsafe.Slice((*uint32)(unsafe.Pointer(m)), graphics.PreservedUniformDwordCount), uniforms[:graphics.PreservedUniformDwordCount])
+	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 {
+		copy(unsafe.Slice((*uint32)(unsafe.Pointer(m+uintptr(internalSize))), len(user)), user)
+	}
 
 	rs, err := p.ensureRootSignature(device)
 	if err != nil {
@@ -315,8 +315,8 @@ func (p *pipelineStates) ensureRootSignature(device *_ID3D12Device) (*_ID3D12Roo
 	}
 
 	cbv := _D3D12_DESCRIPTOR_RANGE{
-		RangeType:                         _D3D12_DESCRIPTOR_RANGE_TYPE_CBV, // b0
-		NumDescriptors:                    1,
+		RangeType:                         _D3D12_DESCRIPTOR_RANGE_TYPE_CBV, // b0, b1
+		NumDescriptors:                    numConstantBuffers,
 		BaseShaderRegister:                0,
 		RegisterSpace:                     0,
 		OffsetInDescriptorsFromTableStart: 0,
@@ -326,7 +326,7 @@ func (p *pipelineStates) ensureRootSignature(device *_ID3D12Device) (*_ID3D12Roo
 		NumDescriptors:                    graphics.ShaderSrcImageCount,
 		BaseShaderRegister:                0,
 		RegisterSpace:                     0,
-		OffsetInDescriptorsFromTableStart: 1,
+		OffsetInDescriptorsFromTableStart: numConstantBuffers,
 	}
 
 	rootParams := [...]_D3D12_ROOT_PARAMETER{
