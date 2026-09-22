@@ -51,7 +51,7 @@ Per-driver status:
 | driver | surfaces | notes |
 |---|---|---|
 | Metal | many | one `view` (layer, display link, drawable) per surface |
-| DirectX 11/12 | many | one `graphicsInfra` swap chain per surface |
+| DirectX 11/12 | one | the swap chain is still on the device; a second surface returns an error until `graphicsInfra` is per surface |
 | OpenGL desktop | one | GL contexts do not share VAOs/FBOs; a second surface returns an error until the state cache is per-context |
 | WebGL | one | the canvas |
 
@@ -101,29 +101,28 @@ windows are drawn sequentially there.
 type Handler interface {
     HandleEvent(Event) error
 }
+type HandlerFunc func(Event) error
 
 // Run starts the loop and blocks until it ends. The handler receives
 // StartEvent first and creates its windows there. Returning Termination
-// ends the loop; so does closing the last window unless
-// RunOptions.KeepRunningWithoutWindows is set.
-func Run(h Handler, opts *RunOptions) error
+// ends the loop; so does closing the last window. RunOptions is
+// RunGameOptions; the window-related options apply to every window.
+func Run(h Handler, options *RunOptions) error
 
+// The zero value is a decorated, visible, fixed-size 640x480 window
+// centered on the monitor.
 type WindowOptions struct {
     Title              string
-    Width, Height      int   // DIP; 0 uses 640x480
-    Resizable          bool
-    Decorated          bool  // default true (zero value means decorated)
-    Floating           bool
-    Hidden             bool  // create hidden; Show later
-    Transparent        bool
+    Width, Height      int          // DIP
     Position           *image.Point // DIP on the monitor; nil centers
+    Resizable, Undecorated, Floating, Hidden, Maximized, Transparent, Unfocused bool
     MinWidth, MinHeight, MaxWidth, MaxHeight int
 }
 
-func NewWindow(o *WindowOptions) (*Window, error) // only while Run is running
+func NewWindow(o *WindowOptions) (*Window, error) // only while Run runs
 
 type Window struct{ ... }
-func (w *Window) Close()
+func (w *Window) Close()                 // closes after the current event
 func (w *Window) RequestFrame()          // ask for one FrameEvent
 func (w *Window) SetTitle(string)
 func (w *Window) Size() (int, int)       // DIP
@@ -131,27 +130,28 @@ func (w *Window) SetSize(int, int)
 func (w *Window) Position() (int, int)
 func (w *Window) SetPosition(int, int)
 func (w *Window) SetSizeLimits(minw, minh, maxw, maxh int)
-func (w *Window) SetResizable(bool)
+func (w *Window) SetResizable(bool); SetDecorated(bool); SetFloating(bool)
 func (w *Window) Show(); Hide(); IsVisible() bool
-func (w *Window) Maximize(); Minimize(); Restore()
+func (w *Window) Maximize(); Minimize(); Restore(); IsMaximized(); IsMinimized()
 func (w *Window) SetFullscreen(bool); IsFullscreen() bool
-func (w *Window) IsFocused() bool; Focus()
+func (w *Window) IsFocused() bool; Focus(); RequestAttention()
+func (w *Window) SetIcon([]image.Image); SetMousePassthrough(bool)
 func (w *Window) DeviceScaleFactor() float64
 func (w *Window) Monitor() *MonitorType
-func (w *Window) SetCursorShape(CursorShapeType); SetCursorMode(CursorModeType)
-func (w *Window) SetIcon([]image.Image)
+func (w *Window) CursorShape(); SetCursorShape(CursorShapeType)
+func (w *Window) CursorMode(); SetCursorMode(CursorModeType)
 func (w *Window) NativeHandle() uintptr  // NSWindow* / HWND / X11 window
 ```
 
-Events. Every event has `Window() *Window`; `StartEvent` has a nil window.
+Events. Every event but `StartEvent` has a `Window *Window` field.
 
 | event | fields | when |
 |---|---|---|
 | `StartEvent` | | once, before anything else |
-| `FrameEvent` | `Screen *Image` (pixels), `Scale float64` | after `RequestFrame`, after a resize, after the window is first shown |
-| `ResizeEvent` | `Width, Height int` (DIP), `Scale float64` | size or scale changed |
+| `ResizeEvent` | `Width, Height float64` (DIP), `Scale` | right after creation, and whenever the size or scale changes |
+| `FrameEvent` | `Screen *Image` (pixels), `Scale float64` | after `RequestFrame`, after a resize, when the window is first shown |
 | `FocusEvent` | `Focused bool` | |
-| `CloseEvent` | | the user asked to close; the window closes unless the handler calls `w.KeepOpen()` during the event |
+| `CloseEvent` | | the user asked to close; the window closes after the event unless `KeepOpen()` was called |
 | `KeyEvent` | `Key`, `Pressed`, `Repeat bool` | OS key repeat is delivered with `Repeat` set |
 | `TextEvent` | `Text string` | committed characters |
 | `MouseMoveEvent` | `X, Y float64` (DIP) | |
@@ -162,15 +162,21 @@ Events. Every event has `Window() *Window`; `StartEvent` has a nil window.
 
 Coordinates in input events are DIP relative to the window's client area;
 `FrameEvent.Screen` is in physical pixels and `Scale` converts between them.
+`Screen` is valid during the event only.
+
+`Window.Close()` closes without a `CloseEvent`; the event is for the user's
+close button. `Run` returns when the last window closes.
 
 ## What the event path does not do
 
 - No ticks, no `TPS`, no `inpututil`. `KeyEvent.Repeat` replaces
   `KeyPressDuration`. Apps that need key state keep it from the events.
-- No IME on the event path yet. `TextEvent` carries committed characters
-  from the platform's character callback. Composition (`exp/textinput`) is
-  still tied to the legacy tick hooks.
-- One window on OpenGL and WebGL.
+  `Tick()` still advances once per loop iteration, and the before-update
+  hooks run then, so `exp/textinput` keeps working when polled every frame.
+- No IME events on the event path. `TextEvent` carries committed characters
+  from the platform's character callback; composition is polled through
+  `exp/textinput` as before.
+- One window on OpenGL, WebGL and DirectX.
 - Gamepads are not delivered as events.
 - `Monitor()` on the root package still means the primary window's monitor;
   use `Window.Monitor()`.

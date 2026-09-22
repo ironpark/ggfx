@@ -353,6 +353,9 @@ func (u *UserInterface) updateImpl(force bool) error {
 			return RegularTermination
 		}
 		u.incrementTick()
+		if err := hook.RunBeforeUpdateHooks(); err != nil {
+			return err
+		}
 		if err := u.dispatchEvents(); err != nil {
 			return err
 		}

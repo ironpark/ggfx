@@ -79,9 +79,22 @@ kept close to upstream: `internal/graphicsdriver` (except the shader files),
 windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 `input.go`) diverge and are not expected to merge.
 
+## Windows and the event loop
+
+`Run`, `NewWindow`, `Window` and the event types in `app.go` are the API a
+GUI uses: any number of windows, frames on request, input as events. The
+design and the per-driver status are in [docs/window.md](docs/window.md).
+`Game`/`RunGame` still work and drive the test suite; internally a game is
+one window that asks for a frame every iteration.
+
 ## Not done yet
 
-- Multiple windows. Ebitengine assumes one window and one game loop.
+- More than one window on OpenGL and WebGL (`docs/window.md`). Only Metal
+  and the two-window example in `examples/multiwindow` were run; DirectX
+  accepts one surface and was cross-compiled only.
+- IME composition on the event path outside macOS. `TextEvent` carries
+  committed characters; `exp/textinput` still runs off the per-iteration
+  hooks.
 - Only macOS Metal and OpenGL ran the test suite after the shader change;
   DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
   to need shader model 5.0 without register spaces, but no D3D compiler or

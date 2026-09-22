@@ -699,8 +699,12 @@ func (u *UserInterface) updateGame() error {
 
 	if u.app != nil {
 		// A game advances the tick in its Update; an app advances it once per iteration, so
-		// that the time-based caches, like the current monitor, keep expiring.
+		// that the time-based caches, like the current monitor, keep expiring. The hooks that
+		// a game runs before Update, like the text input's, run here for the same reason.
 		u.incrementTick()
+		if err := hook.RunBeforeUpdateHooks(); err != nil {
+			return err
+		}
 		if err := u.dispatchEvents(); err != nil {
 			return err
 		}
