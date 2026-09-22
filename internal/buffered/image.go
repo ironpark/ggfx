@@ -44,8 +44,17 @@ type Image struct {
 }
 
 func NewImage(width, height int, imageType atlas.ImageType) *Image {
+	return newImage(atlas.NewImage(width, height, imageType), width, height)
+}
+
+// NewScreenImage returns a screen image presented on surface.
+func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
+	return newImage(atlas.NewScreenImage(width, height, surface), width, height)
+}
+
+func newImage(img *atlas.Image, width, height int) *Image {
 	i := &Image{
-		img:    atlas.NewImage(width, height, imageType),
+		img:    img,
 		width:  width,
 		height: height,
 	}

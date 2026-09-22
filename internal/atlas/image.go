@@ -107,6 +107,9 @@ type backend struct {
 	// screen indicates whether this backend is used as a screen image or not.
 	screen bool
 
+	// surface is the presentation target of a screen backend, and nil otherwise.
+	surface graphicsdriver.Surface
+
 	// source reports whether this backend is mainly used a rendering source, but this is not 100%.
 	//
 	// If a non-source (destination) image is used as a source many times,
@@ -146,7 +149,7 @@ func (b *backend) tryAlloc(width, height int) (*packing.Node, bool) {
 	}
 
 	// Extend the image.
-	newImg := graphicscommand.NewImage(pageW, pageH, b.screen, "")
+	newImg := graphicscommand.NewImage(pageW, pageH, b.surface, "")
 	clearImage(newImg, image.Rect(0, 0, pageW, pageH))
 	src := b.backendImage
 	srcs := [graphics.ShaderSrcImageCount]*graphicscommand.Image{src}
@@ -229,6 +232,9 @@ type imageImpl struct {
 	width     int
 	height    int
 	imageType ImageType
+
+	// surface is the presentation target of a screen image, and nil otherwise.
+	surface graphicsdriver.Surface
 
 	backend                   *backend
 	backendCreatedInThisFrame bool
@@ -692,12 +698,30 @@ func MaxImageSize() int {
 }
 
 func NewImage(width, height int, imageType ImageType) *Image {
+	if imageType == ImageTypeScreen {
+		panic("atlas: use NewScreenImage for a screen image")
+	}
 	// Actual allocation is done lazily, and the lock is not needed.
 	return &Image{
 		imageImpl: &imageImpl{
 			width:     width,
 			height:    height,
 			imageType: imageType,
+		},
+	}
+}
+
+// NewScreenImage returns a screen image presented on surface.
+func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
+	if surface == nil {
+		panic("atlas: a screen image needs a surface")
+	}
+	return &Image{
+		imageImpl: &imageImpl{
+			width:     width,
+			height:    height,
+			imageType: ImageTypeScreen,
+			surface:   surface,
 		},
 	}
 }
@@ -735,8 +759,9 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 		i.backend = &backend{
 			width:        i.width,
 			height:       i.height,
-			backendImage: graphicscommand.NewImage(i.width, i.height, true, ""),
+			backendImage: graphicscommand.NewImage(i.width, i.height, i.surface, ""),
 			screen:       true,
+			surface:      i.surface,
 		}
 		i.backend.clear(image.Rect(0, 0, i.width, i.height))
 		theBackends = append(theBackends, i.backend)
@@ -754,7 +779,7 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 		i.backend = &backend{
 			width:        wp,
 			height:       hp,
-			backendImage: graphicscommand.NewImage(wp, hp, false, ""),
+			backendImage: graphicscommand.NewImage(wp, hp, nil, ""),
 			source:       asSource,
 		}
 		i.backend.clear(image.Rect(0, 0, wp, hp))
@@ -805,7 +830,7 @@ loop:
 	b := &backend{
 		width:        width,
 		height:       height,
-		backendImage: graphicscommand.NewImage(width, height, false, ""),
+		backendImage: graphicscommand.NewImage(width, height, nil, ""),
 		page:         page,
 		source:       asSource,
 	}
@@ -986,7 +1011,7 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 			if !b.restoreInfo.valid {
 				continue
 			}
-			b.backendImage = graphicscommand.NewImage(b.width, b.height, b.restoreInfo.screen, "")
+			b.backendImage = graphicscommand.NewImage(b.width, b.height, b.surface, "")
 			if b.restoreInfo.region != image.Rect(0, 0, b.width, b.height) {
 				b.clear(image.Rect(0, 0, b.width, b.height))
 			}

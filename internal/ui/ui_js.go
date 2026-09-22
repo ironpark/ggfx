@@ -826,6 +826,11 @@ func (u *UserInterface) initOnMainThread(options *RunOptions) error {
 	}
 	u.graphicsDriver = g
 	u.setGraphicsLibrary(lib)
+	surface, err := g.NewSurface(canvas)
+	if err != nil {
+		return err
+	}
+	u.context.surface = surface
 
 	if bodyStyle := document.Get("body").Get("style"); options.ScreenTransparent {
 		bodyStyle.Set("backgroundColor", "transparent")

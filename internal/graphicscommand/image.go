@@ -58,14 +58,13 @@ func genNextImageID() int {
 	return id
 }
 
-// NewImage returns a new image.
-//
-// The pixel data just after NewImage is undetermined.
-func NewImage(width, height int, screenFramebuffer bool, attribute string) *Image {
+// NewImage returns a new image. The pixel data just after NewImage is undetermined.
+// A non-nil surface makes the image the screen image of that surface.
+func NewImage(width, height int, surface graphicsdriver.Surface, attribute string) *Image {
 	i := &Image{
 		width:     width,
 		height:    height,
-		screen:    screenFramebuffer,
+		screen:    surface != nil,
 		id:        genNextImageID(),
 		attribute: attribute,
 	}
@@ -73,7 +72,7 @@ func NewImage(width, height int, screenFramebuffer bool, attribute string) *Imag
 		result:    i,
 		width:     width,
 		height:    height,
-		screen:    screenFramebuffer,
+		surface:   surface,
 		attribute: attribute,
 	}
 	theCommandQueueManager.enqueueCommand(c)

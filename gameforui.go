@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/inputstate"
 	"github.com/ironpark/ggfx/internal/ui"
 )
@@ -65,13 +66,13 @@ func (g *gameForUI) NewOffscreenImage(width, height int) *ui.Image {
 	return g.offscreen.image
 }
 
-func (g *gameForUI) NewScreenImage(width, height int) *ui.Image {
+func (g *gameForUI) NewScreenImage(width, height int, surface graphicsdriver.Surface) *ui.Image {
 	if g.screen != nil {
 		g.screen.Deallocate()
 		g.screen = nil
 	}
 
-	g.screen = newImage(image.Rect(0, 0, width, height), atlas.ImageTypeScreen)
+	g.screen = newScreenImage(width, height, surface)
 	return g.screen.image
 }
 

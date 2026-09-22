@@ -17,6 +17,7 @@
 package opengl
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -54,6 +55,8 @@ type Graphics struct {
 
 	// drawCalled is true just after Draw is called. This holds true until WritePixels is called.
 	drawCalled bool
+
+	surface *Surface
 
 	tmpUniforms []uint32
 
@@ -151,7 +154,25 @@ func (g *Graphics) NewImage(width, height int) (graphicsdriver.Image, error) {
 	return i, nil
 }
 
-func (g *Graphics) NewScreenFramebufferImage(width, height int) (graphicsdriver.Image, error) {
+// Surface is the default framebuffer of the GL context. Only one surface is supported: GL state
+// like vertex arrays is per context and the state cache is not.
+type Surface struct {
+	graphics *Graphics
+}
+
+func (g *Graphics) NewSurface(target any) (graphicsdriver.Surface, error) {
+	if g.surface != nil {
+		return nil, errors.New("opengl: only one surface is supported")
+	}
+	if err := g.initSurface(target); err != nil {
+		return nil, err
+	}
+	g.surface = &Surface{graphics: g}
+	return g.surface, nil
+}
+
+func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
+	g := s.graphics
 	g.checkSize(width, height)
 	i := &Image{
 		id:       g.genNextImageID(),
@@ -162,6 +183,10 @@ func (g *Graphics) NewScreenFramebufferImage(width, height int) (graphicsdriver.
 	}
 	g.addImage(i)
 	return i, nil
+}
+
+func (s *Surface) Dispose() {
+	s.graphics.surface = nil
 }
 
 func (g *Graphics) addImage(img *Image) {

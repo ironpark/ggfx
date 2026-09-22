@@ -80,9 +80,18 @@ type Image struct {
 }
 
 func (u *UserInterface) NewImage(width, height int, imageType atlas.ImageType) *Image {
+	return u.newImage(mipmap.New(width, height, imageType), width, height, imageType)
+}
+
+// NewScreenImage returns the image presented on surface.
+func (u *UserInterface) NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
+	return u.newImage(mipmap.NewScreen(width, height, surface), width, height, atlas.ImageTypeScreen)
+}
+
+func (u *UserInterface) newImage(m *mipmap.Mipmap, width, height int, imageType atlas.ImageType) *Image {
 	return &Image{
 		ui:        u,
-		mipmap:    mipmap.New(width, height, imageType),
+		mipmap:    m,
 		width:     width,
 		height:    height,
 		imageType: imageType,

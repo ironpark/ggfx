@@ -739,9 +739,16 @@ func (g *graphics12) createRenderTargetViewsDesktop() (ferr error) {
 	return nil
 }
 
-func (g *graphics12) SetWindow(window uintptr) {
-	g.window = windows.HWND(window)
-	// TODO: need to update the swap chain?
+func (g *graphics12) NewSurface(target any) (graphicsdriver.Surface, error) {
+	if g.window != 0 {
+		return nil, errors.New("directx: only one surface is supported")
+	}
+	w, err := surfaceTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	g.window = w
+	return &Surface{newScreenImage: g.newScreenImage}, nil
 }
 
 func (g *graphics12) ColorSpace() color.ColorSpace {
@@ -1172,7 +1179,7 @@ func (g *graphics12) NewImage(width, height int) (graphicsdriver.Image, error) {
 	return i, nil
 }
 
-func (g *graphics12) NewScreenFramebufferImage(width, height int) (graphicsdriver.Image, error) {
+func (g *graphics12) newScreenImage(width, height int) (graphicsdriver.Image, error) {
 	if g.screenImage != nil {
 		g.screenImage.Dispose()
 		g.screenImage = nil

@@ -148,7 +148,7 @@ var vertexDescriptor = &mtl.VertexDescriptor{
 	},
 }
 
-func (s *Shader) RenderPipelineState(view *view, blend graphicsdriver.Blend, screen bool) (mtl.RenderPipelineState, error) {
+func (s *Shader) RenderPipelineState(pix mtl.PixelFormat, blend graphicsdriver.Blend, screen bool) (mtl.RenderPipelineState, error) {
 	key := shaderRpsKey{
 		blend:  blend,
 		screen: screen,
@@ -163,10 +163,6 @@ func (s *Shader) RenderPipelineState(view *view, blend graphicsdriver.Blend, scr
 		FragmentFunction: s.fs,
 	}
 
-	pix := mtl.PixelFormatRGBA8UNorm
-	if screen {
-		pix = view.colorPixelFormat()
-	}
 	rpld.ColorAttachments[0].PixelFormat = pix
 	rpld.ColorAttachments[0].BlendingEnabled = true
 
@@ -178,7 +174,7 @@ func (s *Shader) RenderPipelineState(view *view, blend graphicsdriver.Blend, scr
 	rpld.ColorAttachments[0].RGBBlendOperation = blendOperationToMetalBlendOperation(blend.BlendOperationRGB)
 	rpld.ColorAttachments[0].WriteMask = mtl.ColorWriteMaskAll
 
-	rps, err := view.getMTLDevice().NewRenderPipelineStateWithDescriptor(rpld)
+	rps, err := s.graphics.device.NewRenderPipelineStateWithDescriptor(rpld)
 	if err != nil {
 		return mtl.RenderPipelineState{}, fmt.Errorf("metal: device.NewRenderPipelineStateWithDescriptor failed: %w", err)
 	}

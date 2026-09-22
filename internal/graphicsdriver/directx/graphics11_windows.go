@@ -15,6 +15,7 @@
 package directx
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -284,9 +285,16 @@ func (g *graphics11) End(mode graphicsdriver.FlushMode) error {
 	return nil
 }
 
-func (g *graphics11) SetWindow(window uintptr) {
-	g.window = windows.HWND(window)
-	// TODO: need to update the swap chain?
+func (g *graphics11) NewSurface(target any) (graphicsdriver.Surface, error) {
+	if g.window != 0 {
+		return nil, errors.New("directx: only one surface is supported")
+	}
+	w, err := surfaceTarget(target)
+	if err != nil {
+		return nil, err
+	}
+	g.window = w
+	return &Surface{newScreenImage: g.newScreenImage}, nil
 }
 
 func (g *graphics11) SetTransparent(transparent bool) {
@@ -393,7 +401,7 @@ func (g *graphics11) NewImage(width, height int) (graphicsdriver.Image, error) {
 	return i, nil
 }
 
-func (g *graphics11) NewScreenFramebufferImage(width, height int) (graphicsdriver.Image, error) {
+func (g *graphics11) newScreenImage(width, height int) (graphicsdriver.Image, error) {
 	if g.screenImage != nil {
 		// Dispose the screen image, so that no reference to the swap chain's buffer remains before
 		// ResizeBuffers.

@@ -131,7 +131,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 	var driver frameDriver
 	const frames = 10
 	for frame := range frames {
-		graphicscommand.NewImage(1, 1, false, "")
+		graphicscommand.NewImage(1, 1, nil, "")
 		if err := ui.FlushCommandsAndWaitForTesting(&driver, false); err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 			t.Errorf("frame %d without presentation: images = %d, frames = %d, presents = %d; want %d, %d, 0", frame, driver.images, driver.frames, driver.presents, frame+1, frame+1)
 		}
 	}
-	graphicscommand.NewImage(1, 1, false, "")
+	graphicscommand.NewImage(1, 1, nil, "")
 	if err := ui.FlushCommandsAndWaitForTesting(&driver, true); err != nil {
 		t.Fatal(err)
 	}

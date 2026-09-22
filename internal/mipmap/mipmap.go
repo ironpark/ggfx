@@ -57,6 +57,16 @@ func New(width, height int, imageType atlas.ImageType) *Mipmap {
 	}
 }
 
+// NewScreen returns a mipmap for a screen image presented on surface.
+func NewScreen(width, height int, surface graphicsdriver.Surface) *Mipmap {
+	return &Mipmap{
+		width:     width,
+		height:    height,
+		orig:      buffered.NewScreenImage(width, height, surface),
+		imageType: atlas.ImageTypeScreen,
+	}
+}
+
 func (m *Mipmap) DumpScreenshot(graphicsDriver graphicsdriver.Graphics, name string, blackbg bool) (string, error) {
 	return m.orig.DumpScreenshot(graphicsDriver, name, blackbg)
 }

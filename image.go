@@ -1522,6 +1522,15 @@ func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Imag
 	return newImage(bounds, imageType)
 }
 
+// newScreenImage creates the image presented on surface.
+func newScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
+	i := &Image{}
+	i.image = ui.Get().NewScreenImage(width, height, surface)
+	i.bounds = image.Rect(0, 0, width, height)
+	i.addr = i
+	return i
+}
+
 func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
 	if isRunGameEnded() {
 		panic("ebiten: NewImage cannot be called after RunGame finishes")

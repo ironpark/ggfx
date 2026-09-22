@@ -24,8 +24,8 @@ import (
 
 func BenchmarkPrependPreservedUniforms(b *testing.B) {
 	var uniforms [graphics.PreservedUniformDwordCount]uint32
-	dst := graphicscommand.NewImage(16, 16, false, "")
-	src := graphicscommand.NewImage(16, 16, false, "")
+	dst := graphicscommand.NewImage(16, 16, nil, "")
+	src := graphicscommand.NewImage(16, 16, nil, "")
 	dr := image.Rect(0, 0, 16, 16)
 	sr := image.Rect(0, 0, 16, 16)
 	for i := 0; i < b.N; i++ {

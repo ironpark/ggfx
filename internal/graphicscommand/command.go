@@ -336,12 +336,12 @@ type newImageCommand struct {
 	result    *Image
 	width     int
 	height    int
-	screen    bool
+	surface   graphicsdriver.Surface
 	attribute string
 }
 
 func (c *newImageCommand) String() string {
-	str := fmt.Sprintf("new-image: result: %d, width: %d, height: %d, screen: %t", c.result.id, c.width, c.height, c.screen)
+	str := fmt.Sprintf("new-image: result: %d, width: %d, height: %d, screen: %t", c.result.id, c.width, c.height, c.surface != nil)
 	if c.attribute != "" {
 		str += ", attribute: " + c.attribute
 	}
@@ -351,8 +351,8 @@ func (c *newImageCommand) String() string {
 // Exec executes a newImageCommand.
 func (c *newImageCommand) Exec(commandQueue *commandQueue, graphicsDriver graphicsdriver.Graphics, indexOffset int) error {
 	var err error
-	if c.screen {
-		c.result.image, err = graphicsDriver.NewScreenFramebufferImage(c.width, c.height)
+	if c.surface != nil {
+		c.result.image, err = c.surface.NewScreenImage(c.width, c.height)
 	} else {
 		c.result.image, err = graphicsDriver.NewImage(c.width, c.height)
 	}

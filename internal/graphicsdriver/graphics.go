@@ -53,7 +53,11 @@ type Graphics interface {
 	SetTransparent(transparent bool)
 	SetVertices(vertices []float32, indices []uint32) error
 	NewImage(width, height int) (Image, error)
-	NewScreenFramebufferImage(width, height int) (Image, error)
+
+	// NewSurface creates a presentation target for a native window. target is what the platform's
+	// UI layer has: an NSWindow or HWND handle as uintptr, or an opengl.Presenter for OpenGL.
+	// NewSurface is called on the main thread.
+	NewSurface(target any) (Surface, error)
 	SetVsyncEnabled(enabled bool)
 	NeedsClearingScreen() bool
 	MaxImageSize() int
@@ -62,6 +66,16 @@ type Graphics interface {
 
 	// DrawTriangles draws an image onto another image with the given parameters.
 	DrawTriangles(dst ImageID, srcs [graphics.ShaderSrcImageCount]ImageID, shader ShaderID, dstRegions []DstRegion, indexOffset int, blend Blend, uniforms []uint32) error
+}
+
+// Surface is one presentation target: a window's swap chain or layer, or the default framebuffer
+// of a GL context. End(FlushModePresent) presents every surface whose screen image was drawn to
+// since the previous flush.
+type Surface interface {
+	// NewScreenImage returns the image that is presented on this surface. Calling it again
+	// replaces the previous screen image. NewScreenImage is called on the render thread.
+	NewScreenImage(width, height int) (Image, error)
+	Dispose()
 }
 
 type Resetter interface {

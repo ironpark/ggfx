@@ -65,6 +65,26 @@ func parseFeatureLevel(str string) (_D3D_FEATURE_LEVEL, bool) {
 
 // NewGraphics creates an implementation of graphicsdriver.Graphics for DirectX.
 // The returned graphics value is nil iff the error is not nil.
+// Surface is the swap chain on one window. Only one surface is supported for now.
+type Surface struct {
+	newScreenImage func(width, height int) (graphicsdriver.Image, error)
+}
+
+func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
+	return s.newScreenImage(width, height)
+}
+
+func (s *Surface) Dispose() {
+}
+
+func surfaceTarget(target any) (windows.HWND, error) {
+	w, ok := target.(uintptr)
+	if !ok {
+		return 0, fmt.Errorf("directx: NewSurface needs an HWND as uintptr but got %T", target)
+	}
+	return windows.HWND(w), nil
+}
+
 func NewGraphics() (graphicsdriver.Graphics, error) {
 	if !isD3DCompilerDLLAvailable() {
 		return nil, fmt.Errorf("directx: d3dcompiler_*.dll is missing in this environment")

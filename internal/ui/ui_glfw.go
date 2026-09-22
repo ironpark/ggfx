@@ -34,7 +34,6 @@ import (
 	"github.com/ironpark/ggfx/internal/gamepad"
 	"github.com/ironpark/ggfx/internal/glfw"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
-	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 	"github.com/ironpark/ggfx/internal/hook"
 	"github.com/ironpark/ggfx/internal/thread"
 	"github.com/ironpark/ggfx/internal/windowsystem"
@@ -995,20 +994,24 @@ func (u *glfwBackend) initOnMainThread(options *RunOptions) error {
 		_ = u.skipTaskbar()
 	}
 
-	switch g := u.graphicsDriver.(type) {
-	case interface{ SetPresenter(opengl.Presenter) }:
-		g.SetPresenter(u.window)
-	case interface{ SetWindow(uintptr) }:
+	if g, ok := u.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
+		g.SetMainThreadRunner(u.mainThread.Call)
+	}
+
+	// The OpenGL driver presents through the GLFW window; the others need the native handle.
+	var target any = u.window
+	if lib != GraphicsLibraryOpenGL {
 		w, err := u.nativeWindow()
 		if err != nil {
 			return err
 		}
-		g.SetWindow(w)
+		target = w
 	}
-
-	if g, ok := u.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
-		g.SetMainThreadRunner(u.mainThread.Call)
+	surface, err := u.graphicsDriver.NewSurface(target)
+	if err != nil {
+		return err
 	}
+	u.context.surface = surface
 
 	// Register callbacks after the window initialization done.
 	// The callback might cause swapping frames, that assumes the window is already set (#2137).

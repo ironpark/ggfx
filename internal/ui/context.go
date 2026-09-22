@@ -34,7 +34,7 @@ var (
 
 type Game interface {
 	NewOffscreenImage(width, height int) *Image
-	NewScreenImage(width, height int) *Image
+	NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image
 	Layout(outsideWidth, outsideHeight float64) (screenWidth, screenHeight float64)
 	UpdateInputState(fn func(*InputState))
 	Update() error
@@ -44,6 +44,9 @@ type Game interface {
 
 type context struct {
 	game Game
+
+	// surface is the presentation target the screen image is created on.
+	surface graphicsdriver.Surface
 
 	screenTransparent bool
 
@@ -442,7 +445,7 @@ func (c *context) layoutGame(outsideWidth, outsideHeight float64, screenWidth, s
 		c.screen = nil
 	}
 	if c.screen == nil && screenWidth > 0 && screenHeight > 0 {
-		c.screen = c.game.NewScreenImage(screenWidth, screenHeight)
+		c.screen = c.game.NewScreenImage(screenWidth, screenHeight, c.surface)
 	}
 
 	if c.offscreen != nil && (c.offscreen.width != ow || c.offscreen.height != oh) {

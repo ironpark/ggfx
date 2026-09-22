@@ -17,6 +17,7 @@
 package opengl
 
 import (
+	"fmt"
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
@@ -42,9 +43,14 @@ func (g *Graphics) IsES() bool {
 	return g.context.ctx.IsES()
 }
 
-// SetPresenter sets what the rendered frame is presented through.
-func (g *Graphics) SetPresenter(presenter Presenter) {
-	g.presenter = presenter
+// initSurface takes the Presenter the rendered frame is presented through.
+func (g *Graphics) initSurface(target any) error {
+	p, ok := target.(Presenter)
+	if !ok {
+		return fmt.Errorf("opengl: NewSurface needs a Presenter but got %T", target)
+	}
+	g.presenter = p
+	return nil
 }
 
 func (g *Graphics) makeContextCurrent() error {

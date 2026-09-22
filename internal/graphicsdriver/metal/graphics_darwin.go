@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"runtime"
 	"slices"
 	"unsafe"
 
@@ -37,7 +36,15 @@ import (
 var sel_supportsFamily = objc.RegisterName("supportsFamily:")
 
 type Graphics struct {
-	view view
+	device mtl.Device
+
+	// surfaces are the presentation targets, in creation order.
+	surfaces []*Surface
+
+	// runOnMainThread runs a function on the main thread synchronously. It is set at most once.
+	runOnMainThread func(f func())
+
+	vsync bool
 
 	tmpUniforms []uint32
 
@@ -46,8 +53,6 @@ type Graphics struct {
 	cq  mtl.CommandQueue
 	cb  mtl.CommandBuffer
 	rce mtl.RenderCommandEncoder
-
-	screenDrawable ca.MetalDrawable
 
 	// frame is the current frame number.
 	// frame is incremented when the screen is presented.
@@ -114,17 +119,81 @@ func NewGraphics(colorSpace color.ColorSpace) (graphicsdriver.Graphics, error) {
 
 	g := &Graphics{
 		colorSpace: colorSpace,
-	}
-
-	if runtime.GOOS != "ios" {
-		// Initializing a Metal device and a layer must be done in the main thread on macOS.
-		// Note that this assumes NewGraphics is called on the main thread on desktops.
-		if err := g.view.initialize(systemDefaultDevice, colorSpace); err != nil {
-			g.view.release()
-			return nil, err
-		}
+		device:     systemDefaultDevice,
+		vsync:      true,
 	}
 	return g, nil
+}
+
+// Surface is a CAMetalLayer on one window.
+type Surface struct {
+	graphics *Graphics
+	view     view
+
+	// drawable is the drawable acquired for the current frame, and zero when none is.
+	drawable ca.MetalDrawable
+}
+
+// NewSurface creates a layer for the NSWindow given as a uintptr. NewSurface must be called on the
+// main thread.
+func (g *Graphics) NewSurface(target any) (graphicsdriver.Surface, error) {
+	window, ok := target.(uintptr)
+	if !ok {
+		return nil, fmt.Errorf("metal: NewSurface needs an NSWindow as uintptr but got %T", target)
+	}
+	s := &Surface{graphics: g}
+	s.view.runOnMainThread = g.runOnMainThread
+	if err := s.view.initialize(g.device, g.colorSpace); err != nil {
+		s.view.release()
+		return nil, err
+	}
+	s.view.ml.SetOpaque(!g.transparent)
+	s.view.setDisplaySyncEnabled(g.vsync)
+	s.view.setWindow(window)
+	g.surfaces = append(g.surfaces, s)
+	return s, nil
+}
+
+func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
+	g := s.graphics
+	s.view.setDrawableSize(width, height)
+	i := &Image{
+		id:       g.genNextImageID(),
+		graphics: g,
+		surface:  s,
+		width:    width,
+		height:   height,
+		screen:   true,
+	}
+	g.addImage(i)
+	return i, nil
+}
+
+func (s *Surface) Dispose() {
+	g := s.graphics
+	if s.drawable != (ca.MetalDrawable{}) {
+		s.drawable.Release()
+		s.drawable = ca.MetalDrawable{}
+	}
+	s.view.release()
+	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *Surface) bool { return t == s })
+}
+
+// texture returns the drawable's texture for the current frame, acquiring a drawable if needed.
+// It returns a zero texture when no drawable is available.
+func (s *Surface) texture() mtl.Texture {
+	if s.drawable == (ca.MetalDrawable{}) {
+		drawable := s.view.nextDrawable()
+		if drawable == (ca.MetalDrawable{}) {
+			return mtl.Texture{}
+		}
+		// Keep the drawable alive across flushes that drain the autorelease pool without presenting (#3704).
+		drawable.Retain()
+		s.drawable = drawable
+		// After nextDrawable, it is expected some command buffers are completed.
+		s.graphics.gcBuffers()
+	}
+	return s.drawable.Texture()
 }
 
 func (g *Graphics) ColorSpace() color.ColorSpace {
@@ -135,7 +204,9 @@ func (g *Graphics) Begin() error {
 	// NSAutoreleasePool is required to release drawable correctly (#847).
 	// https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/Drawables.html
 	g.pool = cocoa.NSAutoreleasePool_new()
-	g.view.updatePresentationState()
+	for _, s := range g.surfaces {
+		s.view.updatePresentationState()
+	}
 	return nil
 }
 
@@ -151,25 +222,15 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	return nil
 }
 
-func (g *Graphics) SetWindow(window uintptr) {
-	// Note that [NSApp mainWindow] returns nil when the window is borderless.
-	// Then the window is needed to be given explicitly.
-	g.view.setWindow(window)
-}
-
 // SetMainThreadRunner sets a function that runs the given function on the main thread synchronously.
 //
 // The runner must be able to run a function even while the main thread is blocked until the
 // current frame ends, like during window resizing.
 func (g *Graphics) SetMainThreadRunner(f func(func())) {
-	g.view.runOnMainThread = f
-}
-
-// SetUIView sets the UIView the game is rendered into.
-//
-// SetUIView is concurrent safe.
-func (g *Graphics) SetUIView(uiview uintptr) {
-	g.view.setUIView(uiview)
+	g.runOnMainThread = f
+	for _, s := range g.surfaces {
+		s.view.runOnMainThread = f
+	}
 }
 
 func pow2(x uintptr) uintptr {
@@ -252,7 +313,7 @@ func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
 	}
 
 	if newBuf == (mtl.Buffer{}) {
-		newBuf = g.view.getMTLDevice().NewBufferWithLength(pow2(length), resourceStorageMode)
+		newBuf = g.device.NewBufferWithLength(pow2(length), resourceStorageMode)
 	}
 
 	if g.buffers == nil {
@@ -285,22 +346,27 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 
 	g.flushRenderCommandEncoderIfNeeded()
 
-	var presented bool
-	var drawableToPresentWithTransaction ca.MetalDrawable
-	if present && g.screenDrawable != (ca.MetalDrawable{}) {
-		if g.view.shouldPresentWithTransaction() {
-			// The drawable must be presented after the command buffer is committed and scheduled.
-			drawableToPresentWithTransaction = g.screenDrawable
-		} else {
-			g.view.presentDrawable(g.cb, g.screenDrawable)
+	var presented []*Surface
+	var withTransaction []*Surface
+	if present {
+		for _, s := range g.surfaces {
+			if s.drawable == (ca.MetalDrawable{}) {
+				continue
+			}
+			if s.view.shouldPresentWithTransaction() {
+				// The drawable must be presented after the command buffer is committed and scheduled.
+				withTransaction = append(withTransaction, s)
+			} else {
+				s.view.presentDrawable(g.cb, s.drawable)
+			}
+			presented = append(presented, s)
 		}
-		presented = true
 	}
 
 	g.cb.Commit()
 
-	if drawableToPresentWithTransaction != (ca.MetalDrawable{}) {
-		g.view.presentDrawableWithTransaction(g.cb, drawableToPresentWithTransaction)
+	for _, s := range withTransaction {
+		s.view.presentDrawableWithTransaction(g.cb, s.drawable)
 	}
 
 	for _, t := range g.tmpTextures {
@@ -310,10 +376,10 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 
 	g.cb = mtl.CommandBuffer{}
 
-	if presented {
-		g.screenDrawable.Release()
-		g.screenDrawable = ca.MetalDrawable{}
-		g.view.finishDrawableUsage()
+	for _, s := range presented {
+		s.drawable.Release()
+		s.drawable = ca.MetalDrawable{}
+		s.view.finishDrawableUsage()
 	}
 }
 
@@ -353,26 +419,13 @@ func (g *Graphics) NewImage(width, height int) (graphicsdriver.Image, error) {
 		StorageMode: storageMode,
 		Usage:       mtl.TextureUsageShaderRead | mtl.TextureUsageRenderTarget,
 	}
-	t := g.view.getMTLDevice().NewTextureWithDescriptor(td)
+	t := g.device.NewTextureWithDescriptor(td)
 	i := &Image{
 		id:       g.genNextImageID(),
 		graphics: g,
 		width:    width,
 		height:   height,
 		texture:  t,
-	}
-	g.addImage(i)
-	return i, nil
-}
-
-func (g *Graphics) NewScreenFramebufferImage(width, height int) (graphicsdriver.Image, error) {
-	g.view.setDrawableSize(width, height)
-	i := &Image{
-		id:       g.genNextImageID(),
-		graphics: g,
-		width:    width,
-		height:   height,
-		screen:   true,
 	}
 	g.addImage(i)
 	return i, nil
@@ -394,6 +447,9 @@ func (g *Graphics) removeImage(img *Image) {
 
 func (g *Graphics) SetTransparent(transparent bool) {
 	g.transparent = transparent
+	for _, s := range g.surfaces {
+		s.view.ml.SetOpaque(!transparent)
+	}
 }
 
 func blendFactorToMetalBlendFactor(c graphicsdriver.BlendFactor) mtl.BlendFactor {
@@ -443,18 +499,7 @@ func blendOperationToMetalBlendOperation(o graphicsdriver.BlendOperation) mtl.Bl
 }
 
 func (g *Graphics) Initialize() error {
-	if runtime.GOOS == "ios" {
-		// Initializing a Metal device and a layer must be done in the render thread on iOS.
-		if err := g.view.initialize(systemDefaultDevice, g.colorSpace); err != nil {
-			return err
-		}
-	}
-	// The default value is false [1], but transparinting doesn't work without calling this.
-	// To avoid confusion, let's call this explicitly.
-	// [1] https://developer.apple.com/documentation/quartzcore/calayer/isopaque?language=objc
-	g.view.ml.SetOpaque(!g.transparent)
-
-	g.cq = g.view.getMTLDevice().NewCommandQueue()
+	g.cq = g.device.NewCommandQueue()
 	return nil
 }
 
@@ -471,7 +516,11 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	// In order to create a separate command buffer for the screen, flush the current command buffer.
 	// It's because a drawable will not be released as long as the CommandBuffer referencing it is alive,
 	// it is more efficient to separate CommandBuffers that use the drawable from those that do not.
-	if (g.lastDst != nil && g.lastDst.screen) != dst.screen {
+	var lastSurface *Surface
+	if g.lastDst != nil {
+		lastSurface = g.lastDst.surface
+	}
+	if lastSurface != dst.surface {
 		g.flushCommandBufferIfNeeded(false)
 	}
 
@@ -544,7 +593,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		}
 	}
 
-	s, err := shader.RenderPipelineState(&g.view, blend, dst.screen)
+	s, err := shader.RenderPipelineState(dst.colorPixelFormat(), blend, dst.screen)
 	if err != nil {
 		return err
 	}
@@ -575,7 +624,7 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 	dst := g.images[dstID]
 
 	if dst.screen {
-		g.view.update()
+		dst.surface.view.update()
 	}
 
 	var srcs [graphics.ShaderSrcImageCount]*Image
@@ -591,7 +640,10 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 }
 
 func (g *Graphics) SetVsyncEnabled(enabled bool) {
-	g.view.setDisplaySyncEnabled(enabled)
+	g.vsync = enabled
+	for _, s := range g.surfaces {
+		s.view.setDisplaySyncEnabled(enabled)
+	}
 }
 
 func (g *Graphics) NeedsClearingScreen() bool {
@@ -603,7 +655,7 @@ func (g *Graphics) MaxImageSize() int {
 		return g.maxImageSize
 	}
 
-	d := g.view.getMTLDevice()
+	d := g.device
 
 	// supportsFamily is available as of macOS 10.15+ and iOS 13.0+.
 	// https://developer.apple.com/documentation/metal/mtldevice/3143473-supportsfamily
@@ -648,7 +700,7 @@ func (g *Graphics) MaxImageSize() int {
 }
 
 func (g *Graphics) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
-	s, err := newShader(g.genNextShaderID(), g, g.view.getMTLDevice(), program)
+	s, err := newShader(g.genNextShaderID(), g, g.device, program)
 	if err != nil {
 		return nil, err
 	}
@@ -676,8 +728,16 @@ type Image struct {
 	width    int
 	height   int
 	screen   bool
+	surface  *Surface // non-nil iff screen
 	texture  mtl.Texture
 	stencil  mtl.Texture
+}
+
+func (i *Image) colorPixelFormat() mtl.PixelFormat {
+	if i.screen {
+		return i.surface.view.colorPixelFormat()
+	}
+	return mtl.PixelFormatRGBA8UNorm
 }
 
 func (i *Image) ID() graphicsdriver.ImageID {
@@ -762,7 +822,7 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		StorageMode: storageMode,
 		Usage:       mtl.TextureUsageShaderRead | mtl.TextureUsageRenderTarget,
 	}
-	t := g.view.getMTLDevice().NewTextureWithDescriptor(td)
+	t := g.device.NewTextureWithDescriptor(td)
 	g.tmpTextures = append(g.tmpTextures, t)
 
 	for _, a := range args {
@@ -789,22 +849,7 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 
 func (i *Image) mtlTexture() mtl.Texture {
 	if i.screen {
-		g := i.graphics
-		if g.screenDrawable == (ca.MetalDrawable{}) {
-			drawable := g.view.nextDrawable()
-			if drawable == (ca.MetalDrawable{}) {
-				return mtl.Texture{}
-			}
-			// Keep the drawable alive across flushes that drain the autorelease pool without presenting (#3704).
-			drawable.Retain()
-			g.screenDrawable = drawable
-			// After nextDrawable, it is expected some command buffers are completed.
-			g.gcBuffers()
-		}
-		if g.screenDrawable == (ca.MetalDrawable{}) {
-			return mtl.Texture{}
-		}
-		return g.screenDrawable.Texture()
+		return i.surface.texture()
 	}
 	return i.texture
 }
@@ -822,5 +867,5 @@ func (i *Image) ensureStencil() {
 		StorageMode: mtl.StorageModePrivate,
 		Usage:       mtl.TextureUsageRenderTarget,
 	}
-	i.stencil = i.graphics.view.getMTLDevice().NewTextureWithDescriptor(td)
+	i.stencil = i.graphics.device.NewTextureWithDescriptor(td)
 }
