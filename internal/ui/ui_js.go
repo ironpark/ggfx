@@ -97,7 +97,6 @@ type userInterfaceImpl struct {
 	cursorPrevMode      CursorMode
 	captureCursorLater  bool
 	cursorShape         CursorShape
-	onceUpdateCalled    bool
 	lastCaptureExitTime time.Time
 	hiDPIEnabled        bool
 
@@ -340,10 +339,11 @@ func (u *UserInterface) updateImpl(force bool) error {
 		return nil
 	}
 
-	if u.gamepads != nil {
+	if u.gamepads != nil && u.gamepads.due(time.Now()) {
 		if err := gamepad.Update(0, nil); err != nil {
 			return err
 		}
+		u.gamepadsRead = true
 	}
 
 	// TODO: If DeviceScaleFactor changes, call updateScreenSize.
@@ -354,7 +354,10 @@ func (u *UserInterface) updateImpl(force bool) error {
 		return RegularTermination
 	}
 	u.incrementTick()
-	u.emitGamepadEvents()
+	if u.gamepadsRead {
+		u.gamepadsRead = false
+		u.emitGamepadEvents()
+	}
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}
@@ -414,9 +417,6 @@ func (u *UserInterface) loopFrames() error {
 			return
 		}
 		if u.needsUpdate() {
-			defer func() {
-				u.onceUpdateCalled = true
-			}()
 			u.renderingScheduled = false
 			if err := u.update(); err != nil {
 				close(reqStopAudioCh)

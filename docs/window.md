@@ -223,13 +223,15 @@ Use `-windows 1` with OpenGL or DirectX. The smoke injection is macOS-only.
 
 Gamepads are off unless `RunOptions.Gamepads` is set, because they cost an idle application its
 sleep. Buttons and axes can only be read by polling, so the loop wakes every 1/120 s while a
-gamepad is connected, and once a second to notice one arriving. Without the option no gamepad is
+gamepad is connected, and once a second to notice one arriving. A loop woken more often for another
+reason does not read them faster than that. Without the option no gamepad is
 polled and the loop sleeps until the window system wakes it.
 
 A gamepad belongs to the process, not to a window, so its events carry no `Window`. Each poll is
 compared with the previous one and only the differences are reported; a gamepad's first poll is its
 resting state and reports nothing beyond the connection. Axis moves below 1/64 are dropped, which
-is what keeps a resting stick from waking the loop forever. A gamepad with a standard layout gets
+is what keeps a resting stick from waking the loop forever, and an analog button's pressed flag
+applies the gamepad database's dead zone rather than comparing with zero. A gamepad with a standard layout gets
 both the raw and the standard events.
 
 macOS registers IOKit device callbacks and Linux watches the input directory with inotify, so on

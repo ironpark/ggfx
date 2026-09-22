@@ -136,6 +136,15 @@ WebGL feels.
   of the one-second detection poll (`docs/window.md`).
 - `internal/ui`'s `InputState` and the per-backend `readInputState` are now
   unreachable; removing them touches the X11 and browser input files.
+- `RunOptions.ScreenTransparent` and `graphicsdriver.SetTransparent` are a
+  process-wide knob for something every retained driver decides per surface, so
+  `NewWindow` has to reject a transparent window when they disagree. The deeper
+  fix is to pass transparency to surface creation and delete both. The same
+  shape applies to `RunOptions.InitUnfocused` versus `WindowOptions.Unfocused`.
+- `frameDriver` has one implementation now, and its outside-size parameters and
+  position converters are unused or identities.
+- The FPS-mode machinery in `internal/ui` can only hold `FPSModeVsyncOn` since
+  the root-level setters went.
 - X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which
   had stopped reporting anything under `Run` anyway. It needs to take committed
   text from `TextEvent` instead, which is the same gap as IME composition there.

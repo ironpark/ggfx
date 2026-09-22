@@ -257,14 +257,6 @@ func (u *UserInterface) SetFullscreen(fullscreen bool) {
 	b.SetFullscreen(fullscreen)
 }
 
-func (u *UserInterface) IsRunnableOnUnfocused() bool {
-	return u.isRunnableOnUnfocused()
-}
-
-func (u *UserInterface) SetRunnableOnUnfocused(runnableOnUnfocused bool) {
-	u.setRunnableOnUnfocused(runnableOnUnfocused)
-}
-
 func (u *UserInterface) FPSMode() FPSModeType {
 	return FPSModeType(u.fpsMode.Load())
 }
@@ -281,14 +273,6 @@ func (u *UserInterface) SetFPSMode(mode FPSModeType) {
 		return
 	}
 	b.applyFPSMode()
-}
-
-func (u *UserInterface) ScheduleFrame() {
-	b := u.runningBackend()
-	if b == nil {
-		return
-	}
-	b.ScheduleFrame()
 }
 
 func (u *UserInterface) CursorMode() CursorMode {

@@ -26,7 +26,6 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/colormode"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
-	"github.com/ironpark/ggfx/internal/mipmap"
 	"github.com/ironpark/ggfx/internal/thread"
 )
 
@@ -110,6 +109,10 @@ type UserInterface struct {
 	// gamepads turns polled gamepad state into events. It is nil unless RunOptions.Gamepads
 	// is set, which is what keeps an idle loop asleep for an app that does not want them.
 	gamepads *gamepadTracker
+
+	// gamepadsRead reports that this iteration read the gamepads, so that the events are
+	// derived on the loop's goroutine right after.
+	gamepadsRead bool
 
 	// runOptions are the process-wide options RunApp was given. Window creation reads the
 	// parts of them that are not per window, like the X11 names.
@@ -251,14 +254,6 @@ func (u *UserInterface) processFuncsInFrame() error {
 	}
 }
 
-func (u *UserInterface) dumpScreenshot(mipmap *mipmap.Mipmap, name string, blackbg bool) (string, error) {
-	return mipmap.DumpScreenshot(u.graphicsDriver, name, blackbg)
-}
-
-func (u *UserInterface) dumpImages(dir string) (string, error) {
-	return atlas.DumpImages(u.graphicsDriver, dir)
-}
-
 type RunOptions struct {
 	GraphicsLibrary GraphicsLibrary
 	// InitUnfocused is read by the browser at initialization. Desktop windows use
@@ -276,6 +271,25 @@ type RunOptions struct {
 	// Gamepads makes the loop poll gamepads and deliver them as events. Without it no gamepad
 	// is reported and the loop can sleep until the window system wakes it.
 	Gamepads bool
+}
+
+// startApp records what RunApp was given, before either backend's loop starts.
+func (u *UserInterface) startApp(app App, options *RunOptions) {
+	u.app = app
+	u.runOptions = options
+	if options.Gamepads {
+		u.gamepads = &gamepadTracker{}
+	}
+}
+
+// checkWindowOptions reports why a window cannot be created with these options.
+func (u *UserInterface) checkWindowOptions(o *WindowOptions) error {
+	if o.Transparent && !u.runOptions.ScreenTransparent {
+		// Whether transparency is possible is decided once, when the graphics driver is
+		// created, which happens before any window exists.
+		return errors.New("ui: a transparent window needs RunOptions.ScreenTransparent")
+	}
+	return nil
 }
 
 // InitialWindowPosition returns the position to place a window of size (ww, wh) in a monitor of size (mw, mh).

@@ -15,7 +15,6 @@
 package ui
 
 import (
-	"image"
 	"time"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
@@ -35,16 +34,6 @@ func (i *InputState) SetMouseButtonPressed(button MouseButton, t InputTime) {
 
 func (i *InputState) SetMouseButtonReleased(button MouseButton, t InputTime) {
 	i.setMouseButtonReleased(button, t)
-}
-
-func SetVirtualKeyboardStateForTest(caretBounds image.Rectangle, caretKnown bool, visibleRegion image.Rectangle, visibleRegionKnown bool) {
-	v := &theVirtualKeyboard
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.caretBounds = caretBounds
-	v.caretKnown = caretKnown
-	v.visibleRegion = visibleRegion
-	v.visibleRegionKnown = visibleRegionKnown
 }
 
 // VsyncIgnoredForTest reports whether the given successive frame times, measured on a display with

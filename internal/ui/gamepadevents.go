@@ -16,187 +16,247 @@ package ui
 
 import (
 	"math"
+	"time"
 
 	"github.com/ironpark/ggfx/internal/gamepad"
 	"github.com/ironpark/ggfx/internal/gamepaddb"
 )
 
-// gamepadAxisThreshold is how far a stick must move before an axis change is reported. Sticks rest
-// noisily around zero, and without a threshold an idle controller would wake the loop forever.
+// gamepadAxisThreshold is how far an axis must move before the change is reported. Sticks rest
+// noisily around zero, and without a threshold an idle gamepad would wake the loop forever.
 const gamepadAxisThreshold = 1.0 / 64
 
-// gamepadSnapshot is one gamepad's inputs as of the last poll. It is compared with the next poll to
-// decide which events to emit; nothing else reads it.
-type gamepadSnapshot struct {
-	name  string
-	sdlID string
-
-	// standard reports whether the gamepad has a standard layout, which decides whether the
-	// standard members below are meaningful.
-	standard bool
-
-	buttons []bool
-	axes    []float64
-
-	standardButtons map[gamepaddb.StandardButton]float64
-	standardAxes    map[gamepaddb.StandardAxis]float64
-}
-
-// gamepadTracker turns polled gamepad state into events. It is owned by the loop and used from the
-// loop's goroutine only.
-type gamepadTracker struct {
-	prev map[gamepad.ID]*gamepadSnapshot
-	ids  []gamepad.ID
-}
-
-// connected reports whether any gamepad was connected as of the last poll.
-func (t *gamepadTracker) connected() bool {
-	return len(t.prev) > 0
-}
-
-// snapshot reads one gamepad's current inputs.
-func snapshotGamepad(g *gamepad.Gamepad) *gamepadSnapshot {
-	s := &gamepadSnapshot{
-		name:     g.Name(),
-		sdlID:    g.SDLID(),
-		standard: g.IsStandardLayoutAvailable(),
-	}
-
-	buttonCount := g.ButtonCountWithHats()
-	s.buttons = make([]bool, buttonCount)
-	for i := range buttonCount {
-		s.buttons[i] = g.IsButtonPressedWithHats(i)
-	}
-
-	axisCount := g.AxisCount()
-	s.axes = make([]float64, axisCount)
-	for i := range axisCount {
-		if g.IsAxisReady(i) {
-			s.axes[i] = g.Axis(i)
-		}
-	}
-
-	if s.standard {
-		s.standardButtons = map[gamepaddb.StandardButton]float64{}
-		for b := gamepaddb.StandardButton(0); b <= gamepaddb.StandardButtonMax; b++ {
-			if g.IsStandardButtonAvailable(b) {
-				s.standardButtons[b] = g.StandardButtonValue(b)
-			}
-		}
-		s.standardAxes = map[gamepaddb.StandardAxis]float64{}
-		for a := gamepaddb.StandardAxis(0); a <= gamepaddb.StandardAxisMax; a++ {
-			if g.IsStandardAxisAvailable(a) {
-				s.standardAxes[a] = g.StandardAxisValue(a)
-			}
-		}
-	}
-	return s
-}
-
-// update compares the current gamepad state with the previous poll and appends the events the
-// difference implies to dst: connections first, then the changes on each gamepad, then the
-// disconnections.
-func (t *gamepadTracker) update(dst []Event) []Event {
-	if t.prev == nil {
-		t.prev = map[gamepad.ID]*gamepadSnapshot{}
-	}
-
-	t.ids = gamepad.AppendGamepadIDs(t.ids[:0])
-	seen := make(map[gamepad.ID]struct{}, len(t.ids))
-
-	for _, id := range t.ids {
-		g := gamepad.Get(id)
-		if g == nil {
-			continue
-		}
-		seen[id] = struct{}{}
-		cur := snapshotGamepad(g)
-		prev, ok := t.prev[id]
-		t.prev[id] = cur
-		if !ok {
-			dst = append(dst, GamepadConnectEvent{
-				ID:       id,
-				Name:     cur.name,
-				SDLID:    cur.sdlID,
-				Standard: cur.standard,
-			})
-			// A gamepad's first poll is its resting state, not a change to report.
-			continue
-		}
-		dst = appendGamepadChanges(dst, id, prev, cur)
-	}
-
-	for id := range t.prev {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		delete(t.prev, id)
-		dst = append(dst, GamepadDisconnectEvent{ID: id})
-	}
-	return dst
-}
-
-// appendGamepadChanges appends the events for what changed between two snapshots of one gamepad.
-func appendGamepadChanges(dst []Event, id gamepad.ID, prev, cur *gamepadSnapshot) []Event {
-	for i, pressed := range cur.buttons {
-		if i < len(prev.buttons) && prev.buttons[i] == pressed {
-			continue
-		}
-		dst = append(dst, GamepadButtonEvent{ID: id, Button: i, Pressed: pressed})
-	}
-	for i, v := range cur.axes {
-		if i < len(prev.axes) && math.Abs(prev.axes[i]-v) < gamepadAxisThreshold {
-			continue
-		}
-		dst = append(dst, GamepadAxisEvent{ID: id, Axis: i, Value: v})
-	}
-
-	for b, v := range cur.standardButtons {
-		p, ok := prev.standardButtons[b]
-		if ok && (p > 0) == (v > 0) && math.Abs(p-v) < gamepadAxisThreshold {
-			continue
-		}
-		dst = append(dst, GamepadStandardButtonEvent{ID: id, Button: b, Pressed: v > 0, Value: v})
-	}
-	for a, v := range cur.standardAxes {
-		if p, ok := prev.standardAxes[a]; ok && math.Abs(p-v) < gamepadAxisThreshold {
-			continue
-		}
-		dst = append(dst, GamepadStandardAxisEvent{ID: id, Axis: a, Value: v})
-	}
-	return dst
-}
-
-// Gamepad poll intervals, in seconds. A connected gamepad is read often enough to feel immediate;
-// with none connected the loop only has to notice one arriving.
+// Gamepad poll intervals. A connected gamepad is read often enough to feel immediate; with none
+// connected the loop only has to notice one arriving.
 //
 // macOS registers IOKit device matching callbacks and Linux watches the input directory with
 // inotify, so on those platforms a waiting loop could be woken by the backend with
 // glfw.PostEmptyEvent instead of by this timer. Windows enumerates DirectInput devices on demand
 // and the browser reads navigator.getGamepads, so those have to be asked either way.
 const (
-	gamepadPollInterval   = 1.0 / 120
-	gamepadDetectInterval = 1.0
+	gamepadPollInterval   = time.Second / 120
+	gamepadDetectInterval = time.Second
 )
 
-// gamepadWaitTimeout is how long the idle loop may sleep before it has to poll gamepads again, or 0
-// when it can sleep until the window system wakes it.
+const (
+	standardButtonCount = int(gamepaddb.StandardButtonMax) + 1
+	standardAxisCount   = int(gamepaddb.StandardAxisMax) + 1
+)
+
+// gamepadState is one gamepad's inputs as of one poll. Two of them are kept per gamepad and
+// swapped, so a steady-state poll allocates nothing.
+type gamepadState struct {
+	buttons []bool
+	axes    []float64
+
+	standardPressed [standardButtonCount]bool
+	standardValues  [standardButtonCount]float64
+	standardAxes    [standardAxisCount]float64
+}
+
+// gamepadEntry tracks one connected gamepad: what it is, which standard inputs it has, and its
+// last two polls.
+type gamepadEntry struct {
+	// standard reports whether the gamepad has a standard layout, and the two masks which of
+	// the standard inputs it offers. All three are fixed for a device, so they are resolved
+	// once, when it connects: asking the gamepad database costs a lock and a map lookup each.
+	standard       bool
+	buttonsPresent [standardButtonCount]bool
+	axesPresent    [standardAxisCount]bool
+
+	prev gamepadState
+	cur  gamepadState
+
+	// gen is the poll this gamepad was last seen in, which is how a disconnection is noticed
+	// without building a set per poll.
+	gen uint64
+}
+
+// gamepadTracker turns polled gamepad state into events. It is owned by the loop and used from the
+// loop's goroutine only.
+type gamepadTracker struct {
+	entries map[gamepad.ID]*gamepadEntry
+	ids     []gamepad.ID
+	events  []Event
+	gen     uint64
+
+	// lastPoll is when the gamepads were last read, so that a loop woken often for another
+	// reason does not read them faster than gamepadPollInterval.
+	lastPoll time.Time
+}
+
+// connected reports whether any gamepad was connected as of the last poll.
+func (t *gamepadTracker) connected() bool {
+	return len(t.entries) > 0
+}
+
+// due reports whether the gamepads should be read now, and records the time if so.
+func (t *gamepadTracker) due(now time.Time) bool {
+	if !t.lastPoll.IsZero() && now.Sub(t.lastPoll) < gamepadPollInterval {
+		return false
+	}
+	t.lastPoll = now
+	return true
+}
+
+// resize returns a slice of length n backed by s's array when it is big enough, so that a poll
+// after the first allocates nothing.
+func resize[T any](s []T, n int) []T {
+	if cap(s) >= n {
+		return s[:n]
+	}
+	return make([]T, n)
+}
+
+// read fills s with g's current inputs, reusing s's slices.
+func (e *gamepadEntry) read(s *gamepadState, g *gamepad.Gamepad) {
+	s.buttons = resize(s.buttons, g.ButtonCountWithHats())
+	for i := range s.buttons {
+		s.buttons[i] = g.IsButtonPressedWithHats(i)
+	}
+
+	s.axes = resize(s.axes, g.AxisCount())
+	for i := range s.axes {
+		s.axes[i] = 0
+	}
+	for i := range s.axes {
+		if g.IsAxisReady(i) {
+			s.axes[i] = g.Axis(i)
+		}
+	}
+
+	for b := range standardButtonCount {
+		if !e.buttonsPresent[b] {
+			continue
+		}
+		button := gamepaddb.StandardButton(b)
+		s.standardPressed[b] = g.IsStandardButtonPressed(button)
+		s.standardValues[b] = g.StandardButtonValue(button)
+	}
+	for a := range standardAxisCount {
+		if e.axesPresent[a] {
+			s.standardAxes[a] = g.StandardAxisValue(gamepaddb.StandardAxis(a))
+		}
+	}
+}
+
+// update reads the gamepads and appends the events their difference from the previous poll
+// implies: connections first, then the changes on each gamepad, then the disconnections. The
+// returned slice is the tracker's and is valid until the next call.
+func (t *gamepadTracker) update() []Event {
+	if t.entries == nil {
+		t.entries = map[gamepad.ID]*gamepadEntry{}
+	}
+	t.events = t.events[:0]
+	t.gen++
+
+	t.ids = gamepad.AppendGamepadIDs(t.ids[:0])
+	for _, id := range t.ids {
+		g := gamepad.Get(id)
+		if g == nil {
+			continue
+		}
+		e, ok := t.entries[id]
+		if !ok {
+			e = &gamepadEntry{standard: g.IsStandardLayoutAvailable()}
+			if e.standard {
+				for b := range standardButtonCount {
+					e.buttonsPresent[b] = g.IsStandardButtonAvailable(gamepaddb.StandardButton(b))
+				}
+				for a := range standardAxisCount {
+					e.axesPresent[a] = g.IsStandardAxisAvailable(gamepaddb.StandardAxis(a))
+				}
+			}
+			t.entries[id] = e
+			t.events = append(t.events, GamepadConnectEvent{
+				ID:       id,
+				Name:     g.Name(),
+				SDLID:    g.SDLID(),
+				Standard: e.standard,
+			})
+		}
+		e.gen = t.gen
+
+		e.prev, e.cur = e.cur, e.prev
+		e.read(&e.cur, g)
+		if ok {
+			// A gamepad's first poll is its resting state, not a change to report.
+			t.events = e.appendChanges(t.events, id)
+		}
+	}
+
+	for id, e := range t.entries {
+		if e.gen == t.gen {
+			continue
+		}
+		delete(t.entries, id)
+		t.events = append(t.events, GamepadDisconnectEvent{ID: id})
+	}
+	return t.events
+}
+
+// moved reports whether an analog value changed enough to be worth an event.
+func moved(prev, cur float64) bool {
+	return math.Abs(prev-cur) >= gamepadAxisThreshold
+}
+
+// appendChanges appends the events for what changed between the gamepad's last two polls.
+func (e *gamepadEntry) appendChanges(dst []Event, id gamepad.ID) []Event {
+	for i, pressed := range e.cur.buttons {
+		if i < len(e.prev.buttons) && e.prev.buttons[i] == pressed {
+			continue
+		}
+		dst = append(dst, GamepadButtonEvent{ID: id, Button: i, Pressed: pressed})
+	}
+	for i, v := range e.cur.axes {
+		if i < len(e.prev.axes) && !moved(e.prev.axes[i], v) {
+			continue
+		}
+		dst = append(dst, GamepadAxisEvent{ID: id, Axis: i, Value: v})
+	}
+
+	for b := range standardButtonCount {
+		if !e.buttonsPresent[b] {
+			continue
+		}
+		pressed, v := e.cur.standardPressed[b], e.cur.standardValues[b]
+		if e.prev.standardPressed[b] == pressed && !moved(e.prev.standardValues[b], v) {
+			continue
+		}
+		dst = append(dst, GamepadStandardButtonEvent{
+			ID:      id,
+			Button:  gamepaddb.StandardButton(b),
+			Pressed: pressed,
+			Value:   v,
+		})
+	}
+	for a := range standardAxisCount {
+		if !e.axesPresent[a] {
+			continue
+		}
+		if v := e.cur.standardAxes[a]; moved(e.prev.standardAxes[a], v) {
+			dst = append(dst, GamepadStandardAxisEvent{ID: id, Axis: gamepaddb.StandardAxis(a), Value: v})
+		}
+	}
+	return dst
+}
+
+// gamepadWaitTimeout is how long the idle loop may sleep before it has to read the gamepads again,
+// or 0 when it can sleep until the window system wakes it.
 func (u *UserInterface) gamepadWaitTimeout() float64 {
 	if u.gamepads == nil {
 		return 0
 	}
 	if u.gamepads.connected() {
-		return gamepadPollInterval
+		return gamepadPollInterval.Seconds()
 	}
-	return gamepadDetectInterval
+	return gamepadDetectInterval.Seconds()
 }
 
-// emitGamepadEvents polls the gamepads and queues what changed since the last poll.
+// emitGamepadEvents queues what changed on the gamepads since the last poll.
 func (u *UserInterface) emitGamepadEvents() {
 	if u.gamepads == nil {
 		return
 	}
-	for _, ev := range u.gamepads.update(nil) {
-		u.pushEvent(ev)
-	}
+	u.pushEvents(u.gamepads.update())
 }

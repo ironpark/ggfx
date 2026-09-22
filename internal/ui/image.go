@@ -217,17 +217,6 @@ func (i *Image) readPixels(pixels []byte, region image.Rectangle) (bool, error) 
 	return i.mipmap.ReadPixels(i.ui.graphicsDriver, pixels, region)
 }
 
-func (i *Image) DumpScreenshot(name string, blackbg bool) (string, error) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	return i.ui.dumpScreenshot(i.mipmap, name, blackbg)
-}
-
-func (u *UserInterface) DumpImages(dir string) (string, error) {
-	return u.dumpImages(dir)
-}
-
 func (i *Image) clear() {
 	i.Fill(0, 0, 0, 0, image.Rect(0, 0, i.width, i.height))
 }

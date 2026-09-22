@@ -130,10 +130,11 @@ func (u *UserInterface) initGraphicsOnMainThread(options *RunOptions) error {
 	return nil
 }
 
-// createWindowOnMainThread sets the window hints from the window's settings and options, creates
+// createWindowOnMainThread sets the window hints from the window's own settings and the process's
+// options, creates
 // the GLFW window, its surface and its callbacks. It must be called on the main thread after
 // initGraphicsOnMainThread.
-func (u *glfwBackend) createWindowOnMainThread(o *WindowOptions) error {
+func (u *glfwBackend) createWindowOnMainThread() error {
 	run := u.runOptions
 	if err := glfw.WindowHint(glfw.AutoIconify, glfw.False); err != nil {
 		return err
@@ -164,7 +165,7 @@ func (u *glfwBackend) createWindowOnMainThread(o *WindowOptions) error {
 	}
 
 	glfwTransparent := glfw.False
-	if o.Transparent {
+	if u.desktopWindow.isInitWindowTransparent() {
 		glfwTransparent = glfw.True
 	}
 	if err := glfw.WindowHint(glfw.TransparentFramebuffer, glfwTransparent); err != nil {
@@ -211,9 +212,9 @@ func (u *glfwBackend) createWindowOnMainThread(o *WindowOptions) error {
 		return err
 	}
 
-	u.initUnfocused = o.Unfocused
+	u.initUnfocused = u.desktopWindow.isInitWindowUnfocused()
 	focused := glfw.True
-	if o.Unfocused {
+	if u.initUnfocused {
 		focused = glfw.False
 	}
 	if err := glfw.WindowHint(glfw.FocusOnShow, focused); err != nil {
@@ -340,6 +341,21 @@ func (u *UserInterface) loopFrames(start func() error) (err error) {
 			return err
 		}
 	}
+}
+
+// cachedNativeWindow returns the window's native handle, asking the platform once. The handle does
+// not change for the life of the window, and asking for it costs a call into Cocoa or Win32.
+func (u *glfwBackend) cachedNativeWindow() (uintptr, error) {
+	if u.nativeWindowCached {
+		return u.nativeWindowHandle, nil
+	}
+	h, err := u.nativeWindow()
+	if err != nil {
+		return 0, err
+	}
+	u.nativeWindowHandle = h
+	u.nativeWindowCached = true
+	return h, nil
 }
 
 // pumpEvents processes the OS event queue once, waiting for an event when the FPS mode says so.
@@ -644,8 +660,10 @@ func (u *UserInterface) updateFrame() error {
 			return
 		}
 
-		if u.gamepads != nil {
-			nativeWindow, e := u.windows[0].nativeWindow()
+		// A loop woken often for another reason must not read the gamepads faster than the
+		// poll interval, which is what makes that interval mean what it says.
+		if u.gamepads != nil && u.gamepads.due(time.Now()) {
+			nativeWindow, e := u.windows[0].cachedNativeWindow()
 			if e != nil {
 				err = e
 				return
@@ -654,6 +672,7 @@ func (u *UserInterface) updateFrame() error {
 				err = e
 				return
 			}
+			u.gamepadsRead = true
 		}
 	}); err != nil {
 		return err
@@ -669,7 +688,10 @@ func (u *UserInterface) updateFrame() error {
 	// monitor, keep expiring. The before-update hooks, like the text input's, run for the same
 	// reason.
 	u.incrementTick()
-	u.emitGamepadEvents()
+	if u.gamepadsRead {
+		u.gamepadsRead = false
+		u.emitGamepadEvents()
+	}
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}

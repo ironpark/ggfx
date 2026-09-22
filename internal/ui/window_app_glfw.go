@@ -41,11 +41,7 @@ func (u *UserInterface) RunApp(app App, options *RunOptions) error {
 	if !windowsystem.Available() {
 		return errors.New("ui: no window system is available")
 	}
-	u.app = app
-	u.runOptions = options
-	if options.Gamepads {
-		u.gamepads = &gamepadTracker{}
-	}
+	u.startApp(app, options)
 	return u.runLoop(options, func() error {
 		return u.initGraphicsOnMainThread(options)
 	}, func() error {
@@ -72,9 +68,8 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 	if u.isTerminated() {
 		return nil, errors.New("ui: NewWindow cannot be called after the app stopped")
 	}
-	if o.Transparent && !u.runOptions.ScreenTransparent {
-		// The graphics driver is created transparent or not once, before any window exists.
-		return nil, errors.New("ui: a transparent window needs RunOptions.ScreenTransparent")
+	if err := u.checkWindowOptions(o); err != nil {
+		return nil, err
 	}
 
 	settings := &desktopWindow{ui: u}
@@ -90,6 +85,8 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 	settings.setInitWindowFloating(o.Floating)
 	settings.setInitWindowVisible(o.Visible)
 	settings.setInitWindowMaximized(o.Maximized)
+	settings.setInitWindowTransparent(o.Transparent)
+	settings.setInitWindowUnfocused(o.Unfocused)
 	if o.Resizable {
 		settings.windowResizingMode.Store(int32(WindowResizingModeEnabled))
 	}
@@ -146,7 +143,7 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 				settings.setInitWindowPositionInDIP(x, y)
 			}
 		}
-		if err = b.createWindowOnMainThread(o); err != nil {
+		if err = b.createWindowOnMainThread(); err != nil {
 			return
 		}
 		u.windows = append(u.windows, b)

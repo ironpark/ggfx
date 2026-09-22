@@ -59,6 +59,8 @@ type desktopWindow struct {
 	initWindowPositionInDIP    atomic.Pointer[image.Point]
 	initWindowSizeInDIP        atomic.Pointer[image.Point]
 	initWindowFloating         atomic.Bool
+	initWindowTransparent      atomic.Bool
+	initWindowUnfocused        atomic.Bool
 	initWindowMaximized        atomic.Bool
 	initWindowMousePassthrough atomic.Bool
 }
@@ -213,6 +215,22 @@ func (w *desktopWindow) setInitWindowSizeInDIP(width, height int) {
 
 	pt := image.Pt(width, height)
 	w.initWindowSizeInDIP.Store(&pt)
+}
+
+func (w *desktopWindow) isInitWindowTransparent() bool {
+	return w.initWindowTransparent.Load()
+}
+
+func (w *desktopWindow) setInitWindowTransparent(transparent bool) {
+	w.initWindowTransparent.Store(transparent)
+}
+
+func (w *desktopWindow) isInitWindowUnfocused() bool {
+	return w.initWindowUnfocused.Load()
+}
+
+func (w *desktopWindow) setInitWindowUnfocused(unfocused bool) {
+	w.initWindowUnfocused.Store(unfocused)
 }
 
 func (w *desktopWindow) isInitWindowFloating() bool {

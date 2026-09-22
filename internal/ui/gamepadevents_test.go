@@ -16,6 +16,7 @@ package ui
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ironpark/ggfx/internal/gamepad"
 	"github.com/ironpark/ggfx/internal/gamepaddb"
@@ -27,7 +28,9 @@ func poll(t *testing.T, tr *gamepadTracker, states []gamepad.VirtualGamepadState
 	if err := gamepad.Update(0, states); err != nil {
 		t.Fatal(err)
 	}
-	return tr.update(nil)
+	// The tracker rate-limits itself; a test polls whenever it says so.
+	tr.lastPoll = time.Time{}
+	return tr.update()
 }
 
 func TestGamepadTrackerReportsConnectionAndDisconnection(t *testing.T) {

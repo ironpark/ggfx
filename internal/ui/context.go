@@ -37,7 +37,7 @@ type frameDriver interface {
 	// OS callback like a window resize.
 	forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, outsideWidth, outsideHeight float64, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error
 
-	// wantsFrame reports whether the window has a frame pending. A game window always has.
+	// wantsFrame reports whether the window has a frame pending.
 	wantsFrame() bool
 
 	setSurface(surface graphicsdriver.Surface)

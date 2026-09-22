@@ -164,8 +164,9 @@ type GamepadAxisEvent struct {
 	Value float64
 }
 
-// GamepadStandardButtonEvent reports a standard-layout button changing. Value is 0..1 for an analog
-// button such as a trigger, and Pressed is whether it is above zero.
+// GamepadStandardButtonEvent reports a standard-layout button changing. Value is 0..1 for an
+// analog button such as a trigger; Pressed applies the dead zone an analog button needs, so a
+// resting trigger is not pressed even when its value is not quite zero.
 type GamepadStandardButtonEvent struct {
 	ID      GamepadID
 	Button  StandardGamepadButton

@@ -107,7 +107,6 @@ func (s *session) markClosed(callPlatformEnd bool) {
 	} else {
 		s.state = sessionStateClosed
 	}
-	clearVirtualKeyboardFromUI()
 	if callPlatformEnd {
 		s.end()
 	}
@@ -167,7 +166,6 @@ func (s *session) Update() error {
 	if s.IsClosed() {
 		return nil
 	}
-	reportVirtualKeyboardToUI(s.caretBounds)
 	s.composingThisUpdate = false
 	for {
 		select {

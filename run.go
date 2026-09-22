@@ -88,8 +88,8 @@ type RunOptions struct {
 	// SingleThread indicates whether the single thread mode is used explicitly or not.
 	// The single thread mode disables Ebitengine's thread safety to unlock maximum performance.
 	// If you use this you will have to manage threads yourself.
-	// Functions like `SetWindowSize` will no longer be concurrent-safe in the single thread mode.
-	// They must be called from the main thread or the same goroutine as the given game's callback functions like Update.
+	// Window methods will no longer be concurrent-safe in the single thread mode. They must be
+	// called from the main thread or the same goroutine as the event handler.
 	//
 	// SingleThread works only with desktops and consoles.
 	//
@@ -118,8 +118,8 @@ type RunOptions struct {
 
 	// ApplePressAndHoldEnabled indicates whether the press-and-hold feature is enabled or not.
 	// If true, pressing and holding a key might show a menu to select a character glyph variant.
-	// This is useful for GUI applications, but some APIs like [AppendInputChars]'s behavior is changed:
-	// for example, pressing and holding Q key would not repeat 'q' by [AppendInputChars].
+	// This is useful for GUI applications, but it changes what the keyboard reports: pressing
+	// and holding Q would not repeat 'q' as [TextEvent].
 	// If false, pressing and holding a key repeats the key event.
 	//
 	// ApplePressAndHoldEnabled is available only on macOS.
@@ -193,7 +193,7 @@ type AbsPather interface {
 }
 
 // Tick returns the current tick count.
-// The tick count starts with 0 and is incremented by one on every Update call.
+// The tick count starts with 0 and is incremented by one on every iteration of the event loop.
 //
 // Tick is concurrent-safe.
 func Tick() int64 {
@@ -205,7 +205,7 @@ func Tick() int64 {
 //
 // If RunOnMainThread is called on the main thread, RunOnMainThread blocks forever.
 //
-// RunOnMainThread might not run the function e.g. before the game starts or after the game ends.
+// RunOnMainThread might not run the function, e.g. before [Run] starts or after it ends.
 //
 // RunOnMainThread is useful to access platform-specific APIs in a safe way.
 //

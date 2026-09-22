@@ -301,6 +301,16 @@ func (u *UserInterface) pushEvent(ev Event) {
 	u.eventsMu.Unlock()
 }
 
+// pushEvents queues several events at once, which costs one lock rather than one per event.
+func (u *UserInterface) pushEvents(evs []Event) {
+	if len(evs) == 0 {
+		return
+	}
+	u.eventsMu.Lock()
+	u.events = append(u.events, evs...)
+	u.eventsMu.Unlock()
+}
+
 // dispatchEvents hands the queued events to the app, in order. A window whose CloseEvent was not
 // kept open is closed.
 func (u *UserInterface) dispatchEvents() error {

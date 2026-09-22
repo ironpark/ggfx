@@ -73,6 +73,10 @@ type glfwBackend struct {
 	// closed reports whether the window was destroyed.
 	closed bool
 
+	// nativeWindowHandle is the window's native handle, cached by cachedNativeWindow.
+	nativeWindowHandle uintptr
+	nativeWindowCached bool
+
 	// primary reports whether this is the window that the process-level settings address.
 	primary bool
 
