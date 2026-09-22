@@ -22,7 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/debug"
+	"github.com/ironpark/ggfx/internal/debug"
 )
 
 type Thread interface {

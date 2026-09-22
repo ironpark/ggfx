@@ -18,7 +18,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepad"
+	"github.com/ironpark/ggfx/internal/gamepad"
 )
 
 func TestXboxDeviceEvents(t *testing.T) {

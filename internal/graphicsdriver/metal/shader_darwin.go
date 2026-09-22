@@ -17,11 +17,11 @@ package metal
 import (
 	"fmt"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/metal/mtl"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir/msl"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderprecomp"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
+	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shaderir/msl"
+	"github.com/ironpark/ggfx/internal/shaderprecomp"
 )
 
 type shaderRpsKey struct {

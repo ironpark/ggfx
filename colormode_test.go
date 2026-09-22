@@ -12,26 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten_test
+package ggfx_test
 
 import (
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 func TestPreferredColorMode(t *testing.T) {
 	// The preferred color mode must be kept even on a platform without a window (#3480).
-	defer ebiten.SetPreferredColorMode(ebiten.ColorModeUnknown)
+	defer ggfx.SetPreferredColorMode(ggfx.ColorModeUnknown)
 
-	if got, want := ebiten.PreferredColorMode(), ebiten.ColorModeUnknown; got != want {
-		t.Errorf("ebiten.PreferredColorMode(): got: %d, want: %d", got, want)
+	if got, want := ggfx.PreferredColorMode(), ggfx.ColorModeUnknown; got != want {
+		t.Errorf("ggfx.PreferredColorMode(): got: %d, want: %d", got, want)
 	}
 
-	for _, mode := range []ebiten.ColorMode{ebiten.ColorModeDark, ebiten.ColorModeLight, ebiten.ColorModeUnknown} {
-		ebiten.SetPreferredColorMode(mode)
-		if got, want := ebiten.PreferredColorMode(), mode; got != want {
-			t.Errorf("ebiten.PreferredColorMode() after ebiten.SetPreferredColorMode(%d): got: %d, want: %d", mode, got, want)
+	for _, mode := range []ggfx.ColorMode{ggfx.ColorModeDark, ggfx.ColorModeLight, ggfx.ColorModeUnknown} {
+		ggfx.SetPreferredColorMode(mode)
+		if got, want := ggfx.PreferredColorMode(), mode; got != want {
+			t.Errorf("ggfx.PreferredColorMode() after ggfx.SetPreferredColorMode(%d): got: %d, want: %d", mode, got, want)
 		}
 	}
 }

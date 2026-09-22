@@ -17,9 +17,9 @@ package graphicscommand
 import (
 	"image"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/debug"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/debug"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 type WritePixelsCommandArgs = writePixelsCommandArgs

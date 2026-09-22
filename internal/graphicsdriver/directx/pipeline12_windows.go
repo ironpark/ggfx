@@ -19,8 +19,8 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 var inputElementDescsForDX12 []_D3D12_INPUT_ELEMENT_DESC

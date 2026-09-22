@@ -15,7 +15,7 @@
 // Package shaderprecomp is a platform-neutral registry of precompiled shaders.
 //
 // The public registration APIs live in the experimental package
-// github.com/hajimehoshi/ebiten/v2/exp/shaderprecomp, which forwards to this registry.
+// github.com/ironpark/ggfx/exp/shaderprecomp, which forwards to this registry.
 // Each graphics driver reads its own kind of precompiled shader from this registry.
 // Registrations for a driver that is not active on the current platform are simply never read.
 package shaderprecomp
@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 // DXBCPlatform identifies the platform a precompiled DXBC binary targets.

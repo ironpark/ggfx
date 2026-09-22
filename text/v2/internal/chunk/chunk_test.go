@@ -20,7 +20,7 @@ import (
 
 	"github.com/go-text/typesetting/bidi"
 
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/chunk"
+	"github.com/ironpark/ggfx/text/v2/internal/chunk"
 )
 
 func TestChunks(t *testing.T) {

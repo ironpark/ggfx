@@ -18,7 +18,7 @@ import (
 	"image"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 func (i *InputState) SetKeyPressed(key Key, t InputTime) {
@@ -35,10 +35,6 @@ func (i *InputState) SetMouseButtonPressed(button MouseButton, t InputTime) {
 
 func (i *InputState) SetMouseButtonReleased(button MouseButton, t InputTime) {
 	i.setMouseButtonReleased(button, t)
-}
-
-func IsConnectionReset(err error) bool {
-	return isConnectionReset(err)
 }
 
 func SetVirtualKeyboardStateForTest(caretBounds image.Rectangle, caretKnown bool, visibleRegion image.Rectangle, visibleRegionKnown bool) {

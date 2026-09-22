@@ -23,8 +23,8 @@ import (
 	"golang.org/x/image/math/fixed"
 	gvector "golang.org/x/image/vector"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/vector"
 )
 
 // glyphExtentsToBounds returns the bounding rectangle of a glyph in the
@@ -95,7 +95,7 @@ func newGlyphRasterizer(w, h int, segs []opentype.Segment, subpixelOffset fixed.
 	return rast
 }
 
-func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ebiten.Image {
+func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ggfx.Image {
 	if len(segs) == 0 {
 		return nil
 	}
@@ -116,7 +116,7 @@ func segmentsToImage(segs []opentype.Segment, subpixelOffset fixed.Point26_6, gl
 	dst := newPooledRGBA(w, h)
 	defer releasePooledRGBA(dst)
 	rast.Draw(dst, dst.Bounds(), image.Opaque, image.Point{})
-	return ebiten.NewImageFromImage(dst)
+	return ggfx.NewImageFromImage(dst)
 }
 
 func appendVectorPathFromSegments(path *vector.Path, segs []opentype.Segment, x, y float32) {

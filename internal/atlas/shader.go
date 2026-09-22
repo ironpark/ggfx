@@ -22,10 +22,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/builtinshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
-	"github.com/hajimehoshi/ebiten/v2/internal/legacyshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/builtinshader"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/legacyshader"
+	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 // shadersWithInternalShader keeps track of shaders that have internal graphicscommand.Shader.

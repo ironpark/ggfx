@@ -14,7 +14,7 @@
 
 //go:build !js
 
-package ebiten_test
+package ggfx_test
 
 import (
 	"io/fs"
@@ -22,12 +22,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/internal/file"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/file"
 )
 
-// TestDroppedFilesAbsPather ensures that the file system [ebiten.DroppedFiles] returns on desktops
-// provides directory entries and files implementing [ebiten.AbsPather].
+// TestDroppedFilesAbsPather ensures that the file system [ggfx.DroppedFiles] returns on desktops
+// provides directory entries and files implementing [ggfx.AbsPather].
 func TestDroppedFilesAbsPather(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")
@@ -47,9 +47,9 @@ func TestDroppedFilesAbsPather(t *testing.T) {
 	if len(ents) != 1 {
 		t.Fatalf("len(ents): got: %d, want: %d", len(ents), 1)
 	}
-	e, ok := ents[0].(ebiten.AbsPather)
+	e, ok := ents[0].(ggfx.AbsPather)
 	if !ok {
-		t.Fatalf("%T must implement ebiten.AbsPather", ents[0])
+		t.Fatalf("%T must implement ggfx.AbsPather", ents[0])
 	}
 	if got, want := e.AbsPath(), path; got != want {
 		t.Errorf("AbsPath(): got: %s, want: %s", got, want)
@@ -62,9 +62,9 @@ func TestDroppedFilesAbsPather(t *testing.T) {
 	defer func() {
 		_ = f.Close()
 	}()
-	a, ok := f.(ebiten.AbsPather)
+	a, ok := f.(ggfx.AbsPather)
 	if !ok {
-		t.Fatalf("%T must implement ebiten.AbsPather", f)
+		t.Fatalf("%T must implement ggfx.AbsPather", f)
 	}
 	if got, want := a.AbsPath(), path; got != want {
 		t.Errorf("AbsPath(): got: %s, want: %s", got, want)

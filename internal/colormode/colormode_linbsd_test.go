@@ -21,7 +21,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/colormode"
+	"github.com/ironpark/ggfx/internal/colormode"
 )
 
 func TestCheckGTKSettingsFile(t *testing.T) {

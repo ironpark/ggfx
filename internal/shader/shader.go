@@ -23,7 +23,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 type variable struct {

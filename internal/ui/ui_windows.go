@@ -23,14 +23,14 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/color"
-	"github.com/hajimehoshi/ebiten/v2/internal/colormode"
-	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/directx"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/opengl"
-	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
-	"github.com/hajimehoshi/ebiten/v2/internal/winver"
+	"github.com/ironpark/ggfx/internal/color"
+	"github.com/ironpark/ggfx/internal/colormode"
+	"github.com/ironpark/ggfx/internal/glfw"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/directx"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
+	"github.com/ironpark/ggfx/internal/microsoftgdk"
+	"github.com/ironpark/ggfx/internal/winver"
 )
 
 func (u *UserInterface) initializePlatform() error {

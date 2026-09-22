@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphics"
 )
 
 func TestCompileShaderUnitDirective(t *testing.T) {

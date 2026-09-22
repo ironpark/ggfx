@@ -28,9 +28,9 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/cocoa"
-	"github.com/hajimehoshi/ebiten/v2/internal/color"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/metal/mtl"
+	"github.com/ironpark/ggfx/internal/cocoa"
+	"github.com/ironpark/ggfx/internal/color"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
 )
 
 var (

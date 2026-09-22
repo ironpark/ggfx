@@ -26,8 +26,8 @@ import (
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/cocoa"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/metal/ca"
+	"github.com/ironpark/ggfx/internal/cocoa"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
 )
 
 func (v *view) initDisplayLink() error {

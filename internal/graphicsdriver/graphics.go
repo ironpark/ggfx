@@ -17,9 +17,9 @@ package graphicsdriver
 import (
 	"image"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/color"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/color"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 type DstRegion struct {

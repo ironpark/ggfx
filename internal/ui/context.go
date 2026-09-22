@@ -19,12 +19,12 @@ import (
 	"math"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/atlas"
-	"github.com/hajimehoshi/ebiten/v2/internal/clock"
-	"github.com/hajimehoshi/ebiten/v2/internal/debug"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
-	"github.com/hajimehoshi/ebiten/v2/internal/hook"
+	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/clock"
+	"github.com/ironpark/ggfx/internal/debug"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/hook"
 )
 
 var (

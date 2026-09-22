@@ -17,7 +17,7 @@ package ui_test
 import (
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 func TestMultipleKeyReleases(t *testing.T) {

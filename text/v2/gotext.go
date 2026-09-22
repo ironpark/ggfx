@@ -28,8 +28,8 @@ import (
 	"golang.org/x/image/math/fixed"
 	"golang.org/x/text/language"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/vector"
 )
 
 var _ Face = (*GoTextFace)(nil)
@@ -378,7 +378,7 @@ type goTextGlyphImageArgs struct {
 }
 
 // glyphImage implements glyphImager.
-func (im *goTextLineImager) glyphImage(index int) *ebiten.Image {
+func (im *goTextLineImager) glyphImage(index int) *ggfx.Image {
 	args := &im.args[index]
 	glyph := args.glyph
 	face := im.face
@@ -393,9 +393,9 @@ func (im *goTextLineImager) glyphImage(index int) *ebiten.Image {
 		variations: face.variationsString,
 	}
 	subpixelOffset := args.subpixelOffset
-	return face.Source.getOrCreateGlyphImage(face, key, func() (*ebiten.Image, bool) {
+	return face.Source.getOrCreateGlyphImage(face, key, func() (*ggfx.Image, bool) {
 		if bm := rd.bitmap(); bm != nil {
-			return ebiten.NewImageFromImage(bm), true
+			return ggfx.NewImageFromImage(bm), true
 		}
 		if svg := rd.svg(); svg != nil {
 			if img := svgToImage(svg, fixed26_6ToFloat64(rd.size), subpixelOffset, rd.bounds); img != nil {

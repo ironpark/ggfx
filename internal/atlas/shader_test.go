@@ -20,13 +20,13 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/atlas"
-	"github.com/hajimehoshi/ebiten/v2/internal/builtinshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
-	"github.com/hajimehoshi/ebiten/v2/internal/legacyshader"
-	etesting "github.com/hajimehoshi/ebiten/v2/internal/testing"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/builtinshader"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/legacyshader"
+	etesting "github.com/ironpark/ggfx/internal/testing"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 func TestShaderFillTwice(t *testing.T) {

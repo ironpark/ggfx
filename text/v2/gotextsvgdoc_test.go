@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/ironpark/ggfx/text/v2"
 )
 
 func TestSVGGlyphDocument(t *testing.T) {

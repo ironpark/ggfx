@@ -19,9 +19,9 @@ import (
 	"math"
 	"reflect"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/atlas"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 type Shader struct {

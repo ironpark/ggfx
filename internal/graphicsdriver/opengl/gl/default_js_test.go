@@ -19,7 +19,7 @@ import (
 	"syscall/js"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/opengl/gl"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
 )
 
 // fakeWebGLContextSource creates an object that behaves like a WebGL context enough for the tests.

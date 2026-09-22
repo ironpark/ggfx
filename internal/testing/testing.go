@@ -18,7 +18,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 type game struct {
@@ -28,10 +28,10 @@ type game struct {
 
 func (g *game) Update() error {
 	g.code = g.m.Run()
-	return ebiten.Termination
+	return ggfx.Termination
 }
 
-func (*game) Draw(*ebiten.Image) {
+func (*game) Draw(*ggfx.Image) {
 }
 
 func (*game) Layout(int, int) (int, int) {
@@ -44,7 +44,7 @@ func MainWithRunLoop(m *testing.M) {
 		m:    m,
 		code: 1,
 	}
-	if err := ebiten.RunGame(g); err != nil {
+	if err := ggfx.RunGame(g); err != nil {
 		panic(err)
 	}
 	if g.code != 0 {

@@ -17,7 +17,7 @@ package textinput_test
 import (
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/exp/textinput"
+	"github.com/ironpark/ggfx/exp/textinput"
 )
 
 // The buffer in these tests is a text field holding "ab|cd", into which an IME

@@ -129,4 +129,4 @@
 // `nintendosdkprofile` enables a profiler for NintendoSDK.
 //
 // `playstation5` is for PlayStation 5.
-package ebiten
+package ggfx

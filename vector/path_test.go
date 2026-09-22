@@ -22,8 +22,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/vector"
 )
 
 func TestIsPointCloseToSegment(t *testing.T) {
@@ -211,13 +211,13 @@ func TestArcAndGeoM(t *testing.T) {
 
 	testCases := []struct {
 		name     string
-		geoM     ebiten.GeoM
+		geoM     ggfx.GeoM
 		origPath vector.Path
 		refPath  vector.Path
 	}{
 		{
 			name: "identity",
-			geoM: ebiten.GeoM{},
+			geoM: ggfx.GeoM{},
 			origPath: func() (p vector.Path) {
 				p.MoveTo(0, 0)
 				p.ArcTo(16, 0, 16, 16, 16)
@@ -231,7 +231,7 @@ func TestArcAndGeoM(t *testing.T) {
 		},
 		{
 			name: "scale 2x",
-			geoM: func() (geoM ebiten.GeoM) {
+			geoM: func() (geoM ggfx.GeoM) {
 				geoM.Scale(2, 2)
 				return geoM
 			}(),
@@ -248,7 +248,7 @@ func TestArcAndGeoM(t *testing.T) {
 		},
 		{
 			name: "scale 256x",
-			geoM: func() (geoM ebiten.GeoM) {
+			geoM: func() (geoM ggfx.GeoM) {
 				geoM.Scale(256, 256)
 				return geoM
 			}(),
@@ -267,9 +267,9 @@ func TestArcAndGeoM(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			origDst := ebiten.NewImage(16, 16)
+			origDst := ggfx.NewImage(16, 16)
 			defer origDst.Deallocate()
-			refDst := ebiten.NewImage(16, 16)
+			refDst := ggfx.NewImage(16, 16)
 			defer refDst.Deallocate()
 
 			var path vector.Path
@@ -374,9 +374,9 @@ func TestArcHugeAngle(t *testing.T) {
 
 // Issue #3330
 func TestFillPathSubImage(t *testing.T) {
-	dst := ebiten.NewImage(16, 16)
+	dst := ggfx.NewImage(16, 16)
 
-	dst2 := dst.SubImage(image.Rect(0, 0, 8, 8)).(*ebiten.Image)
+	dst2 := dst.SubImage(image.Rect(0, 0, 8, 8)).(*ggfx.Image)
 	var p vector.Path
 	p.MoveTo(0, 0)
 	p.LineTo(8, 0)
@@ -394,7 +394,7 @@ func TestFillPathSubImage(t *testing.T) {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 
-	dst3 := dst2.SubImage(image.Rect(4, 4, 8, 8)).(*ebiten.Image)
+	dst3 := dst2.SubImage(image.Rect(4, 4, 8, 8)).(*ggfx.Image)
 	var p2 vector.Path
 	p2.MoveTo(4, 4)
 	p2.LineTo(8, 4)
@@ -417,13 +417,13 @@ func TestFillPathSubImage(t *testing.T) {
 
 func TestRaceConditionWithSubImage(t *testing.T) {
 	const w, h = 16, 16
-	src := ebiten.NewImage(w, h)
+	src := ggfx.NewImage(w, h)
 
 	var wg sync.WaitGroup
 	for i := range h {
 		for j := range w {
 			wg.Go(func() {
-				subImg := src.SubImage(image.Rect(i, j, i+1, j+1)).(*ebiten.Image)
+				subImg := src.SubImage(image.Rect(i, j, i+1, j+1)).(*ggfx.Image)
 				var p vector.Path
 				p.MoveTo(0, 0)
 				p.LineTo(w, 0)
@@ -434,7 +434,7 @@ func TestRaceConditionWithSubImage(t *testing.T) {
 				op.ColorScale.ScaleWithColor(color.White)
 				op.AntiAlias = true
 				vector.FillPath(subImg, &p, nil, op)
-				dst := ebiten.NewImage(w, h)
+				dst := ggfx.NewImage(w, h)
 				dst.DrawImage(subImg, nil)
 			})
 		}
@@ -444,7 +444,7 @@ func TestRaceConditionWithSubImage(t *testing.T) {
 
 // Issue #3355
 func TestFillPathSubImageAndImage(t *testing.T) {
-	dst := ebiten.NewImage(200, 200)
+	dst := ggfx.NewImage(200, 200)
 	defer dst.Deallocate()
 	for i := range 100 {
 		var path vector.Path
@@ -456,7 +456,7 @@ func TestFillPathSubImageAndImage(t *testing.T) {
 		path.Close()
 		drawOp := &vector.DrawPathOptions{}
 		drawOp.ColorScale.ScaleWithColor(color.RGBA{255, 0, 0, 255})
-		subDst := dst.SubImage(image.Rect(0, 0, 100, 100)).(*ebiten.Image)
+		subDst := dst.SubImage(image.Rect(0, 0, 100, 100)).(*ggfx.Image)
 		vector.FillPath(subDst, &path, nil, drawOp)
 		drawOp.ColorScale.Reset()
 		drawOp.ColorScale.ScaleWithColor(color.RGBA{0, 255, 0, 255})
@@ -489,7 +489,7 @@ func TestFillPathFillRule(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			dst := ebiten.NewImage(16, 16)
+			dst := ggfx.NewImage(16, 16)
 			defer dst.Deallocate()
 
 			var p vector.Path

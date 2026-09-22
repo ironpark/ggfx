@@ -17,8 +17,8 @@ package shaderir_test
 import (
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/builtinshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
+	"github.com/ironpark/ggfx/internal/builtinshader"
+	"github.com/ironpark/ggfx/internal/graphics"
 )
 
 func BenchmarkFilter(b *testing.B) {

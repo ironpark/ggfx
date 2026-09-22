@@ -21,12 +21,12 @@ import (
 
 	_ "github.com/ebitengine/hideconsole"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/atlas"
-	"github.com/hajimehoshi/ebiten/v2/internal/color"
-	"github.com/hajimehoshi/ebiten/v2/internal/colormode"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
-	"github.com/hajimehoshi/ebiten/v2/internal/mipmap"
-	"github.com/hajimehoshi/ebiten/v2/internal/thread"
+	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/color"
+	"github.com/ironpark/ggfx/internal/colormode"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/mipmap"
+	"github.com/ironpark/ggfx/internal/thread"
 )
 
 // RegularTermination represents a regular termination.

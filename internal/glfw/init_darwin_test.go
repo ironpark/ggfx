@@ -12,7 +12,7 @@ import (
 
 	// Importing the package links its init into the test binary, so the
 	// re-executed child below performs the resources-directory chdir.
-	_ "github.com/hajimehoshi/ebiten/v2/internal/glfw"
+	_ "github.com/ironpark/ggfx/internal/glfw"
 )
 
 // chdirChildEnv, when set in the environment, makes the test binary report its

@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/ironpark/ggfx/text/v2"
 )
 
 func limitedFaceTestFace(t *testing.T) *text.GoTextFace {

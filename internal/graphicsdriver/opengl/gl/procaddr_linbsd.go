@@ -23,7 +23,7 @@ import (
 
 	"github.com/ebitengine/purego"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/windowsystem"
+	"github.com/ironpark/ggfx/internal/windowsystem"
 )
 
 var (

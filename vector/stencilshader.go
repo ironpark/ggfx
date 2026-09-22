@@ -17,7 +17,7 @@ package vector
 import (
 	"sync"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 // The implementation is based on the following article:
@@ -26,24 +26,24 @@ import (
 // These values are protected by cacheM.
 
 var (
-	stencilBufferFillShader      *ebiten.Shader
-	stencilBufferBezierShader    *ebiten.Shader
-	stencilBufferNonZeroShader   *ebiten.Shader
-	stencilBufferNonZeroAAShader *ebiten.Shader
-	stencilBufferEvenOddShader   *ebiten.Shader
-	stencilBufferEvenOddAAShader *ebiten.Shader
+	stencilBufferFillShader      *ggfx.Shader
+	stencilBufferBezierShader    *ggfx.Shader
+	stencilBufferNonZeroShader   *ggfx.Shader
+	stencilBufferNonZeroAAShader *ggfx.Shader
+	stencilBufferEvenOddShader   *ggfx.Shader
+	stencilBufferEvenOddAAShader *ggfx.Shader
 
 	stencilBufferM sync.Mutex
 )
 
-func ensureStencilBufferShaders() (*ebiten.Shader, error) {
+func ensureStencilBufferShaders() (*ggfx.Shader, error) {
 	stencilBufferM.Lock()
 	defer stencilBufferM.Unlock()
 
 	if stencilBufferFillShader != nil {
 		return stencilBufferFillShader, nil
 	}
-	s, err := ebiten.NewShader([]byte(stencilBufferFillShaderSrc))
+	s, err := ggfx.NewShader([]byte(stencilBufferFillShaderSrc))
 	if err != nil {
 		return nil, err
 	}
@@ -51,14 +51,14 @@ func ensureStencilBufferShaders() (*ebiten.Shader, error) {
 	return stencilBufferFillShader, err
 }
 
-func ensureStencilBufferBezierShader() (*ebiten.Shader, error) {
+func ensureStencilBufferBezierShader() (*ggfx.Shader, error) {
 	stencilBufferM.Lock()
 	defer stencilBufferM.Unlock()
 
 	if stencilBufferBezierShader != nil {
 		return stencilBufferBezierShader, nil
 	}
-	s, err := ebiten.NewShader([]byte(stencilBufferBezierShaderSrc))
+	s, err := ggfx.NewShader([]byte(stencilBufferBezierShaderSrc))
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func ensureStencilBufferBezierShader() (*ebiten.Shader, error) {
 	return stencilBufferBezierShader, nil
 }
 
-func ensureStencilBufferNonZeroShader(antialias bool) (*ebiten.Shader, error) {
+func ensureStencilBufferNonZeroShader(antialias bool) (*ggfx.Shader, error) {
 	stencilBufferM.Lock()
 	defer stencilBufferM.Unlock()
 
@@ -74,7 +74,7 @@ func ensureStencilBufferNonZeroShader(antialias bool) (*ebiten.Shader, error) {
 		if stencilBufferNonZeroAAShader != nil {
 			return stencilBufferNonZeroAAShader, nil
 		}
-		s, err := ebiten.NewShader([]byte(stencilBufferNonZeroAAShaderSrc))
+		s, err := ggfx.NewShader([]byte(stencilBufferNonZeroAAShaderSrc))
 		if err != nil {
 			return nil, err
 		}
@@ -85,7 +85,7 @@ func ensureStencilBufferNonZeroShader(antialias bool) (*ebiten.Shader, error) {
 	if stencilBufferNonZeroShader != nil {
 		return stencilBufferNonZeroShader, nil
 	}
-	s, err := ebiten.NewShader([]byte(stencilBufferNonZeroShaderSrc))
+	s, err := ggfx.NewShader([]byte(stencilBufferNonZeroShaderSrc))
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func ensureStencilBufferNonZeroShader(antialias bool) (*ebiten.Shader, error) {
 	return stencilBufferNonZeroShader, nil
 }
 
-func ensureStencilBufferEvenOddShader(antialias bool) (*ebiten.Shader, error) {
+func ensureStencilBufferEvenOddShader(antialias bool) (*ggfx.Shader, error) {
 	stencilBufferM.Lock()
 	defer stencilBufferM.Unlock()
 
@@ -101,7 +101,7 @@ func ensureStencilBufferEvenOddShader(antialias bool) (*ebiten.Shader, error) {
 		if stencilBufferEvenOddAAShader != nil {
 			return stencilBufferEvenOddAAShader, nil
 		}
-		s, err := ebiten.NewShader([]byte(stencilBufferEvenOddAAShaderSrc))
+		s, err := ggfx.NewShader([]byte(stencilBufferEvenOddAAShaderSrc))
 		if err != nil {
 			return nil, err
 		}
@@ -112,7 +112,7 @@ func ensureStencilBufferEvenOddShader(antialias bool) (*ebiten.Shader, error) {
 	if stencilBufferEvenOddShader != nil {
 		return stencilBufferEvenOddShader, nil
 	}
-	s, err := ebiten.NewShader([]byte(stencilBufferEvenOddShaderSrc))
+	s, err := ggfx.NewShader([]byte(stencilBufferEvenOddShaderSrc))
 	if err != nil {
 		return nil, err
 	}

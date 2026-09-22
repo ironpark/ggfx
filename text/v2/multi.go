@@ -18,8 +18,8 @@ import (
 	"errors"
 	"unicode/utf8"
 
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx/text/v2/internal/textutil"
+	"github.com/ironpark/ggfx/vector"
 )
 
 var _ Face = (*MultiFace)(nil)

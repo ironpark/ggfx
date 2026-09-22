@@ -35,11 +35,11 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	t "github.com/hajimehoshi/ebiten/v2/internal/testing"
-	"github.com/hajimehoshi/ebiten/v2/internal/testresources"
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
+	"github.com/ironpark/ggfx"
+	t "github.com/ironpark/ggfx/internal/testing"
+	"github.com/ironpark/ggfx/internal/testresources"
+	"github.com/ironpark/ggfx/text/v2"
+	"github.com/ironpark/ggfx/text/v2/internal/textutil"
 )
 
 func TestMain(m *testing.M) {
@@ -88,7 +88,7 @@ func TestGlyphIndexWithLineBreaks(t *testing.T) {
 
 func TestTextColor(t *testing.T) {
 	clr := color.RGBA{R: 0x80, G: 0x80, B: 0x80, A: 0x80}
-	img := ebiten.NewImage(30, 30)
+	img := ggfx.NewImage(30, 30)
 	op := &text.DrawOptions{}
 	op.GeoM.Translate(0, 0)
 	op.ColorScale.ScaleWithColor(clr)
@@ -177,7 +177,7 @@ func (f *testGoXFace) Metrics() font.Metrics {
 // Issue #1378
 func TestNegativeKern(t *testing.T) {
 	f := text.NewGoXFace(&testGoXFace{})
-	dst := ebiten.NewImage(testGoXFaceSize*2, testGoXFaceSize)
+	dst := ggfx.NewImage(testGoXFaceSize*2, testGoXFaceSize)
 
 	// With testGoXFace, 'b' is rendered at the previous position as 0xff.
 	// 'a' is rendered at the current position as 0x80.
@@ -261,7 +261,7 @@ func (u *unhashableGoXFace) Metrics() font.Metrics {
 func TestUnhashableFace(t *testing.T) {
 	var face unhashableGoXFace
 	f := text.NewGoXFace(&face)
-	dst := ebiten.NewImage(unhashableGoXFaceSize*2, unhashableGoXFaceSize*2)
+	dst := ggfx.NewImage(unhashableGoXFaceSize*2, unhashableGoXFaceSize*2)
 	text.Draw(dst, "a", f, nil)
 
 	for j := range unhashableGoXFaceSize * 2 {
@@ -396,15 +396,15 @@ func TestConvertToFloat(t *testing.T) {
 
 // Issue #2954
 func TestDrawOptionsNotModified(t *testing.T) {
-	img := ebiten.NewImage(30, 30)
+	img := ggfx.NewImage(30, 30)
 
 	op := &text.DrawOptions{}
 	text.Draw(img, "Hello", text.NewGoXFace(bitmapfont.Face), op)
 
-	if got, want := op.GeoM, (ebiten.GeoM{}); got != want {
+	if got, want := op.GeoM, (ggfx.GeoM{}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
-	if got, want := op.ColorScale, (ebiten.ColorScale{}); got != want {
+	if got, want := op.ColorScale, (ggfx.ColorScale{}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 }
@@ -496,7 +496,7 @@ func TestCollection(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, f := range fs {
-				dst := ebiten.NewImage(16, 16)
+				dst := ggfx.NewImage(16, 16)
 				text.Draw(dst, "a", &text.GoTextFace{
 					Source: f,
 					Size:   16,
@@ -608,7 +608,7 @@ func TestAppendGlyphsWithInvalidSequence(t *testing.T) {
 }
 
 func TestBitmapFont(t *testing.T) {
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.TerminusTTF_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.TerminusTTF_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +626,7 @@ func TestBitmapFont(t *testing.T) {
 
 		imgW := int(size) * len(str) * 2
 		imgH := int(size) * 3
-		dst := ebiten.NewImage(imgW, imgH)
+		dst := ggfx.NewImage(imgW, imgH)
 		defer dst.Deallocate()
 
 		op := &text.DrawOptions{}
@@ -661,7 +661,7 @@ func TestBitmapFont(t *testing.T) {
 }
 
 func TestBitmapFontBaseline(t *testing.T) {
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.TerminusTTF_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.TerminusTTF_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -679,7 +679,7 @@ func TestBitmapFontBaseline(t *testing.T) {
 	for _, ch := range chars {
 		imgW := size * 2
 		imgH := size * 3
-		dst := ebiten.NewImage(imgW, imgH)
+		dst := ggfx.NewImage(imgW, imgH)
 		defer dst.Deallocate()
 
 		op := &text.DrawOptions{}
@@ -715,7 +715,7 @@ func TestGlyphAdvance(t *testing.T) {
 
 	goxFace := text.NewGoXFace(bitmapfont.Face)
 
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -817,7 +817,7 @@ func TestAdvanceAt(t *testing.T) {
 
 	goxFace := text.NewGoXFace(bitmapfont.Face)
 
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +926,7 @@ func TestAdvanceAt(t *testing.T) {
 func TestAdvanceAtBidi(t *testing.T) {
 	const eps = 1.0 / (1 << 6)
 
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1059,7 +1059,7 @@ func TestAdvanceAtBidi(t *testing.T) {
 func TestAdvanceAtRTLLineUnderChunker(t *testing.T) {
 	const eps = 1.0 / (1 << 6)
 
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1103,7 +1103,7 @@ func TestAdvanceAtRTLLineUnderChunker(t *testing.T) {
 func TestAdvanceAtRTLFaceMultiSentence(t *testing.T) {
 	const eps = 1.0 / (1 << 6)
 
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1126,7 +1126,7 @@ func TestAdvanceAtRTLFaceMultiSentence(t *testing.T) {
 func TestAdvanceAtMultiFace(t *testing.T) {
 	const eps = 1.0 / (1 << 6)
 
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1159,7 +1159,7 @@ func TestAdvanceAtMultiFace(t *testing.T) {
 func TestAdvanceAtLineBreak(t *testing.T) {
 	const eps = 1.0 / (1 << 6)
 
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1226,7 +1226,7 @@ func TestAdvanceAtLineBreak(t *testing.T) {
 }
 
 func TestAdvanceAtPanic(t *testing.T) {
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(fonts.MPlus1pRegular_ttf))
+	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1345,15 +1345,15 @@ func TestDrawWithScaledGeoM(t *testing.T) {
 		extentY = max(extentY, g.Y+float64(b.Dy()))
 	}
 
-	got := ebiten.NewImage(width, height)
+	got := ggfx.NewImage(width, height)
 	defer got.Deallocate()
-	want := ebiten.NewImage(width, height)
+	want := ggfx.NewImage(width, height)
 	defer want.Deallocate()
 
 	gotPix := make([]byte, 4*width*height)
 	wantPix := make([]byte, 4*width*height)
 
-	sameAsReference := func(geoM ebiten.GeoM) bool {
+	sameAsReference := func(geoM ggfx.GeoM) bool {
 		got.Clear()
 		op := &text.DrawOptions{}
 		op.GeoM = geoM
@@ -1365,7 +1365,7 @@ func TestDrawWithScaledGeoM(t *testing.T) {
 			if g.Image == nil {
 				continue
 			}
-			op := &ebiten.DrawImageOptions{}
+			op := &ggfx.DrawImageOptions{}
 			op.GeoM.Translate(g.X, g.Y)
 			op.GeoM.Concat(geoM)
 			want.DrawImage(g.Image, op)
@@ -1389,7 +1389,7 @@ func TestDrawWithScaledGeoM(t *testing.T) {
 			r := float64(i) / (steps - 1)
 
 			tx := -spanX + (width+2*spanX)*r
-			var geoM ebiten.GeoM
+			var geoM ggfx.GeoM
 			geoM.Scale(scale, scale)
 			geoM.Translate(tx, centerY)
 			if !sameAsReference(geoM) {
@@ -1397,7 +1397,7 @@ func TestDrawWithScaledGeoM(t *testing.T) {
 			}
 
 			ty := -spanY + (height+2*spanY)*r
-			geoM = ebiten.GeoM{}
+			geoM = ggfx.GeoM{}
 			geoM.Scale(scale, scale)
 			geoM.Translate(centerX, ty)
 			if !sameAsReference(geoM) {
@@ -1426,7 +1426,7 @@ func TestGoTextFaceSourceConcurrentDrawWithDifferentSizes(t *testing.T) {
 	start := make(chan struct{})
 	for i := range goroutineCount {
 		wg.Go(func() {
-			dst := ebiten.NewImage(64, 64)
+			dst := ggfx.NewImage(64, 64)
 			face := &text.GoTextFace{
 				Source: fs,
 				Size:   float64(10 + i),
@@ -1463,7 +1463,7 @@ func TestGoXFaceConcurrentDrawAndMeasure(t *testing.T) {
 	start := make(chan struct{})
 	for i := range goroutineCount {
 		wg.Go(func() {
-			dst := ebiten.NewImage(256, 64)
+			dst := ggfx.NewImage(256, 64)
 			str := string(rune('A'+i)) + "xyz"
 			<-start
 			for range loopCount {

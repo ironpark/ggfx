@@ -20,15 +20,15 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/internal/hook"
-	"github.com/hajimehoshi/ebiten/v2/internal/inputstate"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/hook"
+	"github.com/ironpark/ggfx/internal/inputstate"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 type gamepadState struct {
-	buttonDurations         [ebiten.GamepadButtonMax + 1]int
-	standardButtonDurations [ebiten.StandardGamepadButtonMax + 1]int
+	buttonDurations         [ggfx.GamepadButtonMax + 1]int
+	standardButtonDurations [ggfx.StandardGamepadButtonMax + 1]int
 }
 
 type touchState struct {
@@ -38,23 +38,23 @@ type touchState struct {
 }
 
 type inputState struct {
-	gamepadStates     map[ebiten.GamepadID]gamepadState
-	prevGamepadStates map[ebiten.GamepadID]gamepadState
+	gamepadStates     map[ggfx.GamepadID]gamepadState
+	prevGamepadStates map[ggfx.GamepadID]gamepadState
 
-	touchStates     map[ebiten.TouchID]touchState
-	prevTouchStates map[ebiten.TouchID]touchState
+	touchStates     map[ggfx.TouchID]touchState
+	prevTouchStates map[ggfx.TouchID]touchState
 
-	gamepadIDsBuf []ebiten.GamepadID
-	touchIDsBuf   []ebiten.TouchID
+	gamepadIDsBuf []ggfx.GamepadID
+	touchIDsBuf   []ggfx.TouchID
 
 	m sync.RWMutex
 }
 
 var theInputState = &inputState{
-	gamepadStates:     map[ebiten.GamepadID]gamepadState{},
-	prevGamepadStates: map[ebiten.GamepadID]gamepadState{},
-	touchStates:       map[ebiten.TouchID]touchState{},
-	prevTouchStates:   map[ebiten.TouchID]touchState{},
+	gamepadStates:     map[ggfx.GamepadID]gamepadState{},
+	prevGamepadStates: map[ggfx.GamepadID]gamepadState{},
+	touchStates:       map[ggfx.TouchID]touchState{},
+	prevTouchStates:   map[ggfx.TouchID]touchState{},
 }
 
 func init() {
@@ -74,12 +74,12 @@ func (i *inputState) update() {
 	clear(i.prevGamepadStates)
 	maps.Copy(i.prevGamepadStates, i.gamepadStates)
 
-	i.gamepadIDsBuf = ebiten.AppendGamepadIDs(i.gamepadIDsBuf[:0])
+	i.gamepadIDsBuf = ggfx.AppendGamepadIDs(i.gamepadIDsBuf[:0])
 	for _, id := range i.gamepadIDsBuf {
 		state := i.gamepadStates[id]
 
 		for b := range i.gamepadStates[id].buttonDurations {
-			if ebiten.IsGamepadButtonPressed(id, ebiten.GamepadButton(b)) {
+			if ggfx.IsGamepadButtonPressed(id, ggfx.GamepadButton(b)) {
 				state.buttonDurations[b]++
 			} else {
 				state.buttonDurations[b] = 0
@@ -87,7 +87,7 @@ func (i *inputState) update() {
 		}
 
 		for b := range i.gamepadStates[id].standardButtonDurations {
-			if ebiten.IsStandardGamepadButtonPressed(id, ebiten.StandardGamepadButton(b)) {
+			if ggfx.IsStandardGamepadButtonPressed(id, ggfx.StandardGamepadButton(b)) {
 				state.standardButtonDurations[b]++
 			} else {
 				state.standardButtonDurations[b] = 0
@@ -110,11 +110,11 @@ func (i *inputState) update() {
 	clear(i.prevTouchStates)
 	maps.Copy(i.prevTouchStates, i.touchStates)
 
-	i.touchIDsBuf = ebiten.AppendTouchIDs(i.touchIDsBuf[:0])
+	i.touchIDsBuf = ggfx.AppendTouchIDs(i.touchIDsBuf[:0])
 	for _, id := range i.touchIDsBuf {
 		state := i.touchStates[id]
 		state.duration++
-		state.x, state.y = ebiten.TouchPositionF(id)
+		state.x, state.y = ggfx.TouchPositionF(id)
 		i.touchStates[id] = state
 	}
 
@@ -132,7 +132,7 @@ func (i *inputState) update() {
 // AppendPressedKeys must be called in a game's Update, not Draw.
 //
 // AppendPressedKeys is concurrent safe.
-func AppendPressedKeys(keys []ebiten.Key) []ebiten.Key {
+func AppendPressedKeys(keys []ggfx.Key) []ggfx.Key {
 	return inputstate.AppendPressedKeys(keys)
 }
 
@@ -141,7 +141,7 @@ func AppendPressedKeys(keys []ebiten.Key) []ebiten.Key {
 // PressedKeys must be called in a game's Update, not Draw.
 //
 // Deprecated: as of v2.2. Use AppendPressedKeys instead.
-func PressedKeys() []ebiten.Key {
+func PressedKeys() []ggfx.Key {
 	return AppendPressedKeys(nil)
 }
 
@@ -151,7 +151,7 @@ func PressedKeys() []ebiten.Key {
 // AppendJustPressedKeys must be called in a game's Update, not Draw.
 //
 // AppendJustPressedKeys is concurrent safe.
-func AppendJustPressedKeys(keys []ebiten.Key) []ebiten.Key {
+func AppendJustPressedKeys(keys []ggfx.Key) []ggfx.Key {
 	return inputstate.AppendJustPressedKeys(keys)
 }
 
@@ -161,48 +161,48 @@ func AppendJustPressedKeys(keys []ebiten.Key) []ebiten.Key {
 // AppendJustReleasedKeys must be called in a game's Update, not Draw.
 //
 // AppendJustReleasedKeys is concurrent safe.
-func AppendJustReleasedKeys(keys []ebiten.Key) []ebiten.Key {
+func AppendJustReleasedKeys(keys []ggfx.Key) []ggfx.Key {
 	return inputstate.AppendJustReleasedKeys(keys)
 }
 
 // IsKeyJustPressed returns a boolean value indicating
 // whether the given key is pressed just in the current tick.
 //
-// IsKeyJustPressed always returns false for a key that represents multiple keys like [ebiten.KeyShift].
-// Use its left and right variants like [ebiten.KeyShiftLeft] and [ebiten.KeyShiftRight] instead.
+// IsKeyJustPressed always returns false for a key that represents multiple keys like [ggfx.KeyShift].
+// Use its left and right variants like [ggfx.KeyShiftLeft] and [ggfx.KeyShiftRight] instead.
 //
 // IsKeyJustPressed must be called in a game's Update, not Draw.
 //
 // IsKeyJustPressed is concurrent safe.
-func IsKeyJustPressed(key ebiten.Key) bool {
+func IsKeyJustPressed(key ggfx.Key) bool {
 	return inputstate.Get().IsKeyJustPressed(ui.Key(key))
 }
 
 // IsKeyJustReleased returns a boolean value indicating
 // whether the given key is released just in the current tick.
 //
-// IsKeyJustReleased always returns false for a key that represents multiple keys like [ebiten.KeyShift].
-// Use its left and right variants like [ebiten.KeyShiftLeft] and [ebiten.KeyShiftRight] instead.
+// IsKeyJustReleased always returns false for a key that represents multiple keys like [ggfx.KeyShift].
+// Use its left and right variants like [ggfx.KeyShiftLeft] and [ggfx.KeyShiftRight] instead.
 //
 // IsKeyJustReleased must be called in a game's Update, not Draw.
 //
 // IsKeyJustReleased is concurrent safe.
-func IsKeyJustReleased(key ebiten.Key) bool {
+func IsKeyJustReleased(key ggfx.Key) bool {
 	return inputstate.Get().IsKeyJustReleased(ui.Key(key))
 }
 
 // KeyPressDuration returns how long the key is pressed in ticks (Update).
 //
-// KeyPressDuration follows [ebiten.IsKeyPressed], and thus returns a positive value for a modifier key
+// KeyPressDuration follows [ggfx.IsKeyPressed], and thus returns a positive value for a modifier key
 // released in the current tick.
 //
-// KeyPressDuration always returns 0 for a key that represents multiple keys like [ebiten.KeyShift].
-// Use its left and right variants like [ebiten.KeyShiftLeft] and [ebiten.KeyShiftRight] instead.
+// KeyPressDuration always returns 0 for a key that represents multiple keys like [ggfx.KeyShift].
+// Use its left and right variants like [ggfx.KeyShiftLeft] and [ggfx.KeyShiftRight] instead.
 //
 // KeyPressDuration must be called in a game's Update, not Draw.
 //
 // KeyPressDuration is concurrent safe.
-func KeyPressDuration(key ebiten.Key) int {
+func KeyPressDuration(key ggfx.Key) int {
 	return int(inputstate.Get().KeyPressDuration(ui.Key(key)))
 }
 
@@ -212,7 +212,7 @@ func KeyPressDuration(key ebiten.Key) int {
 // IsMouseButtonJustPressed must be called in a game's Update, not Draw.
 //
 // IsMouseButtonJustPressed is concurrent safe.
-func IsMouseButtonJustPressed(button ebiten.MouseButton) bool {
+func IsMouseButtonJustPressed(button ggfx.MouseButton) bool {
 	return inputstate.Get().IsMouseButtonJustPressed(ui.MouseButton(button))
 }
 
@@ -222,7 +222,7 @@ func IsMouseButtonJustPressed(button ebiten.MouseButton) bool {
 // IsMouseButtonJustReleased must be called in a game's Update, not Draw.
 //
 // IsMouseButtonJustReleased is concurrent safe.
-func IsMouseButtonJustReleased(button ebiten.MouseButton) bool {
+func IsMouseButtonJustReleased(button ggfx.MouseButton) bool {
 	return inputstate.Get().IsMouseButtonJustReleased(ui.MouseButton(button))
 }
 
@@ -231,7 +231,7 @@ func IsMouseButtonJustReleased(button ebiten.MouseButton) bool {
 // MouseButtonPressDuration must be called in a game's Update, not Draw.
 //
 // MouseButtonPressDuration is concurrent safe.
-func MouseButtonPressDuration(button ebiten.MouseButton) int {
+func MouseButtonPressDuration(button ggfx.MouseButton) int {
 	return int(inputstate.Get().MouseButtonPressDuration(ui.MouseButton(button)))
 }
 
@@ -242,7 +242,7 @@ func MouseButtonPressDuration(button ebiten.MouseButton) int {
 // AppendJustConnectedGamepadIDs must be called in a game's Update, not Draw.
 //
 // AppendJustConnectedGamepadIDs is concurrent safe.
-func AppendJustConnectedGamepadIDs(gamepadIDs []ebiten.GamepadID) []ebiten.GamepadID {
+func AppendJustConnectedGamepadIDs(gamepadIDs []ggfx.GamepadID) []ggfx.GamepadID {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -262,7 +262,7 @@ func AppendJustConnectedGamepadIDs(gamepadIDs []ebiten.GamepadID) []ebiten.Gamep
 // JustConnectedGamepadIDs must be called in a game's Update, not Draw.
 //
 // Deprecated: as of v2.2. Use AppendJustConnectedGamepadIDs instead.
-func JustConnectedGamepadIDs() []ebiten.GamepadID {
+func JustConnectedGamepadIDs() []ggfx.GamepadID {
 	return AppendJustConnectedGamepadIDs(nil)
 }
 
@@ -272,7 +272,7 @@ func JustConnectedGamepadIDs() []ebiten.GamepadID {
 // IsGamepadJustDisconnected must be called in a game's Update, not Draw.
 //
 // IsGamepadJustDisconnected is concurrent safe.
-func IsGamepadJustDisconnected(id ebiten.GamepadID) bool {
+func IsGamepadJustDisconnected(id ggfx.GamepadID) bool {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -287,7 +287,7 @@ func IsGamepadJustDisconnected(id ebiten.GamepadID) bool {
 // AppendPressedGamepadButtons must be called in a game's Update, not Draw.
 //
 // AppendPressedGamepadButtons is concurrent safe.
-func AppendPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadButton) []ebiten.GamepadButton {
+func AppendPressedGamepadButtons(id ggfx.GamepadID, buttons []ggfx.GamepadButton) []ggfx.GamepadButton {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -300,7 +300,7 @@ func AppendPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadBu
 		if d == 0 {
 			continue
 		}
-		buttons = append(buttons, ebiten.GamepadButton(b))
+		buttons = append(buttons, ggfx.GamepadButton(b))
 	}
 
 	return buttons
@@ -312,7 +312,7 @@ func AppendPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadBu
 // AppendJustPressedGamepadButtons must be called in a game's Update, not Draw.
 //
 // AppendJustPressedGamepadButtons is concurrent safe.
-func AppendJustPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadButton) []ebiten.GamepadButton {
+func AppendJustPressedGamepadButtons(id ggfx.GamepadID, buttons []ggfx.GamepadButton) []ggfx.GamepadButton {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -325,7 +325,7 @@ func AppendJustPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.Gamep
 		if d != 1 {
 			continue
 		}
-		buttons = append(buttons, ebiten.GamepadButton(b))
+		buttons = append(buttons, ggfx.GamepadButton(b))
 	}
 
 	return buttons
@@ -337,7 +337,7 @@ func AppendJustPressedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.Gamep
 // AppendJustReleasedGamepadButtons must be called in a game's Update, not Draw.
 //
 // AppendJustReleasedGamepadButtons is concurrent safe.
-func AppendJustReleasedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.GamepadButton) []ebiten.GamepadButton {
+func AppendJustReleasedGamepadButtons(id ggfx.GamepadID, buttons []ggfx.GamepadButton) []ggfx.GamepadButton {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -357,7 +357,7 @@ func AppendJustReleasedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.Game
 		if prevState.buttonDurations[b] == 0 {
 			continue
 		}
-		buttons = append(buttons, ebiten.GamepadButton(b))
+		buttons = append(buttons, ggfx.GamepadButton(b))
 	}
 
 	return buttons
@@ -369,7 +369,7 @@ func AppendJustReleasedGamepadButtons(id ebiten.GamepadID, buttons []ebiten.Game
 // IsGamepadButtonJustPressed must be called in a game's Update, not Draw.
 //
 // IsGamepadButtonJustPressed is concurrent safe.
-func IsGamepadButtonJustPressed(id ebiten.GamepadID, button ebiten.GamepadButton) bool {
+func IsGamepadButtonJustPressed(id ggfx.GamepadID, button ggfx.GamepadButton) bool {
 	return GamepadButtonPressDuration(id, button) == 1
 }
 
@@ -379,8 +379,8 @@ func IsGamepadButtonJustPressed(id ebiten.GamepadID, button ebiten.GamepadButton
 // IsGamepadButtonJustReleased must be called in a game's Update, not Draw.
 //
 // IsGamepadButtonJustReleased is concurrent safe.
-func IsGamepadButtonJustReleased(id ebiten.GamepadID, button ebiten.GamepadButton) bool {
-	if button < 0 || ebiten.GamepadButtonMax < button {
+func IsGamepadButtonJustReleased(id ggfx.GamepadID, button ggfx.GamepadButton) bool {
+	if button < 0 || ggfx.GamepadButtonMax < button {
 		return false
 	}
 
@@ -404,8 +404,8 @@ func IsGamepadButtonJustReleased(id ebiten.GamepadID, button ebiten.GamepadButto
 // GamepadButtonPressDuration must be called in a game's Update, not Draw.
 //
 // GamepadButtonPressDuration is concurrent safe.
-func GamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.GamepadButton) int {
-	if button < 0 || ebiten.GamepadButtonMax < button {
+func GamepadButtonPressDuration(id ggfx.GamepadID, button ggfx.GamepadButton) int {
+	if button < 0 || ggfx.GamepadButtonMax < button {
 		return 0
 	}
 
@@ -426,7 +426,7 @@ func GamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.GamepadButton
 // AppendPressedStandardGamepadButtons must be called in a game's Update, not Draw.
 //
 // AppendPressedStandardGamepadButtons is concurrent safe.
-func AppendPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.StandardGamepadButton) []ebiten.StandardGamepadButton {
+func AppendPressedStandardGamepadButtons(id ggfx.GamepadID, buttons []ggfx.StandardGamepadButton) []ggfx.StandardGamepadButton {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -439,7 +439,7 @@ func AppendPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.S
 		if d == 0 {
 			continue
 		}
-		buttons = append(buttons, ebiten.StandardGamepadButton(i))
+		buttons = append(buttons, ggfx.StandardGamepadButton(i))
 	}
 
 	return buttons
@@ -451,7 +451,7 @@ func AppendPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.S
 // AppendJustPressedStandardGamepadButtons must be called in a game's Update, not Draw.
 //
 // AppendJustPressedStandardGamepadButtons is concurrent safe.
-func AppendJustPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.StandardGamepadButton) []ebiten.StandardGamepadButton {
+func AppendJustPressedStandardGamepadButtons(id ggfx.GamepadID, buttons []ggfx.StandardGamepadButton) []ggfx.StandardGamepadButton {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -464,7 +464,7 @@ func AppendJustPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebit
 		if d != 1 {
 			continue
 		}
-		buttons = append(buttons, ebiten.StandardGamepadButton(b))
+		buttons = append(buttons, ggfx.StandardGamepadButton(b))
 	}
 
 	return buttons
@@ -476,7 +476,7 @@ func AppendJustPressedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebit
 // AppendJustReleasedStandardGamepadButtons must be called in a game's Update, not Draw.
 //
 // AppendJustReleasedStandardGamepadButtons is concurrent safe.
-func AppendJustReleasedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebiten.StandardGamepadButton) []ebiten.StandardGamepadButton {
+func AppendJustReleasedStandardGamepadButtons(id ggfx.GamepadID, buttons []ggfx.StandardGamepadButton) []ggfx.StandardGamepadButton {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -496,7 +496,7 @@ func AppendJustReleasedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebi
 		if prevState.standardButtonDurations[b] == 0 {
 			continue
 		}
-		buttons = append(buttons, ebiten.StandardGamepadButton(b))
+		buttons = append(buttons, ggfx.StandardGamepadButton(b))
 	}
 
 	return buttons
@@ -508,7 +508,7 @@ func AppendJustReleasedStandardGamepadButtons(id ebiten.GamepadID, buttons []ebi
 // IsStandardGamepadButtonJustPressed must be called in a game's Update, not Draw.
 //
 // IsStandardGamepadButtonJustPressed is concurrent safe.
-func IsStandardGamepadButtonJustPressed(id ebiten.GamepadID, button ebiten.StandardGamepadButton) bool {
+func IsStandardGamepadButtonJustPressed(id ggfx.GamepadID, button ggfx.StandardGamepadButton) bool {
 	return StandardGamepadButtonPressDuration(id, button) == 1
 }
 
@@ -518,8 +518,8 @@ func IsStandardGamepadButtonJustPressed(id ebiten.GamepadID, button ebiten.Stand
 // IsStandardGamepadButtonJustReleased must be called in a game's Update, not Draw.
 //
 // IsStandardGamepadButtonJustReleased is concurrent safe.
-func IsStandardGamepadButtonJustReleased(id ebiten.GamepadID, button ebiten.StandardGamepadButton) bool {
-	if button < 0 || ebiten.StandardGamepadButtonMax < button {
+func IsStandardGamepadButtonJustReleased(id ggfx.GamepadID, button ggfx.StandardGamepadButton) bool {
+	if button < 0 || ggfx.StandardGamepadButtonMax < button {
 		return false
 	}
 
@@ -543,8 +543,8 @@ func IsStandardGamepadButtonJustReleased(id ebiten.GamepadID, button ebiten.Stan
 // StandardGamepadButtonPressDuration must be called in a game's Update, not Draw.
 //
 // StandardGamepadButtonPressDuration is concurrent safe.
-func StandardGamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.StandardGamepadButton) int {
-	if button < 0 || ebiten.StandardGamepadButtonMax < button {
+func StandardGamepadButtonPressDuration(id ggfx.GamepadID, button ggfx.StandardGamepadButton) int {
+	if button < 0 || ggfx.StandardGamepadButtonMax < button {
 		return 0
 	}
 
@@ -571,7 +571,7 @@ func StandardGamepadButtonPressDuration(id ebiten.GamepadID, button ebiten.Stand
 // AppendJustPressedTouchIDs must be called in a game's Update, not Draw.
 //
 // AppendJustPressedTouchIDs is concurrent safe.
-func AppendJustPressedTouchIDs(touchIDs []ebiten.TouchID) []ebiten.TouchID {
+func AppendJustPressedTouchIDs(touchIDs []ggfx.TouchID) []ggfx.TouchID {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -592,7 +592,7 @@ func AppendJustPressedTouchIDs(touchIDs []ebiten.TouchID) []ebiten.TouchID {
 // JustPressedTouchIDs must be called in a game's Update, not Draw.
 //
 // Deprecated: as of v2.2. Use AppendJustPressedTouchIDs instead.
-func JustPressedTouchIDs() []ebiten.TouchID {
+func JustPressedTouchIDs() []ggfx.TouchID {
 	return AppendJustPressedTouchIDs(nil)
 }
 
@@ -606,7 +606,7 @@ func JustPressedTouchIDs() []ebiten.TouchID {
 // AppendJustReleasedTouchIDs must be called in a game's Update, not Draw.
 //
 // AppendJustReleasedTouchIDs is concurrent safe.
-func AppendJustReleasedTouchIDs(touchIDs []ebiten.TouchID) []ebiten.TouchID {
+func AppendJustReleasedTouchIDs(touchIDs []ggfx.TouchID) []ggfx.TouchID {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -635,7 +635,7 @@ func AppendJustReleasedTouchIDs(touchIDs []ebiten.TouchID) []ebiten.TouchID {
 // IsTouchJustReleased must be called in a game's Update, not Draw.
 //
 // IsTouchJustReleased is concurrent safe.
-func IsTouchJustReleased(id ebiten.TouchID) bool {
+func IsTouchJustReleased(id ggfx.TouchID) bool {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 
@@ -652,7 +652,7 @@ func IsTouchJustReleased(id ebiten.TouchID) bool {
 // TouchPressDuration must be called in a game's Update, not Draw.
 //
 // TouchPressDuration is concurrent safe.
-func TouchPressDuration(id ebiten.TouchID) int {
+func TouchPressDuration(id ggfx.TouchID) int {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 	return theInputState.touchStates[id].duration
@@ -667,7 +667,7 @@ func TouchPressDuration(id ebiten.TouchID) int {
 // TouchPositionInPreviousTick must be called in a game's Update, not Draw.
 //
 // TouchPositionInPreviousTick is concurrent safe.
-func TouchPositionInPreviousTick(id ebiten.TouchID) (int, int) {
+func TouchPositionInPreviousTick(id ggfx.TouchID) (int, int) {
 	x, y := TouchPositionFInPreviousTick(id)
 	return int(x), int(y)
 }
@@ -681,7 +681,7 @@ func TouchPositionInPreviousTick(id ebiten.TouchID) (int, int) {
 // TouchPositionFInPreviousTick must be called in a game's Update, not Draw.
 //
 // TouchPositionFInPreviousTick is concurrent safe.
-func TouchPositionFInPreviousTick(id ebiten.TouchID) (float64, float64) {
+func TouchPositionFInPreviousTick(id ggfx.TouchID) (float64, float64) {
 	theInputState.m.RLock()
 	defer theInputState.m.RUnlock()
 

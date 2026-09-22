@@ -21,7 +21,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
+	"github.com/ironpark/ggfx/internal/glfw"
 )
 
 // The golden values are LP64 sizeof/offsetof results extracted from the C

@@ -17,11 +17,11 @@
 package ui
 
 import (
-	"fmt"
+	"errors"
 	"sync"
 	"sync/atomic"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 // uiBackend is the platform UI implementation for the desktop build.
@@ -127,15 +127,11 @@ func (u *UserInterface) init() error {
 }
 
 func (u *UserInterface) Run(game Game, options *RunOptions) error {
-	if b := maybeNewGLFWBackend(u); b != nil {
-		return b.run(game, options)
+	b := maybeNewGLFWBackend(u)
+	if b == nil {
+		return errors.New("ui: no window system is available")
 	}
-	// Fall back to a framebuffer device where there is no window system.
-	fb, err := maybeNewFbdevBackend(u)
-	if err != nil {
-		return fmt.Errorf("ui: no window system is available: %w", err)
-	}
-	return fb.run(game, options)
+	return b.run(game, options)
 }
 
 // setRunningBackend publishes the backend that serves the running game, or

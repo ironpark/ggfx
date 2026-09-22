@@ -19,10 +19,10 @@ import (
 	"image"
 	"math"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/atlas"
-	"github.com/hajimehoshi/ebiten/v2/internal/buffered"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/buffered"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 func canUseMipmap(imageType atlas.ImageType) bool {

@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten
+package ggfx
 
 import (
 	"fmt"
 	"sync"
 	"sync/atomic"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/builtinshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/colormshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/legacyshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/builtinshader"
+	"github.com/ironpark/ggfx/internal/colormshader"
+	"github.com/ironpark/ggfx/internal/legacyshader"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // Shader represents a compiled shader program.

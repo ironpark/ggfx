@@ -19,7 +19,7 @@ package ui
 import (
 	"runtime"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
+	"github.com/ironpark/ggfx/internal/glfw"
 )
 
 type glfwWindow struct {

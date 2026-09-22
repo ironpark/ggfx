@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
 )
 
 type ID int

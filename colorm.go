@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten
+package ggfx
 
 import (
 	"image/color"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/affine"
+	"github.com/ironpark/ggfx/internal/affine"
 )
 
 // ColorMDim is the dimension of a ColorM.

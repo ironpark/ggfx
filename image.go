@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten
+package ggfx
 
 import (
 	"fmt"
@@ -24,14 +24,14 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/affine"
-	"github.com/hajimehoshi/ebiten/v2/internal/atlas"
-	"github.com/hajimehoshi/ebiten/v2/internal/builtinshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/colormshader"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/affine"
+	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/builtinshader"
+	"github.com/ironpark/ggfx/internal/colormshader"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // Image represents a rectangle set of pixels.
@@ -515,7 +515,7 @@ type DrawTrianglesOptions struct {
 	//
 	// The default (zero) value is FillRuleFillAll.
 	//
-	// Deprecated: as of v2.9. Use [github.com/hajimehoshi/ebiten/v2/vector.FillPath] instead.
+	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
 	FillRule FillRule
 
 	// AntiAlias indicates whether the rendering uses anti-alias or not.
@@ -526,7 +526,7 @@ type DrawTrianglesOptions struct {
 	//
 	// The default (zero) value is false.
 	//
-	// Deprecated: as of v2.9. Use [github.com/hajimehoshi/ebiten/v2/vector.FillPath] instead.
+	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
 	AntiAlias bool
 
 	// DisableMipmaps disables mipmaps.
@@ -757,7 +757,7 @@ type DrawTrianglesShaderOptions struct {
 	//
 	// The default (zero) value is FillRuleFillAll.
 	//
-	// Deprecated: as of v2.9. Use [github.com/hajimehoshi/ebiten/v2/vector.FillPath] instead.
+	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
 	FillRule FillRule
 
 	// AntiAlias indicates whether the rendering uses anti-alias or not.
@@ -768,7 +768,7 @@ type DrawTrianglesShaderOptions struct {
 	//
 	// The default (zero) value is false.
 	//
-	// Deprecated: as of v2.9. Use [github.com/hajimehoshi/ebiten/v2/vector.FillPath] instead.
+	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
 	AntiAlias bool
 }
 

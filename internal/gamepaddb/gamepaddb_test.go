@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
 )
 
 func TestUpdate(t *testing.T) {

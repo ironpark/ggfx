@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphics"
 )
 
 // deprecatedFunctionsSuffix is the Kage source defining the deprecated builtin functions on top of

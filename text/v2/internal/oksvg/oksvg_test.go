@@ -23,7 +23,7 @@ import (
 
 	"github.com/srwiley/rasterx"
 
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/oksvg"
+	"github.com/ironpark/ggfx/text/v2/internal/oksvg"
 )
 
 // Issue #2649

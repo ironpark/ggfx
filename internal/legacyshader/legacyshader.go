@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 // Unit is the coordinate unit a Kage shader is authored in, selected by the //kage:unit directive.

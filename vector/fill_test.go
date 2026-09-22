@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/vector"
 )
 
 // waitForEmptyFillPathsStates waits until the pending fill states of collected images are released.
@@ -48,7 +48,7 @@ func TestFillPathDoesNotRetainDestination(t *testing.T) {
 	}
 
 	func() {
-		dst := ebiten.NewImage(16, 16)
+		dst := ggfx.NewImage(16, 16)
 		var path vector.Path
 		path.MoveTo(0, 0)
 		path.LineTo(16, 0)

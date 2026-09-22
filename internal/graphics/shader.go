@@ -20,8 +20,8 @@ import (
 	"io"
 	"regexp"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/shader"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shader"
+	"github.com/ironpark/ggfx/internal/shaderir"
 )
 
 // Go's whitespace is U+0020 (SP), U+0009 (\t), U+000d (\r), and U+000A (\n).

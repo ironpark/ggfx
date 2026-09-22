@@ -17,7 +17,7 @@ package graphics_test
 import (
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphics"
 )
 
 func TestInternalImageSize(t *testing.T) {

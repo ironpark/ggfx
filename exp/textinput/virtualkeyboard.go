@@ -17,7 +17,7 @@ package textinput
 import (
 	"image"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // reportVirtualKeyboardToUI hands the caret and the platform's virtual keyboard geometry to the

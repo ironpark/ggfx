@@ -24,7 +24,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
 )
 
 type nativeGamepadsIOKit struct {

@@ -21,9 +21,9 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/microsoftgdk"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 type textInputImpl struct {
@@ -56,7 +56,7 @@ func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textI
 	bounds = caretBoundsInClientNativePixels(bounds)
 	var ch chan textInputState
 	var err error
-	ebiten.RunOnMainThread(func() {
+	ggfx.RunOnMainThread(func() {
 		t.events.end()
 		err = t.start(bounds)
 		if errors.Is(err, errNoActiveWindow) {
@@ -74,7 +74,7 @@ func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textI
 		t.events.end()
 	}
 	return ch, func() {
-		ebiten.RunOnMainThread(func() {
+		ggfx.RunOnMainThread(func() {
 			// Disable IME again.
 			if t.immContext != 0 {
 				return

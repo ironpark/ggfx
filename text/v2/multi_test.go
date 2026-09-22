@@ -22,8 +22,8 @@ import (
 	"github.com/hajimehoshi/bitmapfont/v4"
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2"
 )
 
 func TestMultiFace(t *testing.T) {
@@ -32,7 +32,7 @@ func TestMultiFace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	img := ebiten.NewImage(30, 30)
+	img := ggfx.NewImage(30, 30)
 	text.Draw(img, "Hello", f, nil)
 
 	// Confirm that the given slice doesn't cause crash.

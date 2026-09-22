@@ -18,7 +18,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 const infTick = math.MaxInt64
@@ -49,7 +49,7 @@ func newCache[Key comparable, Value any](softLimit int) *cache[Key, Value] {
 }
 
 func (c *cache[Key, Value]) getOrCreate(key Key, create func() (Value, bool)) Value {
-	n := ebiten.Tick()
+	n := ggfx.Tick()
 
 	c.m.Lock()
 	defer c.m.Unlock()

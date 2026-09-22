@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten_test
+package ggfx_test
 
 import (
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 func TestScreenSize(t *testing.T) {
 	// The game running these tests returns (320, 240) at Layout.
-	w, h := ebiten.ScreenSize()
+	w, h := ggfx.ScreenSize()
 	if got, want := w, 320; got != want {
 		t.Errorf("w: got: %d, want: %d", got, want)
 	}
@@ -33,7 +33,7 @@ func TestScreenSize(t *testing.T) {
 
 func TestScreenSizeInFullscreen(t *testing.T) {
 	// Just call ScreenSizeInFullscreen. There was a crash bug on browsers (#2975).
-	w, h := ebiten.ScreenSizeInFullscreen()
+	w, h := ggfx.ScreenSizeInFullscreen()
 	if w <= 0 {
 		t.Errorf("w must be positive but not: %d", w)
 	}

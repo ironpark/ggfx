@@ -23,9 +23,9 @@ import (
 
 	"golang.org/x/image/math/fixed"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2/internal/textutil"
+	"github.com/ironpark/ggfx/vector"
 )
 
 // Face is an interface representing a font face.
@@ -150,7 +150,7 @@ type Glyph struct {
 	// Image should be used as a render source and must not be modified.
 	//
 	// Image can be nil.
-	Image *ebiten.Image
+	Image *ggfx.Image
 
 	// Colored reports whether Image is colored like a color emoji, rather
 	// than grayscale.
@@ -297,7 +297,7 @@ type LazyGlyph struct {
 // The returned image is a grayscale image i.e. RGBA values are the same,
 // except for color glyphs like emojis, whose image is colored.
 // The returned image should be used as a render source and must not be modified.
-func (g LazyGlyph) Image() *ebiten.Image {
+func (g LazyGlyph) Image() *ggfx.Image {
 	if g.imager == nil {
 		return nil
 	}
@@ -318,7 +318,7 @@ func (g LazyGlyph) Colored() bool {
 // colored without rasterizing it. Implementations are allocated once per
 // face per call to appendLazyGlyphsForLine.
 type glyphImager interface {
-	glyphImage(index int) *ebiten.Image
+	glyphImage(index int) *ggfx.Image
 	glyphColored(index int) bool
 }
 

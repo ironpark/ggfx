@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderprecomp"
+	"github.com/ironpark/ggfx/internal/shaderir"
+	"github.com/ironpark/ggfx/internal/shaderprecomp"
 )
 
 func id(s string) shaderir.SourceID {

@@ -21,8 +21,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2"
 )
 
 // TestDrawColorGlyph tests that color glyphs are rendered in color (#2649).
@@ -96,7 +96,7 @@ func TestDrawColorGlyph(t *testing.T) {
 			}
 
 			// The glyph must also render in color via Draw.
-			dst := ebiten.NewImage(int(tc.size)*2, int(tc.size)*2)
+			dst := ggfx.NewImage(int(tc.size)*2, int(tc.size)*2)
 			defer dst.Deallocate()
 			text.Draw(dst, tc.str, face, nil)
 			m := face.Metrics()

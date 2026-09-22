@@ -21,8 +21,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // The X11 backend prefers the XIM on-the-spot input style, in which the input
@@ -53,7 +53,7 @@ func (t *textInputImpl) markIMEDiscardNeeded() {
 
 func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textInputState, func()) {
 	t.registerOnce.Do(func() {
-		ebiten.RunOnMainThread(func() {
+		ggfx.RunOnMainThread(func() {
 			ui.Get().SetX11TextInputHandlersOnMainThread(t.sendComposition, t.sendCommit, t.events.isOpen)
 		})
 		t.seedFromInputChars()
@@ -79,7 +79,7 @@ func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textI
 //
 // seedFromInputChars is called from the game thread.
 func (t *textInputImpl) seedFromInputChars() {
-	rs := ebiten.AppendInputChars(nil)
+	rs := ggfx.AppendInputChars(nil)
 	if len(rs) == 0 {
 		return
 	}
@@ -129,7 +129,7 @@ func (t *textInputImpl) updateIMEState(bounds image.Rectangle) (discarded bool) 
 	}
 	t.spotX, t.spotY = x, y
 	t.spotSet = true
-	ebiten.RunOnMainThread(func() {
+	ggfx.RunOnMainThread(func() {
 		if discard {
 			ui.Get().ResetX11InputContextOnMainThread()
 		}

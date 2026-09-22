@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten
+package ggfx
 
-import "github.com/hajimehoshi/ebiten/v2/internal/builtinshader"
+import "github.com/ironpark/ggfx/internal/builtinshader"
 
 var (
 	ImageToBytes = imageToBytes

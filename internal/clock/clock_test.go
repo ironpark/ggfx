@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/clock"
+	"github.com/ironpark/ggfx/internal/clock"
 )
 
 // frameTimes returns timestamps of frames at the given frame rate.

@@ -20,9 +20,9 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2/internal/textutil"
+	"github.com/ironpark/ggfx/vector"
 )
 
 // Align is the alignment that determines how to put a text.
@@ -36,7 +36,7 @@ const (
 
 // DrawOptions represents options for the Draw function.
 //
-// DrawOptions embeds ebiten.DrawImageOptions.
+// DrawOptions embeds ggfx.DrawImageOptions.
 // DrawImageOptions.GeoM is an additional geometry transformation
 // after putting the rendering region along with the specified alignments.
 // DrawImageOptions.ColorScale scales the text color.
@@ -44,7 +44,7 @@ const (
 // applied and the other components are ignored, so that the glyphs keep
 // their own colors.
 type DrawOptions struct {
-	ebiten.DrawImageOptions
+	ggfx.DrawImageOptions
 	LayoutOptions
 }
 
@@ -84,7 +84,7 @@ var theDrawGlyphsPool = sync.Pool{
 // images have been rasterized. colored is true for a color glyph image,
 // which must not be tinted by the text color.
 type drawGlyphEntry struct {
-	img     *ebiten.Image
+	img     *ggfx.Image
 	x       float64
 	y       float64
 	colored bool
@@ -136,9 +136,9 @@ var theDrawGlyphEntriesPool = sync.Pool{
 // If the vertical alignment is top, the rendering region's top Y comes to the destination image's origin (0, 0).
 // If the vertical alignment is center, the rendering region's middle Y comes to the origin.
 // If the vertical alignment is bottom, the rendering region's bottom Y comes to the origin.
-func Draw(dst *ebiten.Image, text string, face Face, options *DrawOptions) {
+func Draw(dst *ggfx.Image, text string, face Face, options *DrawOptions) {
 	var layoutOp LayoutOptions
-	var drawOp ebiten.DrawImageOptions
+	var drawOp ggfx.DrawImageOptions
 
 	if options != nil {
 		layoutOp = options.LayoutOptions
@@ -214,7 +214,7 @@ func Draw(dst *ebiten.Image, text string, face Face, options *DrawOptions) {
 //
 // The cull applies only when geoM has no shear or rotation. Otherwise nil
 // is returned and no glyph-level cull happens.
-func keepGlyphFilter(face Face, geoM ebiten.GeoM, dstBounds image.Rectangle) func(originX, originY float64) bool {
+func keepGlyphFilter(face Face, geoM ggfx.GeoM, dstBounds image.Rectangle) func(originX, originY float64) bool {
 	// Nonzero off-diagonal elements mean a rotation or a skew, where a
 	// glyph's extent depends on both axes. The origin projection below and
 	// its per-axis margins hold only for a diagonal geoM.
@@ -263,7 +263,7 @@ func keepGlyphFilter(face Face, geoM ebiten.GeoM, dstBounds image.Rectangle) fun
 // transformedRectOverlaps reports whether rect's image under geoM overlaps
 // dst. The transformed rectangle is expanded to integer pixel boundaries
 // before the overlap check.
-func transformedRectOverlaps(geoM ebiten.GeoM, rect, dst image.Rectangle) bool {
+func transformedRectOverlaps(geoM ggfx.GeoM, rect, dst image.Rectangle) bool {
 	x0f, y0f := float64(rect.Min.X), float64(rect.Min.Y)
 	x1f, y1f := float64(rect.Max.X), float64(rect.Max.Y)
 	// Transform the four corners of the rectangle into destination space.

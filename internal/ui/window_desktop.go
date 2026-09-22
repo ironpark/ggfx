@@ -20,8 +20,8 @@ import (
 	"image"
 	"sync/atomic"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
-	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
+	"github.com/ironpark/ggfx/internal/glfw"
+	"github.com/ironpark/ggfx/internal/microsoftgdk"
 )
 
 type windowSizeRange struct {

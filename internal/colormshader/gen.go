@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/colormshader"
+	"github.com/ironpark/ggfx/internal/colormshader"
 )
 
 func main() {

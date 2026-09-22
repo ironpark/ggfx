@@ -38,9 +38,9 @@ import (
 	"golang.org/x/image/tiff"
 	xlanguage "golang.org/x/text/language"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/chunk"
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2/internal/chunk"
+	"github.com/ironpark/ggfx/text/v2/internal/textutil"
 )
 
 type goTextOutputCacheKey struct {
@@ -110,7 +110,7 @@ type goTextGlyphImageCacheKey struct {
 const glyphImageCachesSoftLimit = 16
 
 type glyphImageCacheEntry struct {
-	cache *cache[goTextGlyphImageCacheKey, *ebiten.Image]
+	cache *cache[goTextGlyphImageCacheKey, *ggfx.Image]
 
 	// atime is the last time when the cache was accessed.
 	atime int64
@@ -129,13 +129,13 @@ type glyphImageCaches struct {
 	mu sync.Mutex
 }
 
-func (c *glyphImageCaches) getOrCreate(face *GoTextFace, key goTextGlyphImageCacheKey, create func() (*ebiten.Image, bool)) *ebiten.Image {
-	return c.cacheForFace(face, ebiten.Tick()).getOrCreate(key, create)
+func (c *glyphImageCaches) getOrCreate(face *GoTextFace, key goTextGlyphImageCacheKey, create func() (*ggfx.Image, bool)) *ggfx.Image {
+	return c.cacheForFace(face, ggfx.Tick()).getOrCreate(key, create)
 }
 
 // cacheForFace returns the cache for the size of the given face, creating it if necessary.
 // n is the current tick, which is the criterion of the staleness of the caches.
-func (c *glyphImageCaches) cacheForFace(face *GoTextFace, n int64) *cache[goTextGlyphImageCacheKey, *ebiten.Image] {
+func (c *glyphImageCaches) cacheForFace(face *GoTextFace, n int64) *cache[goTextGlyphImageCacheKey, *ggfx.Image] {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -148,7 +148,7 @@ func (c *glyphImageCaches) cacheForFace(face *GoTextFace, n int64) *cache[goText
 		c.caches = map[float64]*glyphImageCacheEntry{}
 	}
 	e := &glyphImageCacheEntry{
-		cache: newCache[goTextGlyphImageCacheKey, *ebiten.Image](128 * glyphVariationCount(face)),
+		cache: newCache[goTextGlyphImageCacheKey, *ggfx.Image](128 * glyphVariationCount(face)),
 		atime: n,
 	}
 	c.caches[face.Size] = e
@@ -1320,7 +1320,7 @@ func (g *GoTextFaceSource) scale(size float64) float64 {
 	return size / float64(g.f.Upem())
 }
 
-func (g *GoTextFaceSource) getOrCreateGlyphImage(goTextFace *GoTextFace, key goTextGlyphImageCacheKey, create func() (*ebiten.Image, bool)) *ebiten.Image {
+func (g *GoTextFaceSource) getOrCreateGlyphImage(goTextFace *GoTextFace, key goTextGlyphImageCacheKey, create func() (*ggfx.Image, bool)) *ggfx.Image {
 	return g.glyphImageCache.getOrCreate(goTextFace, key, create)
 }
 

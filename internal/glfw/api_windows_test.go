@@ -18,7 +18,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
+	"github.com/ironpark/ggfx/internal/glfw"
 )
 
 func TestPackPoint64(t *testing.T) {

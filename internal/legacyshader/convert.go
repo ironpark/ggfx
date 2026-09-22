@@ -23,7 +23,7 @@ import (
 	"go/token"
 	"strings"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphics"
 )
 
 // texelHelperPrefix prefixes the helper functions emulating the texel-unit behavior of the builtin

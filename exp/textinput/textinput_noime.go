@@ -19,7 +19,7 @@ package textinput
 import (
 	"image"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 type textInputImpl struct {
@@ -35,7 +35,7 @@ func (t *textInputImpl) markIMEDiscardNeeded() {
 func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textInputState, func()) {
 	// AppendInputChars is updated only when the tick is updated.
 	// If the tick is not updated, return nil immediately.
-	tick := ebiten.Tick()
+	tick := ggfx.Tick()
 	if t.lastTick == tick {
 		return nil, nil
 	}
@@ -47,7 +47,7 @@ func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textI
 
 	// This is a pseudo implementation with AppendInputChars without IME.
 	// This is tentative and should be replaced with IME in the future.
-	t.rs = ebiten.AppendInputChars(t.rs[:0])
+	t.rs = ggfx.AppendInputChars(t.rs[:0])
 	if len(t.rs) == 0 {
 		return nil, nil
 	}

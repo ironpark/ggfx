@@ -15,7 +15,7 @@
 package vector
 
 import (
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 // AppendVerticesAndIndicesForFilling appends vertices and indices to fill this path and returns them.
@@ -36,7 +36,7 @@ import (
 // AppendVerticesAndIndicesForFilling panics if appending this path would make the vertex count exceed 1 << 16.
 //
 // Deprecated: as of v2.9. Use [FillPath] instead.
-func (p *Path) AppendVerticesAndIndicesForFilling(vertices []ebiten.Vertex, indices []uint16) ([]ebiten.Vertex, []uint16) {
+func (p *Path) AppendVerticesAndIndicesForFilling(vertices []ggfx.Vertex, indices []uint16) ([]ggfx.Vertex, []uint16) {
 	const maxVertexCountFor16BitIndices = 1 << 16
 
 	flatPaths := p.ensureFlatPaths()
@@ -57,7 +57,7 @@ func (p *Path) AppendVerticesAndIndicesForFilling(vertices []ebiten.Vertex, indi
 			continue
 		}
 		for i, pt := range flatPath.points {
-			vertices = append(vertices, ebiten.Vertex{
+			vertices = append(vertices, ggfx.Vertex{
 				DstX:   pt.x,
 				DstY:   pt.y,
 				SrcX:   0,
@@ -89,7 +89,7 @@ func (p *Path) AppendVerticesAndIndicesForFilling(vertices []ebiten.Vertex, indi
 // AppendVerticesAndIndicesForStroke panics if appending this stroke would make the vertex count exceed 1 << 16.
 //
 // Deprecated: as of v2.9. Use [StrokePath] or [Path.AddStroke] instead.
-func (p *Path) AppendVerticesAndIndicesForStroke(vertices []ebiten.Vertex, indices []uint16, op *StrokeOptions) ([]ebiten.Vertex, []uint16) {
+func (p *Path) AppendVerticesAndIndicesForStroke(vertices []ggfx.Vertex, indices []uint16, op *StrokeOptions) ([]ggfx.Vertex, []uint16) {
 	if op == nil {
 		return vertices, indices
 	}

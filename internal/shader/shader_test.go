@@ -23,11 +23,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphics"
-	"github.com/hajimehoshi/ebiten/v2/internal/shader"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir/glsl"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir/hlsl"
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderir/msl"
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/shader"
+	"github.com/ironpark/ggfx/internal/shaderir/glsl"
+	"github.com/ironpark/ggfx/internal/shaderir/hlsl"
+	"github.com/ironpark/ggfx/internal/shaderir/msl"
 )
 
 func glslVertexNormalize(str string) string {

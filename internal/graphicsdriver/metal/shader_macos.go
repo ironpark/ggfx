@@ -17,7 +17,7 @@
 package metal
 
 import (
-	"github.com/hajimehoshi/ebiten/v2/internal/shaderprecomp"
+	"github.com/ironpark/ggfx/internal/shaderprecomp"
 )
 
 func metalLibraryPlatform() shaderprecomp.MetalLibraryPlatform {

@@ -55,8 +55,8 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // noReplacement is the sentinel value for [textInputState.ReplacementStartInBytes]
@@ -399,7 +399,7 @@ type textInputEvents struct {
 	// keyboard. Taken by the session observing the closed channel.
 	endedByUser bool
 
-	// tick overrides the tick source in tests. A nil tick means [ebiten.Tick].
+	// tick overrides the tick source in tests. A nil tick means [ggfx.Tick].
 	tick func() int64
 
 	m sync.Mutex
@@ -443,7 +443,7 @@ func (s *textInputEvents) currentTick() int64 {
 	if s.tick != nil {
 		return s.tick()
 	}
-	return ebiten.Tick()
+	return ggfx.Tick()
 }
 
 func (s *textInputEvents) start() (ch chan textInputState, endFunc func()) {

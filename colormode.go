@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten
+package ggfx
 
 import (
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/colormode"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/colormode"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // ColorMode represents a color scheme, such as light or dark.

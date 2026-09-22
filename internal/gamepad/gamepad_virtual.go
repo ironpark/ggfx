@@ -18,7 +18,7 @@ import (
 	"maps"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
 )
 
 // VirtualGamepadState is the externally supplied state of one virtual gamepad. The raw axes and

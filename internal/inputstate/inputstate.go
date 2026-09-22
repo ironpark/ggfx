@@ -20,7 +20,7 @@ import (
 	"io/fs"
 	"sync"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 var (

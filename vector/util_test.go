@@ -20,9 +20,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	t "github.com/hajimehoshi/ebiten/v2/internal/testing"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	t "github.com/ironpark/ggfx/internal/testing"
+	"github.com/ironpark/ggfx/vector"
 )
 
 func TestMain(m *testing.M) {
@@ -31,7 +31,7 @@ func TestMain(m *testing.M) {
 
 // Issue #2589
 func TestLine0(t *testing.T) {
-	dst := ebiten.NewImage(16, 16)
+	dst := ggfx.NewImage(16, 16)
 	vector.StrokeLine(dst, 0, 0, 0, 0, 2, color.White, true)
 	if got, want := dst.At(0, 0), (color.RGBA{}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
@@ -40,7 +40,7 @@ func TestLine0(t *testing.T) {
 
 // Issue #3270
 func TestStrokeRectAntiAlias(t *testing.T) {
-	dst := ebiten.NewImage(16, 16)
+	dst := ggfx.NewImage(16, 16)
 	vector.StrokeRect(dst, 0, 0, 16, 16, 2, color.White, true)
 	if got, want := dst.At(5, 5), (color.RGBA{}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
@@ -49,9 +49,9 @@ func TestStrokeRectAntiAlias(t *testing.T) {
 
 // Issue #3330
 func TestFillRectSubImage(t *testing.T) {
-	dst := ebiten.NewImage(16, 16)
+	dst := ggfx.NewImage(16, 16)
 
-	dst2 := dst.SubImage(image.Rect(0, 0, 8, 8)).(*ebiten.Image)
+	dst2 := dst.SubImage(image.Rect(0, 0, 8, 8)).(*ggfx.Image)
 	vector.FillRect(dst2, 0, 0, 8, 8, color.White, true)
 	if got, want := dst.At(5, 5), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
@@ -60,7 +60,7 @@ func TestFillRectSubImage(t *testing.T) {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 
-	dst3 := dst2.SubImage(image.Rect(4, 4, 8, 8)).(*ebiten.Image)
+	dst3 := dst2.SubImage(image.Rect(4, 4, 8, 8)).(*ggfx.Image)
 	vector.FillRect(dst3, 4, 4, 4, 4, color.Black, true)
 	if got, want := dst.At(5, 5), (color.RGBA{0x00, 0x00, 0x00, 0xff}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
@@ -75,9 +75,9 @@ func TestFillRectSubImage(t *testing.T) {
 
 // Issue #3330
 func TestFillCircleSubImage(t *testing.T) {
-	dst := ebiten.NewImage(16, 16)
+	dst := ggfx.NewImage(16, 16)
 
-	dst2 := dst.SubImage(image.Rect(0, 0, 8, 8)).(*ebiten.Image)
+	dst2 := dst.SubImage(image.Rect(0, 0, 8, 8)).(*ggfx.Image)
 	vector.FillCircle(dst2, 4, 4, 4, color.White, true)
 	if got, want := dst.At(5, 5), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
@@ -86,7 +86,7 @@ func TestFillCircleSubImage(t *testing.T) {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 
-	dst3 := dst2.SubImage(image.Rect(4, 4, 8, 8)).(*ebiten.Image)
+	dst3 := dst2.SubImage(image.Rect(4, 4, 8, 8)).(*ggfx.Image)
 	vector.FillCircle(dst3, 6, 6, 4, color.Black, true)
 	if got, want := dst.At(5, 5), (color.RGBA{0x00, 0x00, 0x00, 0xff}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
@@ -151,9 +151,9 @@ func TestCircleVertexCount(t *testing.T) {
 
 // Issue #3357
 func TestFillRects(t *testing.T) {
-	dsts := []*ebiten.Image{
-		ebiten.NewImage(1920, 1080),
-		ebiten.NewImage(1920, 1080),
+	dsts := []*ggfx.Image{
+		ggfx.NewImage(1920, 1080),
+		ggfx.NewImage(1920, 1080),
 	}
 	for _, dst := range dsts {
 		defer dst.Deallocate()
@@ -180,7 +180,7 @@ func TestFillRects(t *testing.T) {
 
 // Issue #3377
 func TestFillRectOnBigImage(t *testing.T) {
-	dst := ebiten.NewImage(3000, 3000)
+	dst := ggfx.NewImage(3000, 3000)
 	defer dst.Deallocate()
 
 	vector.FillRect(dst, 0, 0, 3000, 3000, color.White, true)
@@ -200,7 +200,7 @@ func TestFillRectOnBigImage(t *testing.T) {
 
 // nil options should be treated as the zero values, as FillPath does.
 func TestStrokePathNilOptions(t *testing.T) {
-	dst := ebiten.NewImage(16, 16)
+	dst := ggfx.NewImage(16, 16)
 	defer dst.Deallocate()
 
 	var path vector.Path
@@ -215,7 +215,7 @@ func TestStrokePathNilOptions(t *testing.T) {
 }
 
 func TestStrokePathKeepsSourcePath(t *testing.T) {
-	dst := ebiten.NewImage(16, 16)
+	dst := ggfx.NewImage(16, 16)
 	defer dst.Deallocate()
 
 	var path vector.Path
@@ -241,14 +241,14 @@ func TestStrokePathKeepsSourcePath(t *testing.T) {
 }
 
 func TestStrokeCircleThickStrokeNonAntiAlias(t *testing.T) {
-	dst := ebiten.NewImage(64, 64)
+	dst := ggfx.NewImage(64, 64)
 	defer dst.Deallocate()
 	vector.StrokeCircle(dst, 32, 32, 10, 10, color.White, false)
 	if got, want := dst.At(32, 32), (color.RGBA{}); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 
-	dst2 := ebiten.NewImage(64, 64)
+	dst2 := ggfx.NewImage(64, 64)
 	defer dst2.Deallocate()
 	vector.StrokeCircle(dst2, 32, 32, 10, 20, color.White, false)
 	if got, want := dst2.At(32, 32), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {

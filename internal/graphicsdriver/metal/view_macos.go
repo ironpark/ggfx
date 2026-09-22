@@ -21,9 +21,9 @@ import (
 
 	"github.com/ebitengine/purego/objc"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/cocoa"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/metal/ca"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/metal/mtl"
+	"github.com/ironpark/ggfx/internal/cocoa"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
 )
 
 const kCVReturnSuccess = 0

@@ -22,7 +22,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 // Direction represents clockwise or counterclockwise.
@@ -649,7 +649,7 @@ type AddPathOptions struct {
 	// GeoM is a geometry matrix to apply to the path.
 	//
 	// The default (zero) value is an identity matrix.
-	GeoM ebiten.GeoM
+	GeoM ggfx.GeoM
 }
 
 // AddPath adds the given path src to this path p as a sub-path.

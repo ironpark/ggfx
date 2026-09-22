@@ -19,7 +19,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 type atlasRegion struct {
@@ -33,7 +33,7 @@ type atlas struct {
 	atlasRegions                []atlasRegion
 	pathIndexToAtlasRegionIndex map[int]int
 	atlasSizes                  []image.Point
-	atlasImages                 []*ebiten.Image
+	atlasImages                 []*ggfx.Image
 }
 
 func roundUpAtlasSize(size int) int {
@@ -163,12 +163,12 @@ func (a *atlas) setPaths(dstBounds image.Rectangle, paths []*Path, bounds []imag
 			// Extend the bounds a little bit by roundUpAtlasSize to avoid creating an image too often.
 			w := min(maxImageSize, max(roundUpAtlasSize(s.X), origWidth))
 			h := min(maxImageSize, max(roundUpAtlasSize(s.Y), origHeight))
-			a.atlasImages[i] = ebiten.NewImage(w, h)
+			a.atlasImages[i] = ggfx.NewImage(w, h)
 		}
 	}
 }
 
-func (a *atlas) stencilBufferImageAt(i int, antialias bool, antialiasIndex int) *ebiten.Image {
+func (a *atlas) stencilBufferImageAt(i int, antialias bool, antialiasIndex int) *ggfx.Image {
 	idx, ok := a.pathIndexToAtlasRegionIndex[i]
 	if !ok {
 		return nil
@@ -196,7 +196,7 @@ func (a *atlas) stencilBufferImageAt(i int, antialias bool, antialiasIndex int) 
 			panic("not reached")
 		}
 	}
-	return atlas.SubImage(b).(*ebiten.Image)
+	return atlas.SubImage(b).(*ggfx.Image)
 }
 
 func (a *atlas) pathRenderingPositionAt(i int) image.Point {

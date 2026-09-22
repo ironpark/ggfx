@@ -21,8 +21,8 @@ import (
 	"github.com/srwiley/rasterx"
 	"golang.org/x/image/math/fixed"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/oksvg"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2/internal/oksvg"
 )
 
 // svgGlyphData is an OpenType SVG glyph description: the SVG document and its
@@ -44,7 +44,7 @@ type svgGlyphData struct {
 // The whole document is rasterized: a document shared by multiple
 // glyphs is reduced to a single glyph's description beforehand (see
 // [GoTextFaceSource.svgGlyphData]).
-func svgToImage(svg *svgGlyphData, sizeInPixels float64, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ebiten.Image {
+func svgToImage(svg *svgGlyphData, sizeInPixels float64, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ggfx.Image {
 	if svg.viewBox.Width <= 0 || svg.viewBox.Height <= 0 {
 		return nil
 	}
@@ -88,5 +88,5 @@ func svgToImage(svg *svgGlyphData, sizeInPixels float64, subpixelOffset fixed.Po
 	scanner := rasterx.NewScannerGV(w, h, dst, dst.Bounds())
 	dasher := rasterx.NewDasher(w, h, scanner)
 	icon.Draw(dasher, 1)
-	return ebiten.NewImageFromImage(dst)
+	return ggfx.NewImageFromImage(dst)
 }

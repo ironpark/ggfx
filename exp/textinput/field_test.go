@@ -20,7 +20,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/exp/textinput"
+	"github.com/ironpark/ggfx/exp/textinput"
 )
 
 func TestFieldConcurrentUpdateAndRead(t *testing.T) {

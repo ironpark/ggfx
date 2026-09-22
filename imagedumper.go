@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten
+package ggfx
 
 import (
 	"fmt"
@@ -21,8 +21,8 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/debug"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/debug"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 func datetimeForFilename() string {

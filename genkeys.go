@@ -452,13 +452,13 @@ const ebitengineKeysTmpl = `{{.License}}
 
 {{.DoNotEdit}}
 
-package ebiten
+package ggfx
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // A Key represents a keyboard key.
@@ -553,7 +553,7 @@ const eventKeysTmpl = `{{.License}}
 package event
 
 import (
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 type Key = ui.Key
@@ -573,7 +573,7 @@ const uiGLFWKeysTmpl = `{{.License}}
 package ui
 
 import (
-	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
+	"github.com/ironpark/ggfx/internal/glfw"
 )
 
 var uiKeyToGLFWKey = map[Key]glfw.Key{
@@ -628,7 +628,7 @@ const mobileAndroidKeysTmpl = `{{.License}}
 package ebitenmobileview
 
 import (
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 var androidKeyToUIKey = map[int]ui.Key{
@@ -646,7 +646,7 @@ const mobileIOSKeysTmpl = `{{.License}}
 package ebitenmobileview
 
 import (
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 var iosKeyToUIKey = map[int]ui.Key{

@@ -24,7 +24,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/microsoftgdk"
+	"github.com/ironpark/ggfx/internal/microsoftgdk"
 )
 
 // Reference:

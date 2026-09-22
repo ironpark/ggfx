@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
 )
 
 // gcControllerToAdd is a controller waiting to be registered, along with the properties read from it

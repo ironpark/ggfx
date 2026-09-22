@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/file"
+	"github.com/ironpark/ggfx/internal/file"
 )
 
 func TestFSReadDir(t *testing.T) {

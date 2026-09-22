@@ -18,7 +18,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 // LineCap represents the way in which how the ends of the stroke are rendered.
@@ -74,7 +74,7 @@ type AddStrokeOptions struct {
 	// GeoM is a geometry matrix to apply to the path.
 	//
 	// The default (zero) value is an identity matrix.
-	GeoM ebiten.GeoM
+	GeoM ggfx.GeoM
 }
 
 // AddStroke adds a stroke path to the path p.
@@ -140,7 +140,7 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 	}
 	p.opsBuf = normalized.ops[:0]
 
-	if options.GeoM != (ebiten.GeoM{}) {
+	if options.GeoM != (ggfx.GeoM{}) {
 		for i, subPath := range p.subPaths[origN:] {
 			x, y := options.GeoM.Apply(float64(subPath.start.x), float64(subPath.start.y))
 			p.subPaths[origN+i].start = point{x: float32(x), y: float32(y)}

@@ -28,16 +28,16 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/clock"
-	"github.com/hajimehoshi/ebiten/v2/internal/colormode"
-	"github.com/hajimehoshi/ebiten/v2/internal/file"
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepad"
-	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver/opengl"
-	"github.com/hajimehoshi/ebiten/v2/internal/hook"
-	"github.com/hajimehoshi/ebiten/v2/internal/thread"
-	"github.com/hajimehoshi/ebiten/v2/internal/windowsystem"
+	"github.com/ironpark/ggfx/internal/clock"
+	"github.com/ironpark/ggfx/internal/colormode"
+	"github.com/ironpark/ggfx/internal/file"
+	"github.com/ironpark/ggfx/internal/gamepad"
+	"github.com/ironpark/ggfx/internal/glfw"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
+	"github.com/ironpark/ggfx/internal/hook"
+	"github.com/ironpark/ggfx/internal/thread"
+	"github.com/ironpark/ggfx/internal/windowsystem"
 )
 
 func driverCursorModeToGLFWCursorMode(mode CursorMode) int {

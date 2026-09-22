@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
+	"github.com/ironpark/ggfx/text/v2/internal/textutil"
 )
 
 func TestUnicodeRangeFilter(t *testing.T) {

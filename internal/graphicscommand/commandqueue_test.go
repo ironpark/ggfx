@@ -17,8 +17,8 @@ package graphicscommand_test
 import (
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicscommand"
-	"github.com/hajimehoshi/ebiten/v2/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 type frameDriver struct {

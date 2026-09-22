@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/thread"
+	"github.com/ironpark/ggfx/internal/thread"
 )
 
 func TestNestedLoop(t *testing.T) {

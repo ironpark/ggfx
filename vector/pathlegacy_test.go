@@ -18,8 +18,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/vector"
 )
 
 func TestAppendVerticesAndIndicesForFillingVertexLimit(t *testing.T) {
@@ -29,7 +29,7 @@ func TestAppendVerticesAndIndicesForFillingVertexLimit(t *testing.T) {
 	path.LineTo(0, 1)
 	path.Close()
 
-	vertices := make([]ebiten.Vertex, 1<<16-4)
+	vertices := make([]ggfx.Vertex, 1<<16-4)
 	vertices, indices := path.AppendVerticesAndIndicesForFilling(vertices, nil)
 	if got, want := len(vertices), 1<<16; got != want {
 		t.Errorf("len(vertices) = %d, want %d", got, want)
@@ -46,7 +46,7 @@ func TestAppendVerticesAndIndicesForFillingTooManyVertices(t *testing.T) {
 	path.LineTo(0, 1)
 	path.Close()
 
-	vertices := make([]ebiten.Vertex, 1<<16-3, 1<<16+1)
+	vertices := make([]ggfx.Vertex, 1<<16-3, 1<<16+1)
 	allVertices := vertices[:cap(vertices)]
 	allVertices[len(vertices)].SrcX = 1
 	indices := make([]uint16, 0, 3)
@@ -75,7 +75,7 @@ func TestAppendVerticesAndIndicesForStrokeTooManyVertices(t *testing.T) {
 	path.MoveTo(0, 0)
 	path.LineTo(1, 0)
 
-	vertices := make([]ebiten.Vertex, 1<<16)
+	vertices := make([]ggfx.Vertex, 1<<16)
 	op := &vector.StrokeOptions{Width: 1}
 	defer func() {
 		if recover() == nil {

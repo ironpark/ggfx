@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten_test
+package ggfx_test
 
 import (
 	"image"
 	"image/color"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 func TestImageDrawTrianglesWithStencilBufferOnEmptyDestination(t *testing.T) {
-	src := ebiten.NewImage(1, 1)
+	src := ggfx.NewImage(1, 1)
 	src.Fill(color.White)
 
-	shader, err := ebiten.NewShader([]byte(`//kage:unit pixels
+	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
 
 package main
 
@@ -38,49 +38,49 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 		t.Fatal(err)
 	}
 
-	vs := []ebiten.Vertex{{DstX: 0, DstY: 0}, {DstX: 1, DstY: 0}, {DstX: 0, DstY: 1}}
+	vs := []ggfx.Vertex{{DstX: 0, DstY: 0}, {DstX: 1, DstY: 0}, {DstX: 0, DstY: 1}}
 	is := []uint32{0, 1, 2}
 
 	for _, tc := range []struct {
 		name string
-		draw func(dst *ebiten.Image)
+		draw func(dst *ggfx.Image)
 	}{
 		{
 			name: "FillRule",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTriangles32(vs, is, src, &ebiten.DrawTrianglesOptions{FillRule: ebiten.FillRuleNonZero})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "AntiAlias",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTriangles32(vs, is, src, &ebiten.DrawTrianglesOptions{AntiAlias: true})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
 			},
 		},
 		{
 			name: "ShaderFillRule",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ebiten.DrawTrianglesShaderOptions{FillRule: ebiten.FillRuleNonZero})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "ShaderAntiAlias",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ebiten.DrawTrianglesShaderOptions{AntiAlias: true})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ebiten.ResetStencilBufferImagesForTesting()
-			dst := ebiten.NewImage(1, 1).SubImage(image.Rectangle{}).(*ebiten.Image)
+			ggfx.ResetStencilBufferImagesForTesting()
+			dst := ggfx.NewImage(1, 1).SubImage(image.Rectangle{}).(*ggfx.Image)
 			tc.draw(dst)
 		})
 	}
 }
 
 func TestImageDrawTrianglesWithStencilBufferOnEmptyDestinationValidatesIndices(t *testing.T) {
-	src := ebiten.NewImage(1, 1)
-	shader, err := ebiten.NewShader([]byte(`//kage:unit pixels
+	src := ggfx.NewImage(1, 1)
+	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
 
 package main
 
@@ -94,23 +94,23 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 
 	for _, tc := range []struct {
 		name string
-		draw func(dst *ebiten.Image)
+		draw func(dst *ggfx.Image)
 	}{
 		{
 			name: "DrawTriangles",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTriangles32(nil, []uint32{0}, src, &ebiten.DrawTrianglesOptions{AntiAlias: true})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTriangles32(nil, []uint32{0}, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
 			},
 		},
 		{
 			name: "DrawTrianglesShader",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTrianglesShader32(nil, []uint32{0}, shader, &ebiten.DrawTrianglesShaderOptions{AntiAlias: true})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTrianglesShader32(nil, []uint32{0}, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dst := ebiten.NewImage(1, 1).SubImage(image.Rectangle{}).(*ebiten.Image)
+			dst := ggfx.NewImage(1, 1).SubImage(image.Rectangle{}).(*ggfx.Image)
 			defer func() {
 				if r := recover(); r == nil {
 					t.Error("a draw with an invalid index count must panic")
@@ -122,11 +122,11 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 }
 
 func TestImageDrawTrianglesWithStencilBufferOnSubImage(t *testing.T) {
-	whiteImage := ebiten.NewImage(3, 3)
+	whiteImage := ggfx.NewImage(3, 3)
 	whiteImage.Fill(color.White)
-	whiteSubImage := whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ebiten.Image)
+	whiteSubImage := whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ggfx.Image)
 
-	shader, err := ebiten.NewShader([]byte(`//kage:unit pixels
+	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
 
 package main
 
@@ -144,9 +144,9 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 	// accidentally fall inside the sub-image.
 	dstMin := image.Pt(40, 30)
 
-	vertices := func(ox, oy int) []ebiten.Vertex {
-		v := func(x, y int) ebiten.Vertex {
-			return ebiten.Vertex{
+	vertices := func(ox, oy int) []ggfx.Vertex {
+		v := func(x, y int) ggfx.Vertex {
+			return ggfx.Vertex{
 				DstX:   float32(ox + x),
 				DstY:   float32(oy + y),
 				SrcX:   1,
@@ -157,7 +157,7 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 				ColorA: 1,
 			}
 		}
-		return []ebiten.Vertex{
+		return []ggfx.Vertex{
 			v(2, 2),
 			v(18, 2),
 			v(2, 18),
@@ -171,13 +171,13 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 	// pixels.
 	is := []uint32{0, 1, 2, 3, 4, 5}
 
-	dt := func(options *ebiten.DrawTrianglesOptions) func(*ebiten.Image, int, int) {
-		return func(dst *ebiten.Image, ox, oy int) {
+	dt := func(options *ggfx.DrawTrianglesOptions) func(*ggfx.Image, int, int) {
+		return func(dst *ggfx.Image, ox, oy int) {
 			dst.DrawTriangles32(vertices(ox, oy), is, whiteSubImage, options)
 		}
 	}
-	dts := func(options *ebiten.DrawTrianglesShaderOptions) func(*ebiten.Image, int, int) {
-		return func(dst *ebiten.Image, ox, oy int) {
+	dts := func(options *ggfx.DrawTrianglesShaderOptions) func(*ggfx.Image, int, int) {
+		return func(dst *ggfx.Image, ox, oy int) {
 			options.Images[0] = whiteSubImage
 			dst.DrawTrianglesShader32(vertices(ox, oy), is, shader, options)
 		}
@@ -185,82 +185,82 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 
 	for _, tc := range []struct {
 		name string
-		draw func(dst *ebiten.Image, ox, oy int)
+		draw func(dst *ggfx.Image, ox, oy int)
 	}{
 		{
 			name: "FillRuleNonZero",
-			draw: dt(&ebiten.DrawTrianglesOptions{
-				FillRule: ebiten.FillRuleNonZero,
+			draw: dt(&ggfx.DrawTrianglesOptions{
+				FillRule: ggfx.FillRuleNonZero,
 			}),
 		},
 		{
 			name: "FillRuleEvenOdd",
-			draw: dt(&ebiten.DrawTrianglesOptions{
-				FillRule: ebiten.FillRuleEvenOdd,
+			draw: dt(&ggfx.DrawTrianglesOptions{
+				FillRule: ggfx.FillRuleEvenOdd,
 			}),
 		},
 		{
 			name: "AntiAlias",
-			draw: dt(&ebiten.DrawTrianglesOptions{
+			draw: dt(&ggfx.DrawTrianglesOptions{
 				AntiAlias: true,
 			}),
 		},
 		{
 			name: "AntiAliasFillRuleNonZero",
-			draw: dt(&ebiten.DrawTrianglesOptions{
+			draw: dt(&ggfx.DrawTrianglesOptions{
 				AntiAlias: true,
-				FillRule:  ebiten.FillRuleNonZero,
+				FillRule:  ggfx.FillRuleNonZero,
 			}),
 		},
 		{
 			name: "AntiAliasBlendCopy",
-			draw: dt(&ebiten.DrawTrianglesOptions{
+			draw: dt(&ggfx.DrawTrianglesOptions{
 				AntiAlias: true,
-				Blend:     ebiten.BlendCopy,
+				Blend:     ggfx.BlendCopy,
 			}),
 		},
 		{
 			name: "ShaderFillRuleNonZero",
-			draw: dts(&ebiten.DrawTrianglesShaderOptions{
-				FillRule: ebiten.FillRuleNonZero,
+			draw: dts(&ggfx.DrawTrianglesShaderOptions{
+				FillRule: ggfx.FillRuleNonZero,
 			}),
 		},
 		{
 			name: "ShaderFillRuleEvenOdd",
-			draw: dts(&ebiten.DrawTrianglesShaderOptions{
-				FillRule: ebiten.FillRuleEvenOdd,
+			draw: dts(&ggfx.DrawTrianglesShaderOptions{
+				FillRule: ggfx.FillRuleEvenOdd,
 			}),
 		},
 		{
 			name: "ShaderAntiAlias",
-			draw: dts(&ebiten.DrawTrianglesShaderOptions{
+			draw: dts(&ggfx.DrawTrianglesShaderOptions{
 				AntiAlias: true,
 			}),
 		},
 		{
 			name: "ShaderAntiAliasFillRuleNonZero",
-			draw: dts(&ebiten.DrawTrianglesShaderOptions{
+			draw: dts(&ggfx.DrawTrianglesShaderOptions{
 				AntiAlias: true,
-				FillRule:  ebiten.FillRuleNonZero,
+				FillRule:  ggfx.FillRuleNonZero,
 			}),
 		},
 		{
 			name: "ShaderAntiAliasBlendCopy",
-			draw: dts(&ebiten.DrawTrianglesShaderOptions{
+			draw: dts(&ggfx.DrawTrianglesShaderOptions{
 				AntiAlias: true,
-				Blend:     ebiten.BlendCopy,
+				Blend:     ggfx.BlendCopy,
 			}),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			background := color.RGBA{0, 0, 0, 0xff}
 
-			dstPlain := ebiten.NewImage(size, size)
+			dstPlain := ggfx.NewImage(size, size)
 			dstPlain.Fill(background)
 
-			base := ebiten.NewImage(dstMin.X+size, dstMin.Y+size)
+			base := ggfx.NewImage(dstMin.X+size, dstMin.Y+size)
 			base.Fill(background)
-			dstSub := base.SubImage(image.Rectangle{Min: dstMin, Max: dstMin.Add(image.Pt(size, size))}).(*ebiten.Image)
+			dstSub := base.SubImage(image.Rectangle{Min: dstMin, Max: dstMin.Add(image.Pt(size, size))}).(*ggfx.Image)
 
 			tc.draw(dstPlain, 0, 0)
 			tc.draw(dstSub, dstMin.X, dstMin.Y)
@@ -281,10 +281,10 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 }
 
 func TestImageDrawTrianglesWithStencilBufferWithEmptyIndices(t *testing.T) {
-	src := ebiten.NewImage(3, 3)
+	src := ggfx.NewImage(3, 3)
 	src.Fill(color.White)
 
-	shader, err := ebiten.NewShader([]byte(`//kage:unit pixels
+	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
 
 package main
 
@@ -300,32 +300,32 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 	// there is nothing to draw.
 	for _, tc := range []struct {
 		name string
-		draw func(dst *ebiten.Image)
+		draw func(dst *ggfx.Image)
 	}{
 		{
 			name: "FillRuleBlendCopy",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTriangles32(nil, nil, src, &ebiten.DrawTrianglesOptions{
-					FillRule:      ebiten.FillRuleNonZero,
-					CompositeMode: ebiten.CompositeModeCustom,
-					Blend:         ebiten.BlendCopy,
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTriangles32(nil, nil, src, &ggfx.DrawTrianglesOptions{
+					FillRule:      ggfx.FillRuleNonZero,
+					CompositeMode: ggfx.CompositeModeCustom,
+					Blend:         ggfx.BlendCopy,
 				})
 			},
 		},
 		{
 			name: "ShaderFillRuleBlendCopy",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTrianglesShader32(nil, nil, shader, &ebiten.DrawTrianglesShaderOptions{
-					FillRule:      ebiten.FillRuleNonZero,
-					CompositeMode: ebiten.CompositeModeCustom,
-					Blend:         ebiten.BlendCopy,
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTrianglesShader32(nil, nil, shader, &ggfx.DrawTrianglesShaderOptions{
+					FillRule:      ggfx.FillRuleNonZero,
+					CompositeMode: ggfx.CompositeModeCustom,
+					Blend:         ggfx.BlendCopy,
 				})
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := color.RGBA{0xff, 0, 0, 0xff}
-			dst := ebiten.NewImage(3, 3)
+			dst := ggfx.NewImage(3, 3)
 			dst.Fill(want)
 
 			// This must be a no-op.
@@ -343,7 +343,7 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 }
 
 func TestImageDrawTrianglesWithStencilBufferWithEmptyIndicesStateChecks(t *testing.T) {
-	disposedShader, err := ebiten.NewShader([]byte(`//kage:unit pixels
+	disposedShader, err := ggfx.NewShader([]byte(`//kage:unit pixels
 
 package main
 
@@ -356,7 +356,7 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 	}
 	disposedShader.Dispose()
 
-	disposedImage := ebiten.NewImage(3, 3)
+	disposedImage := ggfx.NewImage(3, 3)
 	disposedImage.Dispose()
 
 	// The empty-indices check must be below the disposed checks, so that an
@@ -364,23 +364,23 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 	// draw does.
 	for _, tc := range []struct {
 		name string
-		draw func(dst *ebiten.Image)
+		draw func(dst *ggfx.Image)
 	}{
 		{
 			name: "DisposedSourceImage",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTriangles32(nil, nil, disposedImage, &ebiten.DrawTrianglesOptions{FillRule: ebiten.FillRuleNonZero})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTriangles32(nil, nil, disposedImage, &ggfx.DrawTrianglesOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "DisposedShader",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTrianglesShader32(nil, nil, disposedShader, &ebiten.DrawTrianglesShaderOptions{FillRule: ebiten.FillRuleNonZero})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTrianglesShader32(nil, nil, disposedShader, &ggfx.DrawTrianglesShaderOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dst := ebiten.NewImage(3, 3)
+			dst := ggfx.NewImage(3, 3)
 			defer func() {
 				if r := recover(); r == nil {
 					t.Errorf("an empty draw on an invalid source must panic, but it did not")
@@ -392,10 +392,10 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 }
 
 func TestImageDrawTrianglesWithStencilBufferOnDisposedDestination(t *testing.T) {
-	src := ebiten.NewImage(3, 3)
+	src := ggfx.NewImage(3, 3)
 	src.Fill(color.White)
 
-	shader, err := ebiten.NewShader([]byte(`//kage:unit pixels
+	shader, err := ggfx.NewShader([]byte(`//kage:unit pixels
 
 package main
 
@@ -407,40 +407,40 @@ func Fragment(dstPos vec4, src0Pos vec2, color vec4) vec4 {
 		t.Fatal(err)
 	}
 
-	vs := []ebiten.Vertex{{DstX: 0, DstY: 0}, {DstX: 2, DstY: 0}, {DstX: 0, DstY: 2}}
+	vs := []ggfx.Vertex{{DstX: 0, DstY: 0}, {DstX: 2, DstY: 0}, {DstX: 0, DstY: 2}}
 	is := []uint32{0, 1, 2}
 
 	for _, tc := range []struct {
 		name string
-		draw func(dst *ebiten.Image)
+		draw func(dst *ggfx.Image)
 	}{
 		{
 			name: "FillRule",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTriangles32(vs, is, src, &ebiten.DrawTrianglesOptions{FillRule: ebiten.FillRuleNonZero})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "AntiAlias",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTriangles32(vs, is, src, &ebiten.DrawTrianglesOptions{AntiAlias: true})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
 			},
 		},
 		{
 			name: "ShaderFillRule",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ebiten.DrawTrianglesShaderOptions{FillRule: ebiten.FillRuleNonZero})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "ShaderAntiAlias",
-			draw: func(dst *ebiten.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ebiten.DrawTrianglesShaderOptions{AntiAlias: true})
+			draw: func(dst *ggfx.Image) {
+				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dst := ebiten.NewImage(3, 3)
+			dst := ggfx.NewImage(3, 3)
 			dst.Dispose()
 			// This must not panic.
 			tc.draw(dst)

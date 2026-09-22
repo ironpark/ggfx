@@ -20,7 +20,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepad"
+	"github.com/ironpark/ggfx/internal/gamepad"
 )
 
 // TestFFEffectLayout verifies that ff_effect matches the layout of the kernel's

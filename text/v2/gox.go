@@ -22,9 +22,9 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/math/fixed"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2/internal/textutil"
-	"github.com/hajimehoshi/ebiten/v2/vector"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2/internal/textutil"
+	"github.com/ironpark/ggfx/vector"
 )
 
 var _ Face = (*GoXFace)(nil)
@@ -45,7 +45,7 @@ type goXFaceGlyphImageCacheKey struct {
 type GoXFace struct {
 	f *faceWithCache
 
-	glyphImageCache *cache[goXFaceGlyphImageCacheKey, *ebiten.Image]
+	glyphImageCache *cache[goXFaceGlyphImageCacheKey, *ggfx.Image]
 
 	cachedMetrics Metrics
 
@@ -63,7 +63,7 @@ func NewGoXFace(face font.Face) *GoXFace {
 	}
 	// Set addr as early as possible. This is necessary for glyphVariationCount.
 	g.addr = g
-	g.glyphImageCache = newCache[goXFaceGlyphImageCacheKey, *ebiten.Image](128 * glyphVariationCount(g))
+	g.glyphImageCache = newCache[goXFaceGlyphImageCacheKey, *ggfx.Image](128 * glyphVariationCount(g))
 	g.originXCache = newCache[string, []fixed.Int26_6](512)
 	return g
 }
@@ -275,14 +275,14 @@ type goXGlyphImageArgs struct {
 }
 
 // glyphImage implements glyphImager.
-func (im *goXLineImager) glyphImage(index int) *ebiten.Image {
+func (im *goXLineImager) glyphImage(index int) *ggfx.Image {
 	args := &im.args[index]
 	face := im.face
 	key := goXFaceGlyphImageCacheKey{
 		rune:    args.rune,
 		xoffset: args.subpixelOffset.X,
 	}
-	return face.glyphImageCache.getOrCreate(key, func() (*ebiten.Image, bool) {
+	return face.glyphImageCache.getOrCreate(key, func() (*ggfx.Image, bool) {
 		img := face.glyphImageImpl(args.rune, args.subpixelOffset, args.bounds)
 		return img, img != nil
 	})
@@ -332,7 +332,7 @@ func goXGlyphImageInfo(face *GoXFace, r rune, origin fixed.Point26_6, granularit
 	return
 }
 
-func (g *GoXFace) glyphImageImpl(r rune, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ebiten.Image {
+func (g *GoXFace) glyphImageImpl(r rune, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ggfx.Image {
 	w, h := (glyphBounds.Max.X - glyphBounds.Min.X).Ceil(), (glyphBounds.Max.Y - glyphBounds.Min.Y).Ceil()
 	if w == 0 || h == 0 {
 		return nil
@@ -351,7 +351,7 @@ func (g *GoXFace) glyphImageImpl(r rune, subpixelOffset fixed.Point26_6, glyphBo
 		Y: -glyphBounds.Min.Y + subpixelOffset.Y,
 	}, string(r))
 
-	return ebiten.NewImageFromImage(rgba)
+	return ggfx.NewImageFromImage(rgba)
 }
 
 // direction implements Face.

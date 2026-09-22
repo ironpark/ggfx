@@ -23,7 +23,7 @@ import (
 	"github.com/go-text/typesetting/font/opentype/tables"
 	"golang.org/x/image/math/fixed"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 // colrV0Layer is one layer of a COLRv0 color glyph: an outline in the same
@@ -79,7 +79,7 @@ func (g *GoTextFaceSource) appendCOLRV0Layers(dst []colrV0Layer, layers tables.P
 // subpixelOffset and glyphBounds follow the same conventions as
 // segmentsToImage, and the returned image has the same dimensions as
 // segmentsToImage would produce.
-func colrV0LayersToImage(layers []colrV0Layer, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ebiten.Image {
+func colrV0LayersToImage(layers []colrV0Layer, subpixelOffset fixed.Point26_6, glyphBounds fixed.Rectangle26_6) *ggfx.Image {
 	if len(layers) == 0 {
 		return nil
 	}
@@ -102,5 +102,5 @@ func colrV0LayersToImage(layers []colrV0Layer, subpixelOffset fixed.Point26_6, g
 		src.C = l.color
 		rast.Draw(dst, dst.Bounds(), src, image.Point{})
 	}
-	return ebiten.NewImageFromImage(dst)
+	return ggfx.NewImageFromImage(dst)
 }

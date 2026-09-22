@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten_test
+package ggfx_test
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 	"image/color/palette"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 func TestImageToBytes(t *testing.T) {
@@ -155,7 +155,7 @@ func TestImageToBytes(t *testing.T) {
 		},
 	}
 	for i, c := range cases {
-		got := ebiten.ImageToBytes(c.Image, c.Premul)
+		got := ggfx.ImageToBytes(c.Image, c.Premul)
 		want := c.Out
 		if !bytes.Equal(got, want) {
 			t.Errorf("Test %d: got: %v, want: %v", i, got, want)
@@ -167,7 +167,7 @@ func BenchmarkImageToBytesRGBA(b *testing.B) {
 	img := image.NewRGBA(image.Rect(0, 0, 4096, 4096))
 	b.ResetTimer()
 	for range b.N {
-		ebiten.ImageToBytes(img, true)
+		ggfx.ImageToBytes(img, true)
 	}
 }
 
@@ -175,7 +175,7 @@ func BenchmarkImageToBytesNRGBA(b *testing.B) {
 	img := image.NewNRGBA(image.Rect(0, 0, 4096, 4096))
 	b.ResetTimer()
 	for range b.N {
-		ebiten.ImageToBytes(img, true)
+		ggfx.ImageToBytes(img, true)
 	}
 }
 
@@ -183,6 +183,6 @@ func BenchmarkImageToBytesPaletted(b *testing.B) {
 	img := image.NewPaletted(image.Rect(0, 0, 4096, 4096), palette.Plan9)
 	b.ResetTimer()
 	for range b.N {
-		ebiten.ImageToBytes(img, true)
+		ggfx.ImageToBytes(img, true)
 	}
 }

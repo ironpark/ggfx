@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepad"
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/gamepad"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
 )
 
 func TestMotorMagnitude(t *testing.T) {

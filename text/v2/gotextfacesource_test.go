@@ -23,8 +23,8 @@ import (
 
 	"golang.org/x/image/font/gofont/goregular"
 
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/text/v2"
 )
 
 func TestGlyphImageCacheConcurrent(t *testing.T) {
@@ -59,7 +59,7 @@ func TestGlyphImageCacheSizeEviction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dst := ebiten.NewImage(64, 64)
+	dst := ggfx.NewImage(64, 64)
 
 	// Draw with many distinct sizes, like a game animating its font size.
 	const drawnSizeCount = 100

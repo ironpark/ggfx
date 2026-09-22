@@ -20,12 +20,12 @@ import (
 	"math"
 	"sync"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 var (
-	whiteImage    = ebiten.NewImage(3, 3)
-	whiteSubImage = whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ebiten.Image)
+	whiteImage    = ggfx.NewImage(3, 3)
+	whiteSubImage = whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ggfx.Image)
 )
 
 func init() {
@@ -39,12 +39,12 @@ func init() {
 }
 
 var (
-	theCachedVerticesForUtil []ebiten.Vertex
+	theCachedVerticesForUtil []ggfx.Vertex
 	theCachedIndicesForUtil  []uint32
 	theCacheForUtilM         sync.Mutex
 )
 
-func useCachedVerticesAndIndicesForUtil(fn func([]ebiten.Vertex, []uint32) (vs []ebiten.Vertex, is []uint32)) {
+func useCachedVerticesAndIndicesForUtil(fn func([]ggfx.Vertex, []uint32) (vs []ggfx.Vertex, is []uint32)) {
 	theCacheForUtilM.Lock()
 	defer theCacheForUtilM.Unlock()
 	theCachedVerticesForUtil, theCachedIndicesForUtil = fn(theCachedVerticesForUtil[:0], theCachedIndicesForUtil[:0])
@@ -74,7 +74,7 @@ var (
 )
 
 // StrokeLine strokes a line (x0, y0)-(x1, y1) with the specified width and color.
-func StrokeLine(dst *ebiten.Image, x0, y0, x1, y1 float32, strokeWidth float32, clr color.Color, antialias bool) {
+func StrokeLine(dst *ggfx.Image, x0, y0, x1, y1 float32, strokeWidth float32, clr color.Color, antialias bool) {
 	if antialias {
 		path := thePathPool.Get().(*Path)
 		defer func() {
@@ -93,7 +93,7 @@ func StrokeLine(dst *ebiten.Image, x0, y0, x1, y1 float32, strokeWidth float32, 
 	}
 
 	// Use a regular DrawImage for batching.
-	op := &ebiten.DrawImageOptions{}
+	op := &ggfx.DrawImageOptions{}
 	op.GeoM.Scale(math.Hypot(float64(x1-x0), float64(y1-y0)), float64(strokeWidth))
 	op.GeoM.Translate(0, -float64(strokeWidth)/2)
 	op.GeoM.Rotate(math.Atan2(float64(y1-y0), float64(x1-x0)))
@@ -103,7 +103,7 @@ func StrokeLine(dst *ebiten.Image, x0, y0, x1, y1 float32, strokeWidth float32, 
 }
 
 // FillRect fills a rectangle with the specified width and color.
-func FillRect(dst *ebiten.Image, x, y, width, height float32, clr color.Color, antialias bool) {
+func FillRect(dst *ggfx.Image, x, y, width, height float32, clr color.Color, antialias bool) {
 	if antialias {
 		path := thePathPool.Get().(*Path)
 		defer func() {
@@ -122,7 +122,7 @@ func FillRect(dst *ebiten.Image, x, y, width, height float32, clr color.Color, a
 	}
 
 	// Use a regular DrawImage for batching.
-	op := &ebiten.DrawImageOptions{}
+	op := &ggfx.DrawImageOptions{}
 	op.GeoM.Scale(float64(width), float64(height))
 	op.GeoM.Translate(float64(x), float64(y))
 	op.ColorScale.ScaleWithColor(clr)
@@ -132,12 +132,12 @@ func FillRect(dst *ebiten.Image, x, y, width, height float32, clr color.Color, a
 // DrawFilledRect fills a rectangle with the specified width and color.
 //
 // Deprecated: as of v2.9. Use [FillRect] instead.
-func DrawFilledRect(dst *ebiten.Image, x, y, width, height float32, clr color.Color, antialias bool) {
+func DrawFilledRect(dst *ggfx.Image, x, y, width, height float32, clr color.Color, antialias bool) {
 	FillRect(dst, x, y, width, height, clr, antialias)
 }
 
 // StrokeRect strokes a rectangle with the specified width and color.
-func StrokeRect(dst *ebiten.Image, x, y, width, height float32, strokeWidth float32, clr color.Color, antialias bool) {
+func StrokeRect(dst *ggfx.Image, x, y, width, height float32, strokeWidth float32, clr color.Color, antialias bool) {
 	if antialias {
 		path := thePathPool.Get().(*Path)
 		defer func() {
@@ -171,7 +171,7 @@ func StrokeRect(dst *ebiten.Image, x, y, width, height float32, strokeWidth floa
 	// Use a regular DrawImage for batching.
 	{
 		// Render the top side.
-		op := &ebiten.DrawImageOptions{}
+		op := &ggfx.DrawImageOptions{}
 		op.GeoM.Scale(float64(width+strokeWidth), float64(strokeWidth))
 		op.GeoM.Translate(float64(x-strokeWidth/2), float64(y-strokeWidth/2))
 		op.ColorScale.ScaleWithColor(clr)
@@ -179,7 +179,7 @@ func StrokeRect(dst *ebiten.Image, x, y, width, height float32, strokeWidth floa
 	}
 	{
 		// Render the left side.
-		op := &ebiten.DrawImageOptions{}
+		op := &ggfx.DrawImageOptions{}
 		op.GeoM.Scale(float64(strokeWidth), float64(height-strokeWidth))
 		op.GeoM.Translate(float64(x-strokeWidth/2), float64(y+strokeWidth/2))
 		op.ColorScale.ScaleWithColor(clr)
@@ -187,7 +187,7 @@ func StrokeRect(dst *ebiten.Image, x, y, width, height float32, strokeWidth floa
 	}
 	{
 		// Render the right side.
-		op := &ebiten.DrawImageOptions{}
+		op := &ggfx.DrawImageOptions{}
 		op.GeoM.Scale(float64(strokeWidth), float64(height-strokeWidth))
 		op.GeoM.Translate(float64(x+width-strokeWidth/2), float64(y+strokeWidth/2))
 		op.ColorScale.ScaleWithColor(clr)
@@ -195,7 +195,7 @@ func StrokeRect(dst *ebiten.Image, x, y, width, height float32, strokeWidth floa
 	}
 	{
 		// Render the bottom side.
-		op := &ebiten.DrawImageOptions{}
+		op := &ggfx.DrawImageOptions{}
 		op.GeoM.Scale(float64(width+strokeWidth), float64(strokeWidth))
 		op.GeoM.Translate(float64(x-strokeWidth/2), float64(y+height-strokeWidth/2))
 		op.ColorScale.ScaleWithColor(clr)
@@ -204,7 +204,7 @@ func StrokeRect(dst *ebiten.Image, x, y, width, height float32, strokeWidth floa
 }
 
 // FillCircle fills a circle with the specified center position (cx, cy), the radius (r) and color.
-func FillCircle(dst *ebiten.Image, cx, cy, r float32, clr color.Color, antialias bool) {
+func FillCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antialias bool) {
 	if antialias {
 		path := thePathPool.Get().(*Path)
 		defer func() {
@@ -230,13 +230,13 @@ func FillCircle(dst *ebiten.Image, cx, cy, r float32, clr color.Color, antialias
 	cgf := float32(cg) / 0xffff
 	cbf := float32(cb) / 0xffff
 	caf := float32(ca) / 0xffff
-	useCachedVerticesAndIndicesForUtil(func(vs []ebiten.Vertex, is []uint32) ([]ebiten.Vertex, []uint32) {
+	useCachedVerticesAndIndicesForUtil(func(vs []ggfx.Vertex, is []uint32) ([]ggfx.Vertex, []uint32) {
 		for i := range count {
 			angle := float64(i) * (2 * math.Pi / float64(count))
 			sin, cos := math.Sincos(angle)
 			x := cx + r*float32(cos)
 			y := cy + r*float32(sin)
-			vs = append(vs, ebiten.Vertex{
+			vs = append(vs, ggfx.Vertex{
 				DstX:   x,
 				DstY:   y,
 				SrcX:   1,
@@ -251,8 +251,8 @@ func FillCircle(dst *ebiten.Image, cx, cy, r float32, clr color.Color, antialias
 				is = append(is, 0, idx-1, idx-2)
 			}
 		}
-		op := &ebiten.DrawTrianglesOptions{}
-		op.ColorScaleMode = ebiten.ColorScaleModePremultipliedAlpha
+		op := &ggfx.DrawTrianglesOptions{}
+		op.ColorScaleMode = ggfx.ColorScaleModePremultipliedAlpha
 		dst.DrawTriangles32(vs, is, whiteSubImage, op)
 		return vs, is
 	})
@@ -261,12 +261,12 @@ func FillCircle(dst *ebiten.Image, cx, cy, r float32, clr color.Color, antialias
 // DrawFilledCircle fills a circle with the specified center position (cx, cy), the radius (r) and color.
 //
 // Deprecated: as of v2.9. Use [FillCircle] instead.
-func DrawFilledCircle(dst *ebiten.Image, cx, cy, r float32, clr color.Color, antialias bool) {
+func DrawFilledCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antialias bool) {
 	FillCircle(dst, cx, cy, r, clr, antialias)
 }
 
 // StrokeCircle strokes a circle with the specified center position (cx, cy), the radius (r), width and color.
-func StrokeCircle(dst *ebiten.Image, cx, cy, r float32, strokeWidth float32, clr color.Color, antialias bool) {
+func StrokeCircle(dst *ggfx.Image, cx, cy, r float32, strokeWidth float32, clr color.Color, antialias bool) {
 	if antialias {
 		path := thePathPool.Get().(*Path)
 		defer func() {
@@ -305,13 +305,13 @@ func StrokeCircle(dst *ebiten.Image, cx, cy, r float32, strokeWidth float32, clr
 	cgf := float32(cg) / 0xffff
 	cbf := float32(cb) / 0xffff
 	caf := float32(ca) / 0xffff
-	useCachedVerticesAndIndicesForUtil(func(vs []ebiten.Vertex, is []uint32) ([]ebiten.Vertex, []uint32) {
+	useCachedVerticesAndIndicesForUtil(func(vs []ggfx.Vertex, is []uint32) ([]ggfx.Vertex, []uint32) {
 		for i := range count {
 			angle := float64(i) * (2 * math.Pi / float64(count))
 			sin, cos := math.Sincos(angle)
 			x0 := cx + (r+strokeWidth/2)*float32(cos)
 			y0 := cy + (r+strokeWidth/2)*float32(sin)
-			vs = append(vs, ebiten.Vertex{
+			vs = append(vs, ggfx.Vertex{
 				DstX:   x0,
 				DstY:   y0,
 				SrcX:   1,
@@ -323,7 +323,7 @@ func StrokeCircle(dst *ebiten.Image, cx, cy, r float32, strokeWidth float32, clr
 			})
 			x1 := cx + (r-strokeWidth/2)*float32(cos)
 			y1 := cy + (r-strokeWidth/2)*float32(sin)
-			vs = append(vs, ebiten.Vertex{
+			vs = append(vs, ggfx.Vertex{
 				DstX:   x1,
 				DstY:   y1,
 				SrcX:   1,
@@ -337,15 +337,15 @@ func StrokeCircle(dst *ebiten.Image, cx, cy, r float32, strokeWidth float32, clr
 			total := uint32(2 * count)
 			is = append(is, idx, idx+1, (idx+2)%total, idx+1, (idx+2)%total, (idx+3)%total)
 		}
-		op := &ebiten.DrawTrianglesOptions{}
-		op.ColorScaleMode = ebiten.ColorScaleModePremultipliedAlpha
+		op := &ggfx.DrawTrianglesOptions{}
+		op.ColorScaleMode = ggfx.ColorScaleModePremultipliedAlpha
 		dst.DrawTriangles32(vs, is, whiteSubImage, op)
 		return vs, is
 	})
 }
 
 // StrokePath strokes the specified path with the specified options.
-func StrokePath(dst *ebiten.Image, path *Path, strokeOptions *StrokeOptions, drawPathOptions *DrawPathOptions) {
+func StrokePath(dst *ggfx.Image, path *Path, strokeOptions *StrokeOptions, drawPathOptions *DrawPathOptions) {
 	if strokeOptions == nil {
 		strokeOptions = &StrokeOptions{}
 	}

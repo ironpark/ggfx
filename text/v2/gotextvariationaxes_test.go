@@ -20,7 +20,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/ironpark/ggfx/text/v2"
 )
 
 func TestGoTextFaceSourceAppendVariationAxes(t *testing.T) {

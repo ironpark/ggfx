@@ -1,6 +1,6 @@
 # Ebitengine (v2)
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/hajimehoshi/ebiten/v2.svg)](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ironpark/ggfx.svg)](https://pkg.go.dev/github.com/ironpark/ggfx)
 [![Build Status](https://github.com/hajimehoshi/ebiten/actions/workflows/test.yml/badge.svg)](https://github.com/hajimehoshi/ebiten/actions?query=workflow%3Atest)
 
 **A dead simple 2D game engine for Go**
@@ -8,7 +8,7 @@
 Ebitengine (formerly known as Ebiten) is an open source game engine for the Go programming language. Ebitengine's simple API allows you to quickly and easily develop 2D games that can be deployed across multiple platforms.
 
 * [Website (ebitengine.org)](https://ebitengine.org)
-* [API Reference](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2)
+* [API Reference](https://pkg.go.dev/github.com/ironpark/ggfx)
 * [Cheat Sheet](https://ebitengine.org/en/documents/cheatsheet.html)
 * [Awesome Ebitengine](https://github.com/sedyh/awesome-ebitengine)
 
@@ -36,20 +36,20 @@ For installation on desktops, see [the installation instruction](https://ebiteng
 
 ## Packages
 
-* [ebiten](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2)
-  * [audio](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/audio)
-    * [mp3](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/audio/mp3)
-    * [vorbis](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/audio/vorbis)
-    * [wav](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/audio/wav)
-  * [colorm](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/colorm)
-  * [ebitenutil](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/ebitenutil)
-  * [inpututil](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/inpututil)
-  * [mobile](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/mobile)
-  * [text/v2](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/text/v2)
-  * [vector](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/vector)
-  * [exp/shaderprecomp](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/exp/shaderprecomp)
-  * [exp/textinput](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/exp/textinput)
-  * [exp/vmhost](https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2/exp/vmhost)
+* [ebiten](https://pkg.go.dev/github.com/ironpark/ggfx)
+  * [audio](https://pkg.go.dev/github.com/ironpark/ggfx/audio)
+    * [mp3](https://pkg.go.dev/github.com/ironpark/ggfx/audio/mp3)
+    * [vorbis](https://pkg.go.dev/github.com/ironpark/ggfx/audio/vorbis)
+    * [wav](https://pkg.go.dev/github.com/ironpark/ggfx/audio/wav)
+  * [colorm](https://pkg.go.dev/github.com/ironpark/ggfx/colorm)
+  * [ebitenutil](https://pkg.go.dev/github.com/ironpark/ggfx/ebitenutil)
+  * [inpututil](https://pkg.go.dev/github.com/ironpark/ggfx/inpututil)
+  * [mobile](https://pkg.go.dev/github.com/ironpark/ggfx/mobile)
+  * [text/v2](https://pkg.go.dev/github.com/ironpark/ggfx/text/v2)
+  * [vector](https://pkg.go.dev/github.com/ironpark/ggfx/vector)
+  * [exp/shaderprecomp](https://pkg.go.dev/github.com/ironpark/ggfx/exp/shaderprecomp)
+  * [exp/textinput](https://pkg.go.dev/github.com/ironpark/ggfx/exp/textinput)
+  * [exp/vmhost](https://pkg.go.dev/github.com/ironpark/ggfx/exp/vmhost)
 
 ## AI coding agents
 

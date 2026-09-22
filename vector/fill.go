@@ -23,7 +23,7 @@ import (
 	_ "unsafe"
 	"weak"
 
-	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/ironpark/ggfx"
 )
 
 // FillRule is the rule whether an overlapped region is rendered or not.
@@ -45,8 +45,8 @@ const (
 var (
 	// theCallbackTokens and theFillPathsStates are keyed by weak pointers not to keep the destination images alive.
 	// When a destination image is collected before being used again, releaseFillPathsState removes the entries.
-	theCallbackTokens      = map[weak.Pointer[ebiten.Image]]int64{}
-	theFillPathsStates     = map[weak.Pointer[ebiten.Image]]*fillPathsState{}
+	theCallbackTokens      = map[weak.Pointer[ggfx.Image]]int64{}
+	theFillPathsStates     = map[weak.Pointer[ggfx.Image]]*fillPathsState{}
 	theFillPathsStatesPool = sync.Pool{
 		New: func() any {
 			return &fillPathsState{}
@@ -70,15 +70,15 @@ type DrawPathOptions struct {
 
 	// ColorScale is the color scale to apply to the path.
 	// The default (zero) value is identity, which is (1, 1, 1, 1) (white).
-	ColorScale ebiten.ColorScale
+	ColorScale ggfx.ColorScale
 
 	// Blend is the blend mode to apply to the path.
-	// The default (zero) value is ebiten.BlendSourceOver.
-	Blend ebiten.Blend
+	// The default (zero) value is ggfx.BlendSourceOver.
+	Blend ggfx.Blend
 }
 
 // FillPath fills the specified path with the specified options.
-func FillPath(dst *ebiten.Image, path *Path, fillOptions *FillOptions, drawPathOptions *DrawPathOptions) {
+func FillPath(dst *ggfx.Image, path *Path, fillOptions *FillOptions, drawPathOptions *DrawPathOptions) {
 	if drawPathOptions == nil {
 		drawPathOptions = &DrawPathOptions{}
 	}
@@ -121,7 +121,7 @@ func FillPath(dst *ebiten.Image, path *Path, fillOptions *FillOptions, drawPathO
 	theCallbackTokens[key] = addUsageCallback(dst, fillPathCallback)
 }
 
-func fillPathCallback(dst *ebiten.Image) {
+func fillPathCallback(dst *ggfx.Image) {
 	if originalImage(dst) != dst {
 		panic("vector: dst must be the original image")
 	}
@@ -150,7 +150,7 @@ func fillPathCallback(dst *ebiten.Image) {
 }
 
 // releaseFillPathsState discards the state for a destination image that was collected before being used again.
-func releaseFillPathsState(key weak.Pointer[ebiten.Image]) {
+func releaseFillPathsState(key weak.Pointer[ggfx.Image]) {
 	theFillPathM.Lock()
 	defer theFillPathM.Unlock()
 
@@ -167,14 +167,14 @@ func releaseFillPathsState(key weak.Pointer[ebiten.Image]) {
 	theFillPathsStatesPool.Put(s)
 }
 
-//go:linkname originalImage github.com/hajimehoshi/ebiten/v2.originalImage
-func originalImage(img *ebiten.Image) *ebiten.Image
+//go:linkname originalImage github.com/ironpark/ggfx.originalImage
+func originalImage(img *ggfx.Image) *ggfx.Image
 
-//go:linkname addUsageCallback github.com/hajimehoshi/ebiten/v2.addUsageCallback
-func addUsageCallback(img *ebiten.Image, fn func(img *ebiten.Image)) int64
+//go:linkname addUsageCallback github.com/ironpark/ggfx.addUsageCallback
+func addUsageCallback(img *ggfx.Image, fn func(img *ggfx.Image)) int64
 
-//go:linkname removeUsageCallback github.com/hajimehoshi/ebiten/v2.removeUsageCallback
-func removeUsageCallback(img *ebiten.Image, token int64)
+//go:linkname removeUsageCallback github.com/ironpark/ggfx.removeUsageCallback
+func removeUsageCallback(img *ggfx.Image, token int64)
 
 type offsetAndColor struct {
 	offsetX    float32
@@ -283,14 +283,14 @@ var theAtlas atlas
 
 type fillPathsState struct {
 	paths  []*Path
-	colors []ebiten.ColorScale
+	colors []ggfx.ColorScale
 	bounds []image.Rectangle
 
-	vertices []ebiten.Vertex
+	vertices []ggfx.Vertex
 	indices  []uint32
 
 	antialias bool
-	blend     ebiten.Blend
+	blend     ggfx.Blend
 	fillRule  FillRule
 
 	// cleanup removes the entries for the destination image from theCallbackTokens and theFillPathsStates
@@ -307,7 +307,7 @@ func (f *fillPathsState) reset() {
 	f.colors = slices.Delete(f.colors, 0, len(f.colors))
 }
 
-func (f *fillPathsState) addPath(path *Path, bounds image.Rectangle, clr ebiten.ColorScale) {
+func (f *fillPathsState) addPath(path *Path, bounds image.Rectangle, clr ggfx.ColorScale) {
 	if path == nil {
 		return
 	}
@@ -332,7 +332,7 @@ func (f *fillPathsState) addPath(path *Path, bounds image.Rectangle, clr ebiten.
 // fillPaths fills the specified path with the specified color.
 //
 // fillPaths callers must be protected by theFillPathM.
-func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
+func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 	if len(f.paths) != len(f.colors) {
 		panic("vector: the number of paths and colors must be the same")
 	}
@@ -381,7 +381,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 				// TODO: Use a better position like the center of the sub-path.
 				originIdx := uint32(len(vs))
 				cur := subPath.start
-				vs = append(vs, ebiten.Vertex{
+				vs = append(vs, ggfx.Vertex{
 					DstX:   cur.x + oac.offsetX + dstOffsetX,
 					DstY:   cur.y + oac.offsetY + dstOffsetY,
 					ColorR: oac.colorR,
@@ -395,7 +395,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 					case opTypeLineTo:
 						idx := uint32(len(vs))
 						vs = append(vs,
-							ebiten.Vertex{
+							ggfx.Vertex{
 								DstX:   cur.x + oac.offsetX + dstOffsetX,
 								DstY:   cur.y + oac.offsetY + dstOffsetY,
 								ColorR: oac.colorR,
@@ -403,7 +403,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 								ColorB: oac.colorB,
 								ColorA: oac.colorA,
 							},
-							ebiten.Vertex{
+							ggfx.Vertex{
 								DstX:   op.p1.x + oac.offsetX + dstOffsetX,
 								DstY:   op.p1.y + oac.offsetY + dstOffsetY,
 								ColorR: oac.colorR,
@@ -416,7 +416,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 					case opTypeQuadTo:
 						idx := uint32(len(vs))
 						vs = append(vs,
-							ebiten.Vertex{
+							ggfx.Vertex{
 								DstX:   cur.x + oac.offsetX + dstOffsetX,
 								DstY:   cur.y + oac.offsetY + dstOffsetY,
 								ColorR: oac.colorR,
@@ -424,7 +424,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 								ColorB: oac.colorB,
 								ColorA: oac.colorA,
 							},
-							ebiten.Vertex{
+							ggfx.Vertex{
 								DstX:   op.p2.x + oac.offsetX + dstOffsetX,
 								DstY:   op.p2.y + oac.offsetY + dstOffsetY,
 								ColorR: oac.colorR,
@@ -440,7 +440,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 				if !subPath.closed {
 					idx := uint32(len(vs))
 					vs = append(vs,
-						ebiten.Vertex{
+						ggfx.Vertex{
 							DstX:   cur.x + oac.offsetX + dstOffsetX,
 							DstY:   cur.y + oac.offsetY + dstOffsetY,
 							ColorR: oac.colorR,
@@ -448,7 +448,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 							ColorB: oac.colorB,
 							ColorA: oac.colorA,
 						},
-						ebiten.Vertex{
+						ggfx.Vertex{
 							DstX:   subPath.start.x + oac.offsetX + dstOffsetX,
 							DstY:   subPath.start.y + oac.offsetY + dstOffsetY,
 							ColorR: oac.colorR,
@@ -459,8 +459,8 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 					is = append(is, idx, originIdx, idx+1)
 				}
 			}
-			op := &ebiten.DrawTrianglesShaderOptions{}
-			op.Blend = ebiten.BlendLighter
+			op := &ggfx.DrawTrianglesShaderOptions{}
+			op.Blend = ggfx.BlendLighter
 			shader, err := ensureStencilBufferShaders()
 			if err != nil {
 				panic(fmt.Sprintf("vector: failed to create stencil buffer shader: %v", err))
@@ -500,7 +500,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 					case opTypeQuadTo:
 						idx := uint32(len(vs))
 						vs = append(vs,
-							ebiten.Vertex{
+							ggfx.Vertex{
 								DstX:    cur.x + oac.offsetX + dstOffsetX,
 								DstY:    cur.y + oac.offsetY + dstOffsetY,
 								ColorR:  oac.colorR,
@@ -510,7 +510,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 								Custom0: 0, // u for Loop-Blinn algorithm
 								Custom1: 0, // v for Loop-Blinn algorithm
 							},
-							ebiten.Vertex{
+							ggfx.Vertex{
 								DstX:    op.p1.x + oac.offsetX + dstOffsetX,
 								DstY:    op.p1.y + oac.offsetY + dstOffsetY,
 								ColorR:  oac.colorR,
@@ -520,7 +520,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 								Custom0: 0.5,
 								Custom1: 0,
 							},
-							ebiten.Vertex{
+							ggfx.Vertex{
 								DstX:    op.p2.x + oac.offsetX + dstOffsetX,
 								DstY:    op.p2.y + oac.offsetY + dstOffsetY,
 								ColorR:  oac.colorR,
@@ -535,8 +535,8 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 					}
 				}
 			}
-			op := &ebiten.DrawTrianglesShaderOptions{}
-			op.Blend = ebiten.BlendLighter
+			op := &ggfx.DrawTrianglesShaderOptions{}
+			op.Blend = ggfx.BlendLighter
 			shader, err := ensureStencilBufferBezierShader()
 			if err != nil {
 				panic(fmt.Sprintf("vector: failed to create stencil buffer bezier shader: %v", err))
@@ -576,7 +576,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 		clrB = f.colors[i].B()
 		clrA = f.colors[i].A()
 		vs = append(vs,
-			ebiten.Vertex{
+			ggfx.Vertex{
 				DstX:    float32(pp.X + dstOffsetX),
 				DstY:    float32(pp.Y + dstOffsetY),
 				SrcX:    float32(srcRegion.Min.X),
@@ -588,7 +588,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 				Custom0: offsetX,
 				Custom1: offsetY,
 			},
-			ebiten.Vertex{
+			ggfx.Vertex{
 				DstX:    float32(pp.X + srcRegion.Dx() + dstOffsetX),
 				DstY:    float32(pp.Y + dstOffsetY),
 				SrcX:    float32(srcRegion.Max.X),
@@ -600,7 +600,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 				Custom0: offsetX,
 				Custom1: offsetY,
 			},
-			ebiten.Vertex{
+			ggfx.Vertex{
 				DstX:    float32(pp.X + dstOffsetX),
 				DstY:    float32(pp.Y + srcRegion.Dy() + dstOffsetY),
 				SrcX:    float32(srcRegion.Min.X),
@@ -612,7 +612,7 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 				Custom0: offsetX,
 				Custom1: offsetY,
 			},
-			ebiten.Vertex{
+			ggfx.Vertex{
 				DstX:    float32(pp.X + srcRegion.Dx() + dstOffsetX),
 				DstY:    float32(pp.Y + srcRegion.Dy() + dstOffsetY),
 				SrcX:    float32(srcRegion.Max.X),
@@ -626,10 +626,10 @@ func (f *fillPathsState) fillPaths(dst *ebiten.Image) {
 			})
 		is = append(is, 0, 1, 2, 1, 2, 3)
 
-		op := &ebiten.DrawTrianglesShaderOptions{}
+		op := &ggfx.DrawTrianglesShaderOptions{}
 		op.Blend = f.blend
 		op.Images[0] = stencilImage
-		var shader *ebiten.Shader
+		var shader *ggfx.Shader
 		switch f.fillRule {
 		case FillRuleNonZero:
 			var err error

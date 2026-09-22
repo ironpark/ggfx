@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ebiten
+package ggfx
 
 import (
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepad"
-	"github.com/hajimehoshi/ebiten/v2/internal/gamepaddb"
-	"github.com/hajimehoshi/ebiten/v2/internal/inputstate"
-	"github.com/hajimehoshi/ebiten/v2/internal/ui"
+	"github.com/ironpark/ggfx/internal/gamepad"
+	"github.com/ironpark/ggfx/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/inputstate"
+	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // AppendInputChars appends "printable" runes, read from the keyboard at the time Update is called, to runes,
