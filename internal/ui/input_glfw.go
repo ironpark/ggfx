@@ -237,14 +237,23 @@ func (i *glfwInput) setCursorPos(x, y float64) {
 }
 
 func (u *glfwBackend) registerInputCallbacks() error {
-	if _, err := u.window.SetKeyCallback(func(w *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
-		// Ignore key repeats for now.
-		if action == glfw.Repeat {
-			return
-		}
+	aw := u.appWindow()
 
+	if _, err := u.window.SetKeyCallback(func(w *glfw.Window, key glfw.Key, scancode int, action glfw.Action, mods glfw.ModifierKey) {
 		uk, ok := glfwKeyToUIKey[key]
 		if !ok {
+			return
+		}
+		if aw != nil {
+			u.pushEvent(KeyEvent{
+				Window:  aw,
+				Key:     uk,
+				Pressed: action != glfw.Release,
+				Repeat:  action == glfw.Repeat,
+			})
+		}
+		// The input state records presses and releases only.
+		if action == glfw.Repeat {
 			return
 		}
 		u.input.handleKey(uk, action, mods, u.InputTime())
@@ -262,6 +271,21 @@ func (u *glfwBackend) registerInputCallbacks() error {
 		if !ok {
 			return
 		}
+		if aw != nil {
+			x, y, err := u.window.GetCursorPos()
+			if err != nil {
+				u.setError(err)
+				return
+			}
+			x, y = u.cursorPositionInDIP(x, y)
+			u.pushEvent(MouseButtonEvent{
+				Window:  aw,
+				Button:  ub,
+				Pressed: action == glfw.Press,
+				X:       x,
+				Y:       y,
+			})
+		}
 		u.input.handleMouseButton(ub, action, u.InputTime())
 	}); err != nil {
 		return err
@@ -270,15 +294,35 @@ func (u *glfwBackend) registerInputCallbacks() error {
 	// The character callback skips the characters that are produced with the modifier combinations
 	// the platform treats as shortcuts, like Ctrl+= on X11 (#3502).
 	if _, err := u.window.SetCharCallback(func(w *glfw.Window, char rune) {
+		if aw != nil {
+			u.pushEvent(TextEvent{Window: aw, Text: string(char)})
+		}
 		u.input.appendRune(char)
 	}); err != nil {
 		return err
 	}
 
 	if _, err := u.window.SetScrollCallback(func(w *glfw.Window, xoff float64, yoff float64) {
+		if aw != nil {
+			u.pushEvent(ScrollEvent{Window: aw, X: xoff, Y: yoff})
+		}
 		u.input.handleScroll(xoff, yoff)
 	}); err != nil {
 		return err
+	}
+
+	if aw != nil {
+		if _, err := u.window.SetCursorPosCallback(func(w *glfw.Window, x, y float64) {
+			x, y = u.cursorPositionInDIP(x, y)
+			u.pushEvent(MouseMoveEvent{Window: aw, X: x, Y: y})
+		}); err != nil {
+			return err
+		}
+		if _, err := u.window.SetFocusCallback(func(w *glfw.Window, focused bool) {
+			u.pushEvent(FocusEvent{Window: aw, Focused: focused})
+		}); err != nil {
+			return err
+		}
 	}
 
 	return nil

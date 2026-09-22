@@ -41,6 +41,11 @@ type windowSizeRange struct {
 type desktopWindow struct {
 	ui *UserInterface
 
+	// backend is the window these settings belong to, once it exists. It is nil for the
+	// primary window's settings until the window is created; the primary window is then found
+	// through the published running backend.
+	backend atomic.Pointer[glfwBackend]
+
 	title atomic.Value
 
 	windowSizeLimit atomic.Pointer[windowSizeRange]
@@ -59,6 +64,18 @@ type desktopWindow struct {
 }
 
 var _ Window = (*desktopWindow)(nil)
+
+// running returns the backend serving this window, or nil when the window does not exist or the
+// UI has stopped.
+func (w *desktopWindow) running() uiBackend {
+	if b := w.backend.Load(); b != nil {
+		if b.closed || w.ui.isTerminated() {
+			return nil
+		}
+		return b
+	}
+	return w.ui.runningBackend()
+}
 
 func (w *desktopWindow) init() {
 	w.title.Store("")
@@ -238,7 +255,7 @@ func (w *desktopWindow) IsDecorated() bool {
 	if w.ui.isTerminated() {
 		return false
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return w.isInitWindowDecorated()
 	}
@@ -249,7 +266,7 @@ func (w *desktopWindow) SetDecorated(decorated bool) {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		w.setInitWindowDecorated(decorated)
 		return
@@ -261,7 +278,7 @@ func (w *desktopWindow) IsVisible() bool {
 	if w.ui.isTerminated() {
 		return false
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return w.isInitWindowVisible()
 	}
@@ -272,7 +289,7 @@ func (w *desktopWindow) SetVisible(visible bool) {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		w.setInitWindowVisible(visible)
 		return
@@ -294,7 +311,7 @@ func (w *desktopWindow) SetResizingMode(mode WindowResizingMode) {
 	if WindowResizingMode(w.windowResizingMode.Swap(int32(mode))) == mode {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return
 	}
@@ -305,7 +322,7 @@ func (w *desktopWindow) IsFloating() bool {
 	if w.ui.isTerminated() {
 		return false
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return w.isInitWindowFloating()
 	}
@@ -316,7 +333,7 @@ func (w *desktopWindow) SetFloating(floating bool) {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		w.setInitWindowFloating(floating)
 		return
@@ -328,7 +345,7 @@ func (w *desktopWindow) IsMaximized() bool {
 	if w.ui.isTerminated() {
 		return false
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return w.isInitWindowMaximized()
 	}
@@ -354,7 +371,7 @@ func (w *desktopWindow) Maximize() {
 		return
 	}
 
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		w.setInitWindowMaximized(true)
 		return
@@ -363,7 +380,7 @@ func (w *desktopWindow) Maximize() {
 }
 
 func (w *desktopWindow) IsMinimized() bool {
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return false
 	}
@@ -371,7 +388,7 @@ func (w *desktopWindow) IsMinimized() bool {
 }
 
 func (w *desktopWindow) Minimize() {
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		// Do nothing
 		return
@@ -386,7 +403,7 @@ func (w *desktopWindow) Restore() {
 	if !w.isWindowMaximizable() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		// Do nothing
 		return
@@ -401,7 +418,7 @@ func (w *desktopWindow) SetMonitor(monitor *Monitor) {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		w.ui.setInitMonitor(monitor)
 		return
@@ -413,7 +430,7 @@ func (w *desktopWindow) Position() (int, int) {
 	if w.ui.isTerminated() {
 		return 0, 0
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		// The default position depends on the monitor, and getting a monitor initializes GLFW,
 		// which must not happen here. Only an explicitly set position is available.
@@ -430,7 +447,7 @@ func (w *desktopWindow) SetPosition(x, y int) {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		w.setInitWindowPositionInDIP(x, y)
 		return
@@ -442,7 +459,7 @@ func (w *desktopWindow) Size() (int, int) {
 	if w.ui.isTerminated() {
 		return 0, 0
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		ww, wh := w.getInitWindowSizeInDIP()
 		return w.adjustWindowSizeBasedOnSizeLimitsInDIP(ww, wh)
@@ -454,7 +471,7 @@ func (w *desktopWindow) SetSize(width, height int) {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		// If the window is initially maximized, the set size is ignored anyway.
 		w.setInitWindowSizeInDIP(width, height)
@@ -474,7 +491,7 @@ func (w *desktopWindow) SetSizeLimits(minw, minh, maxw, maxh int) {
 	if !w.setWindowSizeLimitsInDIP(minw, minh, maxw, maxh) {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return
 	}
@@ -496,7 +513,7 @@ func (w *desktopWindow) SetTitle(title string) {
 	if w.title.Swap(title) == title {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return
 	}
@@ -507,7 +524,7 @@ func (w *desktopWindow) applyColorMode() {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		// The backend consumes the preferred color mode at its initialization.
 		return
@@ -522,7 +539,7 @@ func (w *desktopWindow) SetClosingHandled(handled bool) {
 	if w.windowClosingHandled.Swap(handled) == handled {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return
 	}
@@ -537,7 +554,7 @@ func (w *desktopWindow) SetMousePassthrough(enabled bool) {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		w.setInitWindowMousePassthrough(enabled)
 		return
@@ -549,7 +566,7 @@ func (w *desktopWindow) IsMousePassthrough() bool {
 	if w.ui.isTerminated() {
 		return false
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		return w.isInitWindowMousePassthrough()
 	}
@@ -560,7 +577,7 @@ func (w *desktopWindow) RequestAttention() {
 	if w.ui.isTerminated() {
 		return
 	}
-	b := w.ui.runningBackend()
+	b := w.running()
 	if b == nil {
 		// Do nothing
 		return

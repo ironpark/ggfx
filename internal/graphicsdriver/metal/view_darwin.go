@@ -53,6 +53,10 @@ type view struct {
 	// This is always false on iOS.
 	liveResizing atomic.Bool
 
+	// released reports whether the view was released. The display link is then invalidated and
+	// never created again.
+	released atomic.Bool
+
 	device mtl.Device
 	ml     ca.MetalLayer
 

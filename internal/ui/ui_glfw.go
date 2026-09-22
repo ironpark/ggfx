@@ -619,6 +619,15 @@ func (u *glfwBackend) registerWindowCloseCallback() error {
 		u.closeCallback = func(_ *glfw.Window) {
 			u.input.setWindowBeingClosed()
 
+			if aw := u.appWindow(); aw != nil {
+				// The app decides: the window closes after the CloseEvent unless it is kept open.
+				u.pushEvent(CloseEvent{Window: aw})
+				if err := u.window.SetShouldClose(false); err != nil {
+					u.setError(err)
+				}
+				return
+			}
+
 			if !u.desktopWindow.isWindowClosingHandled() {
 				return
 			}
@@ -720,6 +729,10 @@ func (u *glfwBackend) registerWindowFramebufferSizeCallback() error {
 				return
 			}
 
+			if aw := u.appWindow(); aw != nil {
+				u.pushEvent(ResizeEvent{Window: aw, Width: float64(ww), Height: float64(wh), Scale: s})
+			}
+
 			// While the window is being resized on macOS or Windows, the OS traps the main
 			// thread in an event-handling loop and the game loop cannot proceed. Render a frame
 			// here so that the rendering result follows the window size (#2615).
@@ -799,6 +812,9 @@ func (u *glfwBackend) registerDropCallback() error {
 			if err != nil {
 				u.setError(err)
 				return
+			}
+			if aw := u.appWindow(); aw != nil {
+				u.pushEvent(DropEvent{Window: aw, Files: fs})
 			}
 			u.input.setDroppedFiles(fs)
 		}

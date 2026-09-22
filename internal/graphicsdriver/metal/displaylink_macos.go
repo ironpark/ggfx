@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"runtime"
 	"structs"
+	"sync"
 	"time"
 
 	"github.com/ebitengine/purego"
@@ -96,49 +97,79 @@ func isCAMetalDisplayLinkAvailable() bool {
 	return false
 }
 
-var class_EbitengineCAMetalDisplayLinkDelegate objc.Class
+var (
+	class_EbitengineCAMetalDisplayLinkDelegate objc.Class
+
+	// The delegate class is registered once for the process; each view has its own delegate
+	// instance, and the callback finds the view through delegateViews.
+	registerDelegateClassOnce sync.Once
+	registerDelegateClassErr  error
+
+	delegateViewsMu sync.Mutex
+	delegateViews   = map[objc.ID]*view{}
+)
+
+func viewForDelegate(id objc.ID) *view {
+	delegateViewsMu.Lock()
+	defer delegateViewsMu.Unlock()
+	return delegateViews[id]
+}
+
+func registerDelegateClass() error {
+	registerDelegateClassOnce.Do(func() {
+		c, err := objc.RegisterClass(
+			"EbitengineCAMetalDisplayLinkDelegate",
+			objc.GetClass("NSObject"),
+			[]*objc.Protocol{objc.GetProtocol("CAMetalDisplayLinkDelegate")},
+			nil,
+			[]objc.MethodDef{
+				{
+					Cmd: objc.RegisterName("metalDisplayLink:needsUpdate:"),
+					Fn: func(id objc.ID, cmd objc.SEL, metalDisplayLink objc.ID, needsUpdate objc.ID) {
+						v := viewForDelegate(id)
+						if v == nil {
+							return
+						}
+						// There is a case where this callback is invoked from the main run loop (#3353).
+						// This is very mysterious, but this causes a deadlock.
+						// As a workaround, return this immediately when the current run loop is the main run loop.
+						if cocoa.NSRunLoop_currentRunLoop() == cocoa.NSRunLoop_mainRunLoop() {
+							slog.Debug("metal: metalDisplayLink:needsUpdate: is unexpectedly called from the main run loop")
+							return
+						}
+						// vsyncDisabled or liveResizing becomes true before the display link is invalidated
+						// (see updateMetalDisplayLink).
+						// Return without sending a drawable so that the run loop can execute the invalidation block.
+						if v.vsyncDisabled.Load() || v.liveResizing.Load() || v.released.Load() {
+							return
+						}
+						drawable := ca.MetalDisplayLinkUpdate{ID: needsUpdate}.Drawable()
+						if drawable == (ca.MetalDrawable{}) {
+							return
+						}
+						v.drawableCh <- drawable
+						<-v.drawableDoneCh
+					},
+				},
+			},
+		)
+		if err != nil {
+			registerDelegateClassErr = fmt.Errorf("metal: objc.RegisterClass for EbitengineCAMetalDisplayLinkDelegate failed: %w", err)
+			return
+		}
+		class_EbitengineCAMetalDisplayLinkDelegate = c
+	})
+	return registerDelegateClassErr
+}
 
 func (v *view) initCAMetalDisplayLink() error {
 	v.drawableCh = make(chan ca.MetalDrawable)
 	v.drawableDoneCh = make(chan struct{})
 	v.metalDisplayLinkRunLoop = createThreadWithRunLoop()
 
-	c, err := objc.RegisterClass(
-		"EbitengineCAMetalDisplayLinkDelegate",
-		objc.GetClass("NSObject"),
-		[]*objc.Protocol{objc.GetProtocol("CAMetalDisplayLinkDelegate")},
-		nil,
-		[]objc.MethodDef{
-			{
-				Cmd: objc.RegisterName("metalDisplayLink:needsUpdate:"),
-				Fn: func(id objc.ID, cmd objc.SEL, metalDisplayLink objc.ID, needsUpdate objc.ID) {
-					// There is a case where this callback is invoked from the main run loop (#3353).
-					// This is very mysterious, but this causes a deadlock.
-					// As a workaround, return this immediately when the current run loop is the main run loop.
-					if cocoa.NSRunLoop_currentRunLoop() == cocoa.NSRunLoop_mainRunLoop() {
-						slog.Debug("metal: metalDisplayLink:needsUpdate: is unexpectedly called from the main run loop")
-						return
-					}
-					// vsyncDisabled or liveResizing becomes true before the display link is invalidated
-					// (see updateMetalDisplayLink).
-					// Return without sending a drawable so that the run loop can execute the invalidation block.
-					if v.vsyncDisabled.Load() || v.liveResizing.Load() {
-						return
-					}
-					drawable := ca.MetalDisplayLinkUpdate{ID: needsUpdate}.Drawable()
-					if drawable == (ca.MetalDrawable{}) {
-						return
-					}
-					v.drawableCh <- drawable
-					<-v.drawableDoneCh
-				},
-			},
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("metal: objc.RegisterClass for EbitengineCAMetalDisplayLinkDelegate failed: %w", err)
+	if err := registerDelegateClass(); err != nil {
+		return err
 	}
-	class_EbitengineCAMetalDisplayLinkDelegate = c
 
 	v.updateMetalDisplayLink()
 
@@ -165,7 +196,7 @@ func (v *view) updateMetalDisplayLink() {
 	//     drawable size keeps changing, and waiting for a drawable with the correct size
 	//     wastes the tight drawable pool. A drawable obtained directly from the Metal layer
 	//     always has the current drawable size (#3478).
-	if v.vsyncDisabled.Load() || v.liveResizing.Load() {
+	if v.vsyncDisabled.Load() || v.liveResizing.Load() || v.released.Load() {
 		if v.metalDisplayLink == 0 {
 			return
 		}
@@ -210,8 +241,17 @@ func (v *view) updateMetalDisplayLink() {
 		return
 	}
 
+	// A display link on a layer without a drawable size fails to allocate drawables and logs a
+	// warning at every refresh. Wait for the first screen image (see applyDrawableSizeIfNeeded).
+	if v.drawableWidth == 0 || v.drawableHeight == 0 {
+		return
+	}
+
 	if v.metalDisplayLinkDelegate == 0 {
 		v.metalDisplayLinkDelegate = objc.ID(class_EbitengineCAMetalDisplayLinkDelegate).Send(objc.RegisterName("new"))
+		delegateViewsMu.Lock()
+		delegateViews[v.metalDisplayLinkDelegate] = v
+		delegateViewsMu.Unlock()
 	}
 
 	ch := make(chan uintptr)

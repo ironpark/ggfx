@@ -70,7 +70,18 @@ func (v *view) initializeOS() error {
 
 // release releases the resources created at initialize.
 func (v *view) release() {
+	v.released.Store(true)
 	v.releaseDisplayLink()
+	if v.metalDisplayLinkRunLoop.ID != 0 {
+		v.updateMetalDisplayLink()
+	}
+	if v.metalDisplayLinkDelegate != 0 {
+		delegateViewsMu.Lock()
+		delete(delegateViews, v.metalDisplayLinkDelegate)
+		delegateViewsMu.Unlock()
+		v.metalDisplayLinkDelegate.Send(objc.RegisterName("release"))
+		v.metalDisplayLinkDelegate = 0
+	}
 }
 
 func (v *view) waitForDisplayLinkOutputCallback() {
@@ -119,6 +130,9 @@ func (v *view) applyDrawableSizeIfNeeded() {
 	} else {
 		set()
 	}
+
+	// The display link waits for a drawable size (see updateMetalDisplayLink).
+	v.updateMetalDisplayLink()
 }
 
 // inLiveResize reports whether the window is being resized by the user.

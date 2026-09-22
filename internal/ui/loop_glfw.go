@@ -37,13 +37,21 @@ import (
 var errWindowClosed = errors.New("ui: window closed")
 
 func (u *UserInterface) run(game Game, options *RunOptions) error {
-	if options.SingleThread || buildTagSingleThread || runtime.GOOS == "js" {
-		return u.runSingleThread(game, options)
-	}
-	return u.runMultiThread(game, options)
+	return u.runLoop(options, func() error {
+		return u.initOnMainThread(game, options)
+	}, nil)
 }
 
-func (u *UserInterface) runMultiThread(game Game, options *RunOptions) error {
+// runLoop runs the loop. initMain runs on the main thread first; start, if any, runs on the loop's
+// goroutine before the first iteration.
+func (u *UserInterface) runLoop(options *RunOptions, initMain func() error, start func() error) error {
+	if options.SingleThread || buildTagSingleThread || runtime.GOOS == "js" {
+		return u.runSingleThread(options, initMain, start)
+	}
+	return u.runMultiThread(options, initMain, start)
+}
+
+func (u *UserInterface) runMultiThread(options *RunOptions, initMain func() error, start func() error) error {
 	u.mainThread = thread.NewOSThread()
 	graphicscommand.SetOSThreadAsRenderThread()
 
@@ -66,16 +74,16 @@ func (u *UserInterface) runMultiThread(game Game, options *RunOptions) error {
 
 		var err error
 		u.mainThread.Call(func() {
-			err = u.initOnMainThread(game, options)
+			err = initMain()
 		})
 		if err != nil {
 			return err
 		}
 
-		// The backend is published at the window creation in initOnMainThread.
+		// The backend is published at the window creation.
 		defer u.setRunningBackend(nil)
 
-		return u.loopGame()
+		return u.loopGame(start)
 	})
 
 	// Run the main thread. The loop is the thread's whole life, so a call arriving after
@@ -84,18 +92,18 @@ func (u *UserInterface) runMultiThread(game Game, options *RunOptions) error {
 	return wg.Wait()
 }
 
-func (u *UserInterface) runSingleThread(game Game, options *RunOptions) error {
+func (u *UserInterface) runSingleThread(options *RunOptions, initMain func() error, start func() error) error {
 	// Initialize the main thread first so the thread is available at u.run (#809).
 	u.mainThread = thread.NewNoopThread()
 
-	// The backend is published at the window creation in initOnMainThread.
+	// The backend is published at the window creation.
 	defer u.setRunningBackend(nil)
 
-	if err := u.initOnMainThread(game, options); err != nil {
+	if err := initMain(); err != nil {
 		return err
 	}
 
-	if err := u.loopGame(); err != nil {
+	if err := u.loopGame(start); err != nil {
 		return err
 	}
 
@@ -340,7 +348,7 @@ func (u *glfwBackend) destroy() error {
 	return nil
 }
 
-func (u *UserInterface) loopGame() (err error) {
+func (u *UserInterface) loopGame(start func() error) (err error) {
 	defer func() {
 		graphicscommand.Terminate()
 		u.mainThread.Call(func() {
@@ -352,6 +360,12 @@ func (u *UserInterface) loopGame() (err error) {
 			}
 		})
 	}()
+
+	if start != nil {
+		if err := start(); err != nil {
+			return err
+		}
+	}
 
 	for {
 		if err := u.updateGame(); err != nil {
@@ -367,6 +381,16 @@ func (u *UserInterface) pumpEvents() error {
 	defer func() {
 		u.pollingEvents = false
 	}()
+	if u.app != nil {
+		// An app renders on request: wait for an event unless a frame is pending. A window that
+		// has not presented yet is still hidden and needs its first frame.
+		for _, w := range u.windows {
+			if w.context.wantsFrame() || !w.bufferOnceSwapped {
+				return glfw.PollEvents()
+			}
+		}
+		return glfw.WaitEvents()
+	}
 	if FPSModeType(u.fpsMode.Load()) != FPSModeVsyncOffMinimum {
 		// TODO: Updating the input can be skipped when clock.Update returns 0 (#1367).
 		return glfw.PollEvents()
@@ -671,6 +695,15 @@ func (u *UserInterface) updateGame() error {
 	// are driven by different GPUs. Measure it again on the new monitor.
 	if monitorChanged {
 		u.pacer.resetVsyncDetection()
+	}
+
+	if u.app != nil {
+		// A game advances the tick in its Update; an app advances it once per iteration, so
+		// that the time-based caches, like the current monitor, keep expiring.
+		u.incrementTick()
+		if err := u.dispatchEvents(); err != nil {
+			return err
+		}
 	}
 
 	var needsSwapBuffers bool

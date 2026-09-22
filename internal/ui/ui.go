@@ -17,6 +17,7 @@ package ui
 import (
 	"errors"
 	"image"
+	"sync"
 	"sync/atomic"
 
 	_ "github.com/ebitengine/hideconsole"
@@ -102,6 +103,13 @@ type UserInterface struct {
 
 	// funcsInFrameCh carries functions that must run inside a frame, like reading pixels.
 	funcsInFrameCh chan func()
+
+	// app is the App driven by RunApp, and nil for a game.
+	app App
+
+	// events are the events queued for the app, in order.
+	eventsMu sync.Mutex
+	events   []Event
 
 	userInterfaceImpl
 }
