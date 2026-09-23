@@ -17,6 +17,7 @@ package directx
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -125,8 +126,13 @@ type graphics11 struct {
 	deviceContext *_ID3D11DeviceContext
 
 	images      map[graphicsdriver.ImageID]*image11
-	screenImage *image11
 	nextImageID graphicsdriver.ImageID
+
+	// surfaces are the surfaces that have a swap chain, in creation order.
+	surfaces []*surface11
+
+	// tmpSwapChains is a temporary slice of the swap chains to present.
+	tmpSwapChains []*swapChain
 
 	shaders      map[graphicsdriver.ShaderID]*shader11
 	tmpUniforms  []uint32
@@ -140,8 +146,19 @@ type graphics11 struct {
 
 	rasterizerState *_ID3D11RasterizerState
 	blendStates     map[blendStateKey]*_ID3D11BlendState
+}
 
-	window windows.HWND
+// surface11 is the swap chain on one window.
+type surface11 struct {
+	graphics *graphics11
+	window   windows.HWND
+
+	// swapChain is nil until the first screen image is created.
+	swapChain   *swapChain
+	screenImage *image11
+
+	// drawn reports whether the screen image was drawn to since the previous present.
+	drawn bool
 }
 
 func newGraphics11(useWARP bool, useDebugLayer bool) (gr11 *graphics11, ferr error) {
@@ -263,7 +280,8 @@ func (g *graphics11) Begin() error {
 	return nil
 }
 
-// IsOccluded reports whether the screen is invisible.
+// IsOccluded reports whether the screen is invisible: whether none of the windows presented at the
+// last present was visible.
 func (g *graphics11) IsOccluded() bool {
 	if g.graphicsInfra == nil {
 		return false
@@ -276,26 +294,67 @@ func (g *graphics11) End(mode graphicsdriver.FlushMode) error {
 		return nil
 	}
 
-	if err := g.graphicsInfra.present(true); err != nil {
+	// Present every surface drawn since the previous present. A surface that was not drawn keeps
+	// showing its previous frame.
+	swapChains := g.tmpSwapChains[:0]
+	for _, s := range g.surfaces {
+		if !s.drawn {
+			continue
+		}
+		swapChains = append(swapChains, s.swapChain)
+		s.drawn = false
+	}
+	err := g.graphicsInfra.present(swapChains, true)
+	clear(swapChains)
+	g.tmpSwapChains = swapChains[:0]
+	if err != nil {
 		return err
 	}
 
 	return nil
 }
 
+// NewSurface records the window. Its swap chain is created with the first screen image, on the
+// rendering thread.
 func (g *graphics11) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
 	if transparent {
 		return nil, errors.New("directx: a transparent surface is not supported")
-	}
-	if g.window != 0 {
-		return nil, errors.New("directx: only one surface is supported")
 	}
 	w, err := surfaceTarget(target)
 	if err != nil {
 		return nil, err
 	}
-	g.window = w
-	return &Surface{newScreenImage: g.newScreenImage}, nil
+	return &surface11{
+		graphics: g,
+		window:   w,
+	}, nil
+}
+
+func (s *surface11) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
+	return s.graphics.newScreenImage(s, width, height)
+}
+
+// Dispose releases the swap chain. Dispose is called on the rendering thread.
+func (s *surface11) Dispose() {
+	g := s.graphics
+	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *surface11) bool { return t == s })
+
+	if s.screenImage != nil {
+		// Release the references to the swap chain's buffer. The image itself stays registered
+		// until its owner disposes it.
+		s.screenImage.disposeBuffers()
+		s.screenImage.surface = nil
+		s.screenImage = nil
+	}
+	if s.swapChain != nil {
+		// Unbind the render target that might still be the swap chain's buffer. Direct3D 11 destroys
+		// a swap chain lazily, so flush the device context to destroy it now.
+		g.deviceContext.OMSetRenderTargets([]*_ID3D11RenderTargetView{nil}, nil)
+		s.swapChain.release()
+		s.swapChain = nil
+		g.deviceContext.Flush()
+	}
+	s.drawn = false
 }
 
 // SupportsDirectComposition reports whether this driver can present through DirectComposition.
@@ -398,28 +457,34 @@ func (g *graphics11) NewImage(width, height int) (graphicsdriver.Image, error) {
 	return i, nil
 }
 
-func (g *graphics11) newScreenImage(width, height int) (graphicsdriver.Image, error) {
-	if g.screenImage != nil {
+func (g *graphics11) newScreenImage(s *surface11, width, height int) (graphicsdriver.Image, error) {
+	if s.screenImage != nil {
 		// Dispose the screen image, so that no reference to the swap chain's buffer remains before
 		// ResizeBuffers.
-		g.screenImage.Dispose()
-		g.screenImage = nil
+		s.screenImage.Dispose()
+		s.screenImage = nil
 	}
 
-	if !g.graphicsInfra.isSwapChainInited() {
-		if err := g.graphicsInfra.initSwapChain(width, height, unsafe.Pointer(g.device), g.window); err != nil {
+	if s.swapChain == nil {
+		sc, err := g.graphicsInfra.newSwapChain(width, height, unsafe.Pointer(g.device), s.window)
+		if err != nil {
 			return nil, err
 		}
-	} else if !g.graphicsInfra.canReuseSwapChainBuffers(width, height) {
+		s.swapChain = sc
+		g.surfaces = append(g.surfaces, s)
+	} else if !s.swapChain.canReuseBuffers(width, height) {
 		// Resize the swap chain now, before this frame renders the screen, so that the frame renders
 		// and presents at the new size. Presenting a stale-size buffer while the window is already at
 		// the new size makes the compositor scale it for a moment (#3477).
-		if err := g.graphicsInfra.resizeSwapChain(width, height); err != nil {
+		//
+		// The render target might still be the old screen image's buffer.
+		g.deviceContext.OMSetRenderTargets([]*_ID3D11RenderTargetView{nil}, nil)
+		if err := s.swapChain.resize(width, height); err != nil {
 			return nil, err
 		}
 	}
 
-	t, err := g.graphicsInfra.getBuffer(0, &_IID_ID3D11Texture2D)
+	t, err := s.swapChain.getBuffer(0, &_IID_ID3D11Texture2D)
 	if err != nil {
 		return nil, err
 	}
@@ -430,10 +495,11 @@ func (g *graphics11) newScreenImage(width, height int) (graphicsdriver.Image, er
 		width:    width,
 		height:   height,
 		screen:   true,
+		surface:  s,
 		texture:  (*_ID3D11Texture2D)(t),
 	}
 	g.addImage(i)
-	g.screenImage = i
+	s.screenImage = i
 	return i, nil
 }
 
@@ -508,6 +574,9 @@ func (g *graphics11) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphic
 	g.deviceContext.PSSetShaderResources(0, srvs[:])
 
 	dst := g.images[dstID]
+	if dst.surface != nil {
+		dst.surface.drawn = true
+	}
 	var srcs [graphics.ShaderSrcImageCount]*image11
 	for i, id := range srcIDs {
 		img := g.images[id]

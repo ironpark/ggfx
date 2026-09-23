@@ -27,7 +27,11 @@ type image11 struct {
 	id       graphicsdriver.ImageID
 	width    int
 	height   int
-	screen   bool
+
+	// surface is the surface this image is presented on. surface is non-nil iff the image is a
+	// screen image whose surface is not disposed.
+	surface *surface11
+	screen  bool
 
 	texture            *_ID3D11Texture2D
 	renderTargetView   *_ID3D11RenderTargetView

@@ -23,9 +23,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
 )
 
-type graphicsPlatform struct {
-	presenter Presenter
-}
+type graphicsPlatform struct{}
 
 // NewGraphics creates an implementation of graphicsdriver.Graphics for OpenGL.
 // The returned graphics value is nil iff the error is not nil.
@@ -43,33 +41,11 @@ func (g *Graphics) IsES() bool {
 	return g.context.ctx.IsES()
 }
 
-// initSurface takes the Presenter the rendered frame is presented through.
-func (g *Graphics) initSurface(target any) error {
+// presenterFromTarget takes the Presenter a surface's frames are presented through.
+func presenterFromTarget(target any) (Presenter, error) {
 	p, ok := target.(Presenter)
 	if !ok {
-		return fmt.Errorf("opengl: NewSurface needs a Presenter but got %T", target)
+		return nil, fmt.Errorf("opengl: NewSurface needs a Presenter but got %T", target)
 	}
-	g.presenter = p
-	return nil
-}
-
-func (g *Graphics) makeContextCurrent() error {
-	return g.presenter.MakeContextCurrent()
-}
-
-func (g *Graphics) swapBuffers() error {
-	// Call SwapInterval even though vsync is not changed.
-	// When toggling to fullscreen, vsync state might be reset unexpectedly (#1787).
-
-	// SwapInterval is affected by the current monitor of the window.
-	// This needs to be called at least after SetMonitor.
-	// Without SwapInterval after SetMonitor, vsynch doesn't work (#375).
-	if err := g.presenter.SwapInterval(1); err != nil {
-		return err
-	}
-
-	if err := g.presenter.SwapBuffers(); err != nil {
-		return err
-	}
-	return nil
+	return p, nil
 }

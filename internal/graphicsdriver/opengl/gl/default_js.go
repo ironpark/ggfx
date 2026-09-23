@@ -33,6 +33,7 @@ type defaultContext struct {
 	fnBindVertexArray          js.Value
 	fnBlendEquationSeparate    js.Value
 	fnBlendFuncSeparate        js.Value
+	fnBlitFramebuffer          js.Value
 	fnBufferData               js.Value
 	fnBufferSubData            js.Value
 	fnCheckFramebufferStatus   js.Value
@@ -167,6 +168,7 @@ func NewDefaultContext(v js.Value) (Context, error) {
 		fnBindVertexArray:          v.Get("bindVertexArray").Call("bind", v),
 		fnBlendEquationSeparate:    v.Get("blendEquationSeparate").Call("bind", v),
 		fnBlendFuncSeparate:        v.Get("blendFuncSeparate").Call("bind", v),
+		fnBlitFramebuffer:          v.Get("blitFramebuffer").Call("bind", v),
 		fnBufferData:               v.Get("bufferData").Call("bind", v),
 		fnBufferSubData:            v.Get("bufferSubData").Call("bind", v),
 		fnCheckFramebufferStatus:   v.Get("checkFramebufferStatus").Call("bind", v),
@@ -302,6 +304,10 @@ func (c *defaultContext) BlendEquationSeparate(modeRGB uint32, modeAlpha uint32)
 
 func (c *defaultContext) BlendFuncSeparate(srcRGB uint32, dstRGB uint32, srcAlpha uint32, dstAlpha uint32) {
 	c.fnBlendFuncSeparate.Invoke(srcRGB, dstRGB, srcAlpha, dstAlpha)
+}
+
+func (c *defaultContext) BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 int32, mask uint32, filter uint32) {
+	c.fnBlitFramebuffer.Invoke(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter)
 }
 
 func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {

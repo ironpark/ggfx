@@ -28,7 +28,10 @@ type image12 struct {
 	id       graphicsdriver.ImageID
 	width    int
 	height   int
-	screen   bool
+
+	// surface is the surface this image is presented on. surface is non-nil iff screen is true.
+	surface *surface12
+	screen  bool
 
 	states            [frameCount]_D3D12_RESOURCE_STATES
 	texture           *_ID3D12Resource
@@ -232,21 +235,21 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 
 func (i *image12) resource() *_ID3D12Resource {
 	if i.screen {
-		return i.graphics.renderTargets[i.graphics.backBufferIndex]
+		return i.surface.renderTargets[i.surface.backBufferIndex]
 	}
 	return i.texture
 }
 
 func (i *image12) state() _D3D12_RESOURCE_STATES {
 	if i.screen {
-		return i.states[i.graphics.backBufferIndex]
+		return i.states[i.surface.backBufferIndex]
 	}
 	return i.states[0]
 }
 
 func (i *image12) setState(newState _D3D12_RESOURCE_STATES) {
 	if i.screen {
-		i.states[i.graphics.backBufferIndex] = newState
+		i.states[i.surface.backBufferIndex] = newState
 		return
 	}
 	i.states[0] = newState
@@ -284,11 +287,11 @@ func (i *image12) setAsRenderTarget(drawCommandList *_ID3D12GraphicsCommandList,
 	}
 
 	if i.screen {
-		rtv, err := i.graphics.rtvDescriptorHeap.GetCPUDescriptorHandleForHeapStart()
+		rtv, err := i.surface.rtvDescriptorHeap.GetCPUDescriptorHandleForHeapStart()
 		if err != nil {
 			return err
 		}
-		rtv.Offset(int32(i.graphics.backBufferIndex), i.graphics.rtvDescriptorSize)
+		rtv.Offset(int32(i.surface.backBufferIndex), i.graphics.rtvDescriptorSize)
 		drawCommandList.OMSetRenderTargets([]_D3D12_CPU_DESCRIPTOR_HANDLE{rtv}, false, nil)
 		return nil
 	}

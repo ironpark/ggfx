@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ironpark/ggfx/internal/glfw"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
@@ -93,6 +94,14 @@ type userInterfaceImpl struct {
 	backend atomic.Pointer[uiBackend]
 
 	graphicsDriver graphicsdriver.Graphics
+
+	// glContextWindow is the hidden window whose context the OpenGL driver draws in, and nil with
+	// the other drivers. It lives until GLFW terminates.
+	glContextWindow *glfw.Window
+
+	// renderOnMainThread reports whether frames are rendered on the main thread, as in the single
+	// thread mode.
+	renderOnMainThread bool
 
 	// windows are the open windows, the primary window first. windows must be accessed from
 	// the main thread.

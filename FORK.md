@@ -186,9 +186,9 @@ WebGL feels.
 
 ## Not done yet
 
-- More than one window on OpenGL and WebGL (`docs/window.md`). Only Metal
-  and the two-window example in `examples/multiwindow` were run; DirectX
-  accepts one surface and was cross-compiled only.
+- More than one canvas on WebGL (`docs/window.md`). Metal and macOS OpenGL
+  ran several windows; DirectX 11/12 and OpenGL on Linux and Windows accept
+  several surfaces but were cross-compiled only.
 - IME composition on the event path outside macOS and Windows. X11 and the
   browser still use `exp/textinput` for composition.
 - Only macOS Metal and OpenGL ran the test suite after the shader change;
@@ -206,9 +206,10 @@ WebGL feels.
   live-resize handling, which cannot be exercised here, so they were left.
 - DirectX's refusal of a transparent surface is returned but never seen here;
   only Metal and OpenGL ran a transparent window.
-- A rendering target with no window at all. OpenGL makes its context current
-  through the window every frame, so a driver without one is not reachable;
-  `WindowOptions.Hidden` is the way to render without showing anything.
+- A rendering target with no window at all. OpenGL draws in a hidden window's
+  context but presents through each window's, so a driver without one is not
+  reachable; `WindowOptions.Hidden` is the way to render without showing
+  anything.
 - X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which
   had stopped reporting anything under `Run` anyway. It needs to take committed
   text from `TextEvent` instead, which is the same gap as IME composition there.

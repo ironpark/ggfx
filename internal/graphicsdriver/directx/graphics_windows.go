@@ -63,20 +63,6 @@ func parseFeatureLevel(str string) (_D3D_FEATURE_LEVEL, bool) {
 	}
 }
 
-// NewGraphics creates an implementation of graphicsdriver.Graphics for DirectX.
-// The returned graphics value is nil iff the error is not nil.
-// Surface is the swap chain on one window. Only one surface is supported for now.
-type Surface struct {
-	newScreenImage func(width, height int) (graphicsdriver.Image, error)
-}
-
-func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
-	return s.newScreenImage(width, height)
-}
-
-func (s *Surface) Dispose() {
-}
-
 func surfaceTarget(target any) (windows.HWND, error) {
 	w, ok := target.(uintptr)
 	if !ok {
@@ -85,6 +71,8 @@ func surfaceTarget(target any) (windows.HWND, error) {
 	return windows.HWND(w), nil
 }
 
+// NewGraphics creates an implementation of graphicsdriver.Graphics for DirectX.
+// The returned graphics value is nil iff the error is not nil.
 func NewGraphics() (graphicsdriver.Graphics, error) {
 	if !isD3DCompilerDLLAvailable() {
 		return nil, fmt.Errorf("directx: d3dcompiler_*.dll is missing in this environment")
@@ -165,30 +153,16 @@ type graphicsInfra struct {
 
 	allowTearing bool
 
-	// occluded reports whether the screen is invisible or not.
+	// occluded reports whether the screen is invisible or not: whether no swap chain presented at the
+	// last present was visible.
 	// occluded is updated on the rendering thread and read on the goroutine running the game loop.
 	occluded atomic.Bool
-
-	bufferCount int
-
-	// bufferWidth and bufferHeight are the allocated size of the swap chain's back buffers, which
-	// can exceed the window size (see canReuseSwapChainBuffers).
-	bufferWidth  int
-	bufferHeight int
 
 	cleanup runtime.Cleanup
 }
 
 type graphicsInfraResources struct {
-	factory    *_IDXGIFactory
-	swapChain  *_IDXGISwapChain
-	swapChain4 *_IDXGISwapChain4
-
-	// dcompDevice, dcompTarget, and dcompVisual are non-nil when the swap chain is presented through
-	// a DirectComposition visual tree instead of being bound directly to the window (#3477).
-	dcompDevice *_IDCompositionDevice
-	dcompTarget *_IDCompositionTarget
-	dcompVisual *_IDCompositionVisual
+	factory *_IDXGIFactory
 }
 
 // newGraphicsInfra takes the ownership of the given factory.
@@ -222,26 +196,6 @@ func (g *graphicsInfraResources) releaseResources() {
 	if g.factory != nil {
 		g.factory.Release()
 		g.factory = nil
-	}
-	if g.swapChain != nil {
-		g.swapChain.Release()
-		g.swapChain = nil
-	}
-	if g.swapChain4 != nil {
-		g.swapChain4.Release()
-		g.swapChain4 = nil
-	}
-	if g.dcompVisual != nil {
-		g.dcompVisual.Release()
-		g.dcompVisual = nil
-	}
-	if g.dcompTarget != nil {
-		g.dcompTarget.Release()
-		g.dcompTarget = nil
-	}
-	if g.dcompDevice != nil {
-		g.dcompDevice.Release()
-		g.dcompDevice = nil
 	}
 }
 
@@ -293,26 +247,55 @@ func (g *graphicsInfra) appendAdapters(adapters []*_IDXGIAdapter1, warpForDX12 b
 	return adapters, nil
 }
 
-func (g *graphicsInfra) isSwapChainInited() bool {
-	return g.swapChain != nil
+// swapChain is the swap chain of one surface, with the DirectComposition objects that present it
+// when the window has no redirection surface. The factory and the device are shared by all the swap
+// chains.
+type swapChain struct {
+	infra *graphicsInfra
+
+	swapChain  *_IDXGISwapChain
+	swapChain4 *_IDXGISwapChain4
+
+	// dcompDevice, dcompTarget, and dcompVisual are non-nil when the swap chain is presented through
+	// a DirectComposition visual tree instead of being bound directly to the window (#3477).
+	dcompDevice *_IDCompositionDevice
+	dcompTarget *_IDCompositionTarget
+	dcompVisual *_IDCompositionVisual
+
+	bufferCount int
+
+	// bufferWidth and bufferHeight are the allocated size of the swap chain's back buffers, which
+	// can exceed the window size (see canReuseBuffers).
+	bufferWidth  int
+	bufferHeight int
+
+	// occluded reports whether the window was invisible at the last present.
+	occluded bool
 }
 
-func (g *graphicsInfra) initSwapChain(width, height int, device unsafe.Pointer, window windows.HWND) (ferr error) {
-	if g.swapChain != nil {
-		return fmt.Errorf("directx: swap chain must not be initialized at initSwapChain, but is already done")
+// newSwapChain creates a swap chain presented in the given window. device is the Direct3D 11 device
+// or the Direct3D 12 command queue.
+func (g *graphicsInfra) newSwapChain(width, height int, device unsafe.Pointer, window windows.HWND) (_ *swapChain, ferr error) {
+	s := &swapChain{
+		infra: g,
 	}
+	defer func() {
+		if ferr != nil {
+			s.release()
+		}
+	}()
 
 	// If the window was created without a redirection surface (see internal/glfw), it can only
 	// display content through a DirectComposition visual tree. Presenting this way also avoids the
 	// momentary distortion that a plain HWND swap chain shows while the window is being resized
 	// (#3477).
 	if windowHasNoRedirectionBitmap(window) {
-		if err := g.initSwapChainComposition(width, height, device, window); err != nil {
-			return err
+		if err := s.initComposition(width, height, device, window); err != nil {
+			return nil, err
 		}
 	}
 
-	if g.swapChain == nil {
+	if s.swapChain == nil {
 		// Create a plain HWND swap chain.
 		//
 		// DXGI_ALPHA_MODE_PREMULTIPLIED doesn't work with a HWND well. The DirectX debug layer reports:
@@ -349,41 +332,60 @@ func (g *graphicsInfra) initSwapChain(width, height int, device unsafe.Pointer, 
 			desc.BufferCount = 1
 		}
 
-		g.bufferCount = int(desc.BufferCount)
+		s.bufferCount = int(desc.BufferCount)
 
 		if g.allowTearing {
 			desc.Flags |= uint32(_DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING)
 		}
-		s, err := g.factory.CreateSwapChain(device, desc)
+		sc, err := g.factory.CreateSwapChain(device, desc)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		g.swapChain = s
+		s.swapChain = sc
 	}
 
-	defer func() {
-		if ferr != nil {
-			g.release()
-		}
-	}()
-
-	if s4, err := g.swapChain.QueryInterface(&_IID_IDXGISwapChain4); err == nil && s4 != nil {
-		g.swapChain4 = (*_IDXGISwapChain4)(s4)
+	if s4, err := s.swapChain.QueryInterface(&_IID_IDXGISwapChain4); err == nil && s4 != nil {
+		s.swapChain4 = (*_IDXGISwapChain4)(s4)
 	}
 
 	// MakeWindowAssociation should be called after swap chain creation. It only applies to a swap
 	// chain bound directly to a window, not to a composition swap chain.
 	// https://docs.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgifactory-makewindowassociation
-	if g.dcompDevice == nil {
+	if s.dcompDevice == nil {
 		if err := g.factory.MakeWindowAssociation(window, _DXGI_MWA_NO_WINDOW_CHANGES|_DXGI_MWA_NO_ALT_ENTER); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	g.bufferWidth = width
-	g.bufferHeight = height
+	s.bufferWidth = width
+	s.bufferHeight = height
 
-	return nil
+	return s, nil
+}
+
+// release releases the swap chain and the DirectComposition objects. The caller must make sure that
+// the GPU no longer uses the swap chain's buffers, and that no reference to them remains.
+func (s *swapChain) release() {
+	if s.swapChain4 != nil {
+		s.swapChain4.Release()
+		s.swapChain4 = nil
+	}
+	if s.swapChain != nil {
+		s.swapChain.Release()
+		s.swapChain = nil
+	}
+	if s.dcompVisual != nil {
+		s.dcompVisual.Release()
+		s.dcompVisual = nil
+	}
+	if s.dcompTarget != nil {
+		s.dcompTarget.Release()
+		s.dcompTarget = nil
+	}
+	if s.dcompDevice != nil {
+		s.dcompDevice.Release()
+		s.dcompDevice = nil
+	}
 }
 
 // windowHasNoRedirectionBitmap reports whether the window was created without a redirection surface
@@ -444,11 +446,11 @@ func (g *graphicsInfra) supportsComposition(device unsafe.Pointer) bool {
 	return true
 }
 
-// initSwapChainComposition creates a composition swap chain and sets up a DirectComposition visual
-// tree that presents it in the given window. On success, it stores the swap chain and the
-// DirectComposition objects in g.
-func (g *graphicsInfra) initSwapChainComposition(width, height int, device unsafe.Pointer, window windows.HWND) (ferr error) {
-	swapChain, err := g.createCompositionSwapChain(width, height, device)
+// initComposition creates a composition swap chain and sets up a DirectComposition visual tree that
+// presents it in the given window. On success, it stores the swap chain and the DirectComposition
+// objects in s.
+func (s *swapChain) initComposition(width, height int, device unsafe.Pointer, window windows.HWND) (ferr error) {
+	swapChain, err := s.infra.createCompositionSwapChain(width, height, device)
 	if err != nil {
 		return err
 	}
@@ -458,6 +460,8 @@ func (g *graphicsInfra) initSwapChainComposition(width, height int, device unsaf
 		}
 	}()
 
+	// Each window has its own DirectComposition device, as the device commits the visual tree
+	// independently of the other windows.
 	dcompDevice, err := _DCompositionCreateDevice(nil)
 	if err != nil {
 		return err
@@ -498,11 +502,11 @@ func (g *graphicsInfra) initSwapChainComposition(width, height int, device unsaf
 		return err
 	}
 
-	g.swapChain = swapChain
-	g.dcompDevice = dcompDevice
-	g.dcompTarget = dcompTarget
-	g.dcompVisual = dcompVisual
-	g.bufferCount = frameCount
+	s.swapChain = swapChain
+	s.dcompDevice = dcompDevice
+	s.dcompTarget = dcompTarget
+	s.dcompVisual = dcompVisual
+	s.bufferCount = frameCount
 
 	return nil
 }
@@ -514,80 +518,115 @@ func alignSwapChainBufferSize(size int) int {
 	return (size + unit - 1) / unit * unit
 }
 
-// canReuseSwapChainBuffers reports whether a width x height window can be presented with the current
-// back buffers, without reallocating them. Only composition swap chains qualify, since the window
-// clips their possibly oversized buffers; a plain HWND swap chain must always match the window (#3477).
-func (g *graphicsInfra) canReuseSwapChainBuffers(width, height int) bool {
-	return g.dcompDevice != nil && width <= g.bufferWidth && height <= g.bufferHeight
+// canReuseBuffers reports whether a width x height window can be presented with the current back
+// buffers, without reallocating them. Only composition swap chains qualify, since the window clips
+// their possibly oversized buffers; a plain HWND swap chain must always match the window (#3477).
+func (s *swapChain) canReuseBuffers(width, height int) bool {
+	return s.dcompDevice != nil && width <= s.bufferWidth && height <= s.bufferHeight
 }
 
-func (g *graphicsInfra) resizeSwapChain(width, height int) error {
-	if g.swapChain == nil {
-		return fmt.Errorf("directx: swap chain must be initialized at resizeSwapChain, but is not")
+// resize reallocates the back buffers. The caller must release all the references to the current
+// back buffers and make sure that the GPU no longer uses them.
+func (s *swapChain) resize(width, height int) error {
+	if s.swapChain == nil {
+		return fmt.Errorf("directx: swap chain must be initialized at resize, but is not")
 	}
 
 	// Grow a composition swap chain's buffers with headroom and never shrink them. A plain HWND swap
 	// chain matches its buffers to the window.
 	bufferWidth, bufferHeight := width, height
-	if g.dcompDevice != nil {
-		bufferWidth = alignSwapChainBufferSize(max(width, g.bufferWidth))
-		bufferHeight = alignSwapChainBufferSize(max(height, g.bufferHeight))
+	if s.dcompDevice != nil {
+		bufferWidth = alignSwapChainBufferSize(max(width, s.bufferWidth))
+		bufferHeight = alignSwapChainBufferSize(max(height, s.bufferHeight))
 	}
 
 	var flag uint32
-	if g.allowTearing {
+	if s.infra.allowTearing {
 		flag |= uint32(_DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING)
 	}
-	if err := g.swapChain.ResizeBuffers(uint32(g.bufferCount), uint32(bufferWidth), uint32(bufferHeight), _DXGI_FORMAT_B8G8R8A8_UNORM, flag); err != nil {
+	if err := s.swapChain.ResizeBuffers(uint32(s.bufferCount), uint32(bufferWidth), uint32(bufferHeight), _DXGI_FORMAT_B8G8R8A8_UNORM, flag); err != nil {
 		return err
 	}
-	g.bufferWidth = bufferWidth
-	g.bufferHeight = bufferHeight
+	s.bufferWidth = bufferWidth
+	s.bufferHeight = bufferHeight
 
 	// Let the DirectComposition visual pick up the resized swap chain.
-	if g.dcompDevice != nil {
-		if err := g.dcompDevice.Commit(); err != nil {
+	if s.dcompDevice != nil {
+		if err := s.dcompDevice.Commit(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (g *graphicsInfra) currentBackBufferIndex() (int, error) {
-	if g.swapChain4 == nil {
+func (s *swapChain) currentBackBufferIndex() (int, error) {
+	if s.swapChain4 == nil {
 		return 0, fmt.Errorf("directx: IDXGISwapChain4 is not available")
 	}
-	return int(g.swapChain4.GetCurrentBackBufferIndex()), nil
+	return int(s.swapChain4.GetCurrentBackBufferIndex()), nil
 }
 
-func (g *graphicsInfra) present(vsyncEnabled bool) error {
-	if g.swapChain == nil {
-		return fmt.Errorf("directx: swap chain must be initialized at present, but is not")
+// present presents the swap chain. waitForVsync reports whether the present waits for the vertical
+// blank when vsyncEnabled is true. present reports whether the swap chain was visible.
+func (s *swapChain) present(vsyncEnabled bool, waitForVsync bool) (bool, error) {
+	if s.swapChain == nil {
+		return false, fmt.Errorf("directx: swap chain must be initialized at present, but is not")
 	}
 
 	var syncInterval uint32
 	var flags _DXGI_PRESENT
-	if g.occluded.Load() {
+	if s.occluded {
 		// The screen is not visible. Test whether we can resume.
 		flags |= _DXGI_PRESENT_TEST
 	} else {
 		// Do actual rendering only when the screen is visible.
 		if vsyncEnabled {
-			syncInterval = 1
-		} else if g.allowTearing {
+			if waitForVsync {
+				syncInterval = 1
+			}
+		} else if s.infra.allowTearing {
 			flags |= _DXGI_PRESENT_ALLOW_TEARING
 		}
 	}
 
-	occluded, err := g.swapChain.Present(syncInterval, uint32(flags))
+	occluded, err := s.swapChain.Present(syncInterval, uint32(flags))
 	if err != nil {
-		return err
+		return false, err
 	}
-	g.occluded.Store(occluded)
+	s.occluded = occluded
 
-	return nil
+	return !occluded, nil
 }
 
-func (g *graphicsInfra) getBuffer(buffer uint32, riid *windows.GUID) (unsafe.Pointer, error) {
-	return g.swapChain.GetBuffer(buffer, riid)
+func (s *swapChain) getBuffer(buffer uint32, riid *windows.GUID) (unsafe.Pointer, error) {
+	return s.swapChain.GetBuffer(buffer, riid)
+}
+
+// present presents the given swap chains, those of the surfaces drawn since the previous present, and
+// updates occluded.
+//
+// Only the first visible swap chain is presented with the sync interval 1, and the rest with 0. Each
+// present with the sync interval 1 blocks until a vertical blank, so presenting every window that way
+// would wait for one vertical blank per window and divide the frame rate by the number of windows.
+// A flip model swap chain presented with the sync interval 0 still does not tear without
+// DXGI_PRESENT_ALLOW_TEARING: the compositor shows its latest frame at the next vertical blank.
+func (g *graphicsInfra) present(swapChains []*swapChain, vsyncEnabled bool) error {
+	occluded := true
+	var waited bool
+	for _, s := range swapChains {
+		wasOccluded := s.occluded
+		visible, err := s.present(vsyncEnabled, !waited)
+		if err != nil {
+			return err
+		}
+		if visible {
+			occluded = false
+		}
+		// An occluded swap chain is only tested and does not wait, so the next one takes the wait.
+		if vsyncEnabled && !wasOccluded {
+			waited = true
+		}
+	}
+	g.occluded.Store(occluded)
+	return nil
 }

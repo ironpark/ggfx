@@ -49,9 +49,23 @@ Per-driver status:
 | driver | surfaces | notes |
 |---|---|---|
 | Metal | many | one `view` (layer, display link, drawable) per surface |
-| DirectX 11/12 | one | the swap chain is still on the device; a second surface returns an error until `graphicsInfra` is per surface |
-| OpenGL desktop | one | GL contexts do not share VAOs/FBOs; a second surface returns an error until the state cache is per-context |
+| DirectX 11/12 | many | one swap chain (and DirectComposition target) per surface on the shared device; Xbox has one |
+| OpenGL desktop | many | everything is drawn in the context of a hidden window; each window's context shares its textures and copies its screen from there when presenting |
 | WebGL | one | the canvas |
+
+When a flush presents several surfaces, only the first waits for vsync; the
+others present without waiting, so N windows do not wait N refreshes.
+
+GL contexts do not share vertex arrays or framebuffers, and the driver caches
+state per context, so the OpenGL driver draws in one context only: the hidden
+window's, which `internal/ui` creates with the driver and passes to
+`SetDrawingContext`. A window's screen image is a texture there. Presenting
+makes each drawn window's context current, blits the texture to its default
+framebuffer, and swaps. This costs one full-window copy per presented frame,
+and it keeps every window's context disposable: a window closes without
+taking the drawn objects with it. Drawing in the first window's context
+instead left that window black on macOS when a second window was created
+before the first frame.
 
 ### UI: `window`
 
@@ -217,7 +231,7 @@ Run `go run ./examples/nativehooks` to exercise text and file drags in two Metal
 windows. `-smoke` injects Cocoa callbacks and checks window isolation, UTF-16
 selection conversion, Korean commit/next-mark ordering, replacement ranges,
 caret rectangle size, drag phases/coordinates and accessibility attachment.
-Use `-windows 1` with OpenGL or DirectX. The smoke injection is macOS-only.
+The smoke test passes on OpenGL too. The smoke injection is macOS-only.
 
 ### Gamepads
 
@@ -248,7 +262,8 @@ backend. It is not wired yet.
   hooks run then, so `exp/textinput` keeps working when polled every frame.
 - No composition events on X11 or the browser yet. Their `exp/textinput`
   backends remain available; macOS and Windows have per-window CompositionEvent.
-- One window on OpenGL, WebGL and DirectX.
+- One canvas on WebGL. DirectX runs several windows, but that was
+  cross-compiled only.
 - `Monitor()` on the root package still means the primary window's monitor;
   use `Window.Monitor()`.
 

@@ -103,7 +103,7 @@ func isGLXExtensionForGL2Available() bool {
 // setOpenGLWindowHints sets the GLFW hints to create a window with an OpenGL context.
 //
 // setOpenGLWindowHints must be called from the main thread.
-func (u *glfwBackend) setOpenGLWindowHints() error {
+func (u *UserInterface) setOpenGLWindowHints() error {
 	var isES bool
 	if g, ok := u.graphicsDriver.(interface{ IsES() bool }); ok {
 		isES = g.IsES()

@@ -99,7 +99,7 @@ func (*graphicsDriverCreatorImpl) newPlayStation5() (graphicsdriver.Graphics, er
 // setOpenGLWindowHints sets the GLFW hints to create a window with an OpenGL context.
 //
 // setOpenGLWindowHints must be called from the main thread.
-func (u *glfwBackend) setOpenGLWindowHints() error {
+func (u *UserInterface) setOpenGLWindowHints() error {
 	if err := glfw.WindowHint(glfw.ClientAPI, glfw.OpenGLAPI); err != nil {
 		return err
 	}

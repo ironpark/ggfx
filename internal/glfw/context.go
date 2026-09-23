@@ -256,8 +256,8 @@ func (w *Window) refreshContextAttribs(ctxconfig *ctxconfig) (err error) {
 	w.context.source = ctxconfig.source
 	w.context.client = OpenGLAPI
 
-	// In Ebitengine, only one window is created.
-	// Always assume that the current context is not set.
+	// Leave no context current on this thread. A caller that renders on this thread makes its
+	// context current again.
 	defer func() {
 		if winErr := (*Window)(nil).MakeContextCurrent(); winErr != nil {
 			err = errors.Join(err, winErr)

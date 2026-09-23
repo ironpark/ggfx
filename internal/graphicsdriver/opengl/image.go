@@ -31,7 +31,14 @@ type Image struct {
 	framebuffer *framebuffer
 	width       int
 	height      int
-	screen      bool
+
+	// surface is the surface the image is presented on. It is non-nil iff the image is a screen image.
+	surface *Surface
+
+	// screen reports whether the image is the default framebuffer of the context everything is drawn
+	// in, which is the screen image of a surface without a Presenter. The other screen images are
+	// textures.
+	screen bool
 }
 
 // framebuffer is a wrapper of OpenGL's framebuffer.
@@ -51,6 +58,9 @@ func (i *Image) Dispose() {
 	}
 	if i.texture != 0 {
 		i.graphics.context.deleteTexture(i.texture)
+	}
+	if i.surface != nil && i.surface.screen == i {
+		i.surface.screen = nil
 	}
 
 	i.graphics.removeImage(i)
@@ -77,8 +87,9 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 }
 
 func (i *Image) viewportSize() (int, int) {
-	if i.screen {
-		// The (default) framebuffer size can't be converted to a power of 2.
+	if i.surface != nil {
+		// A screen image is projected at its own size, whether it is a texture or the default
+		// framebuffer, whose size can't be converted to a power of 2.
 		// On browsers, i.width and i.height are used as viewport size and
 		// Edge can't treat a bigger viewport than the drawing area (#71).
 		return i.width, i.height
@@ -106,7 +117,7 @@ func (i *Image) ensureFramebuffer() error {
 }
 
 func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
-	if i.screen {
+	if i.surface != nil {
 		return errors.New("opengl: WritePixels cannot be called on the screen")
 	}
 	if len(args) == 0 {

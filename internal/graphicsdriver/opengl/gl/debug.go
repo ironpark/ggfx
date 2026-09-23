@@ -117,6 +117,14 @@ func (d *DebugContext) BlendFuncSeparate(arg0 uint32, arg1 uint32, arg2 uint32, 
 	}
 }
 
+func (d *DebugContext) BlitFramebuffer(arg0 int32, arg1 int32, arg2 int32, arg3 int32, arg4 int32, arg5 int32, arg6 int32, arg7 int32, arg8 uint32, arg9 uint32) {
+	d.Context.BlitFramebuffer(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
+	fmt.Fprintln(os.Stderr, "BlitFramebuffer")
+	if e := d.Context.GetError(); e != NO_ERROR {
+		panic(fmt.Sprintf("gl: GetError() returned %d at BlitFramebuffer", e))
+	}
+}
+
 func (d *DebugContext) BufferInit(arg0 uint32, arg1 int, arg2 uint32) {
 	d.Context.BufferInit(arg0, arg1, arg2)
 	fmt.Fprintln(os.Stderr, "BufferInit")

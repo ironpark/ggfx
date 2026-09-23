@@ -37,6 +37,7 @@ type defaultContext struct {
 	gpBindVertexArray          uintptr
 	gpBlendEquationSeparate    uintptr
 	gpBlendFuncSeparate        uintptr
+	gpBlitFramebuffer          uintptr
 	gpBufferData               uintptr
 	gpBufferSubData            uintptr
 	gpCheckFramebufferStatus   uintptr
@@ -178,6 +179,16 @@ func (c *defaultContext) BlendEquationSeparate(modeRGB uint32, modeAlpha uint32)
 
 func (c *defaultContext) BlendFuncSeparate(srcRGB uint32, dstRGB uint32, srcAlpha uint32, dstAlpha uint32) {
 	purego.SyscallN(c.gpBlendFuncSeparate, uintptr(srcRGB), uintptr(dstRGB), uintptr(srcAlpha), uintptr(dstAlpha))
+}
+
+func (c *defaultContext) BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 int32, mask uint32, filter uint32) {
+	// mask and filter are past the eight register arguments. Apple's arm64 ABI packs arguments on the
+	// stack at their own size rather than in 8-byte slots, so there the two share one slot.
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		purego.SyscallN(c.gpBlitFramebuffer, uintptr(srcX0), uintptr(srcY0), uintptr(srcX1), uintptr(srcY1), uintptr(dstX0), uintptr(dstY0), uintptr(dstX1), uintptr(dstY1), uintptr(uint64(mask)|uint64(filter)<<32))
+		return
+	}
+	purego.SyscallN(c.gpBlitFramebuffer, uintptr(srcX0), uintptr(srcY0), uintptr(srcX1), uintptr(srcY1), uintptr(dstX0), uintptr(dstY0), uintptr(dstX1), uintptr(dstY1), uintptr(mask), uintptr(filter))
 }
 
 func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {
@@ -513,6 +524,7 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpBindVertexArray = g.get("glBindVertexArray")
 	c.gpBlendEquationSeparate = g.get("glBlendEquationSeparate")
 	c.gpBlendFuncSeparate = g.get("glBlendFuncSeparate")
+	c.gpBlitFramebuffer = g.get("glBlitFramebuffer")
 	c.gpBufferData = g.get("glBufferData")
 	c.gpBufferSubData = g.get("glBufferSubData")
 	c.gpCheckFramebufferStatus = g.get("glCheckFramebufferStatus")

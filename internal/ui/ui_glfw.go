@@ -528,9 +528,17 @@ func (u *glfwBackend) createWindow() error {
 	ww, wh := u.desktopWindow.getInitWindowSizeInDIP()
 	s := monitor.DeviceScaleFactor()
 	width, height := windowSizeInGLFWPixels(ww, wh, s)
-	window, err := glfw.CreateWindow(width, height, "", nil, nil)
+	// With OpenGL, the window's context shares objects with the context the driver draws in.
+	window, err := glfw.CreateWindow(width, height, "", nil, u.glContextWindow)
 	if err != nil {
 		return err
+	}
+	// Creating a window leaves no context current on this thread. Frames rendered on this thread
+	// need the driver's context back.
+	if u.glContextWindow != nil && u.renderOnMainThread {
+		if err := u.glContextWindow.MakeContextCurrent(); err != nil {
+			return err
+		}
 	}
 	u.window = window
 	if u.primary {

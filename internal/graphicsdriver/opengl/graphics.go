@@ -19,6 +19,7 @@ package opengl
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/color"
@@ -55,7 +56,12 @@ type Graphics struct {
 	// drawCalled is true just after Draw is called. This holds true until WritePixels is called.
 	drawCalled bool
 
-	surface *Surface
+	// surfaces are the presentation targets, in creation order.
+	surfaces []*Surface
+
+	// drawingContext is the context everything is drawn in. It is nil in a browser, where the one
+	// context is always current.
+	drawingContext interface{ MakeContextCurrent() error }
 
 	tmpUniforms []uint32
 
@@ -95,12 +101,69 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	// The last uniforms must be reset before swapping the buffer (#2517).
 	if mode == graphicsdriver.FlushModePresent {
 		g.state.resetLastUniforms()
-		if err := g.swapBuffers(); err != nil {
+		if err := g.present(); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// present swaps the buffers of every surface drawn to since the previous present, and makes the
+// drawing context current again.
+func (g *Graphics) present() error {
+	var presented bool
+	for _, s := range g.surfaces {
+		if !s.drawn {
+			continue
+		}
+		s.drawn = false
+		if s.presenter == nil {
+			continue
+		}
+		if err := s.presenter.MakeContextCurrent(); err != nil {
+			return err
+		}
+		s.copyScreen()
+
+		// Only the first swap of a frame waits for the display. Waiting on every window would
+		// wait one refresh per window.
+		//
+		// Call SwapInterval even though vsync is not changed.
+		// When toggling to fullscreen, vsync state might be reset unexpectedly (#1787).
+		//
+		// SwapInterval is affected by the current monitor of the window.
+		// This needs to be called at least after SetMonitor.
+		// Without SwapInterval after SetMonitor, vsynch doesn't work (#375).
+		interval := 1
+		if presented {
+			interval = 0
+		}
+		if err := s.presenter.SwapInterval(interval); err != nil {
+			return err
+		}
+		if err := s.presenter.SwapBuffers(); err != nil {
+			return err
+		}
+		presented = true
+	}
+	if presented {
+		return g.makeContextCurrent()
+	}
+	return nil
+}
+
+// SetDrawingContext sets the context everything is drawn in. It must share objects with every
+// surface's context, and is never presented. SetDrawingContext must be called before Initialize.
+func (g *Graphics) SetDrawingContext(context interface{ MakeContextCurrent() error }) {
+	g.drawingContext = context
+}
+
+func (g *Graphics) makeContextCurrent() error {
+	if g.drawingContext == nil {
+		return nil
+	}
+	return g.drawingContext.MakeContextCurrent()
 }
 
 func (g *Graphics) checkSize(width, height int) {
@@ -148,41 +211,98 @@ func (g *Graphics) NewImage(width, height int) (graphicsdriver.Image, error) {
 	return i, nil
 }
 
-// Surface is the default framebuffer of the GL context. Only one surface is supported: GL state
-// like vertex arrays is per context and the state cache is not.
+// Surface is a window's GL context and its default framebuffer, or the canvas in a browser.
+//
+// Vertex arrays, framebuffers and the state cached in Graphics belong to one context, so everything is
+// drawn in the drawing context, which shares textures with the windows' contexts. A window's screen
+// image is a texture there, copied to the window's default framebuffer when presenting.
+//
+// Without a Presenter, as in a browser, there is one context: the screen image is its default
+// framebuffer, and the surface is the only one.
 type Surface struct {
-	graphics *Graphics
+	graphics  *Graphics
+	presenter Presenter
+
+	// screen is the current screen image.
+	screen *Image
+
+	// drawn reports whether the screen image was drawn to since the previous present.
+	drawn bool
+
+	// readFramebuffer is the framebuffer in the surface's context that the screen image is copied
+	// from. It is zero until the first copy.
+	readFramebuffer framebufferNative
 }
 
 // NewSurface ignores transparent: on the desktop the GLFW framebuffer hint decides whether the
-// window composites, and in the browser the canvas does.
+// window composites, and in the browser the canvas does. On the desktop, target is a Presenter whose
+// context shares objects with the drawing context.
 func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	if g.surface != nil {
-		return nil, errors.New("opengl: only one surface is supported")
-	}
-	if err := g.initSurface(target); err != nil {
+	p, err := presenterFromTarget(target)
+	if err != nil {
 		return nil, err
 	}
-	g.surface = &Surface{graphics: g}
-	return g.surface, nil
+	if p == nil && len(g.surfaces) > 0 {
+		return nil, errors.New("opengl: only one surface is supported without a Presenter")
+	}
+	s := &Surface{
+		graphics:  g,
+		presenter: p,
+	}
+	g.surfaces = append(g.surfaces, s)
+	return s, nil
 }
 
 func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
 	g := s.graphics
-	g.checkSize(width, height)
-	i := &Image{
-		id:       g.genNextImageID(),
-		graphics: g,
-		width:    width,
-		height:   height,
-		screen:   true,
+	var i *Image
+	if s.presenter != nil {
+		img, err := g.NewImage(width, height)
+		if err != nil {
+			return nil, err
+		}
+		i = img.(*Image)
+	} else {
+		g.checkSize(width, height)
+		i = &Image{
+			id:       g.genNextImageID(),
+			graphics: g,
+			width:    width,
+			height:   height,
+			screen:   true,
+		}
+		g.addImage(i)
 	}
-	g.addImage(i)
+	i.surface = s
+	s.screen = i
 	return i, nil
 }
 
+// copyScreen copies the screen image to the default framebuffer. The surface's context must be
+// current, and the drawing context must have been flushed since the screen image was drawn.
+func (s *Surface) copyScreen() {
+	if s.screen == nil {
+		return
+	}
+	ctx := s.graphics.context.ctx
+	if s.readFramebuffer == 0 {
+		s.readFramebuffer = framebufferNative(ctx.CreateFramebuffer())
+	}
+	// Attaching the texture again each time is what makes the drawing context's changes to it
+	// visible here.
+	ctx.BindFramebuffer(gl.READ_FRAMEBUFFER, uint32(s.readFramebuffer))
+	ctx.FramebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, uint32(s.screen.texture), 0)
+	// The texture's rows go upward from the image's top, and the default framebuffer's go upward from
+	// the window's bottom: flip the rows.
+	w, h := int32(s.screen.width), int32(s.screen.height)
+	ctx.BlitFramebuffer(0, 0, w, h, 0, h, w, 0, gl.COLOR_BUFFER_BIT, gl.NEAREST)
+}
+
+// Dispose forgets the surface. The objects in its context go with the context, which the window
+// destroys.
 func (s *Surface) Dispose() {
-	s.graphics.surface = nil
+	g := s.graphics
+	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *Surface) bool { return t == s })
 }
 
 func (g *Graphics) addImage(img *Image) {
@@ -225,6 +345,9 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 	}
 
 	destination := g.images[dstID]
+	if destination.surface != nil {
+		destination.surface.drawn = true
+	}
 
 	g.drawCalled = true
 

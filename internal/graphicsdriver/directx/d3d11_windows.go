@@ -1001,6 +1001,11 @@ func (i *_ID3D11DeviceContext) ClearState() {
 		0, 0)
 }
 
+func (i *_ID3D11DeviceContext) Flush() {
+	_, _, _ = syscall.Syscall(i.vtbl.Flush, 1, uintptr(unsafe.Pointer(i)),
+		0, 0)
+}
+
 func (i *_ID3D11DeviceContext) ClearDepthStencilView(pDepthStencilView *_ID3D11DepthStencilView, clearFlags uint8, depth float32, stencil uint8) {
 	_, _, _ = syscall.Syscall6(i.vtbl.ClearDepthStencilView, 5, uintptr(unsafe.Pointer(i)),
 		uintptr(unsafe.Pointer(pDepthStencilView)), uintptr(clearFlags), uintptr(math.Float32bits(depth)),

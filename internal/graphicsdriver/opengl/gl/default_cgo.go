@@ -111,6 +111,13 @@ package gl
 //   ((fn)(fnptr))(srcRGB, dstRGB, srcAlpha, dstAlpha);
 // }
 //
+// #cgo noescape glowBlitFramebuffer
+// #cgo nocallback glowBlitFramebuffer
+// static void glowBlitFramebuffer(uintptr_t fnptr, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+//   typedef void (*fn)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+//   ((fn)(fnptr))(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+// }
+//
 // #cgo noescape glowBufferData
 // #cgo nocallback glowBufferData
 // static void glowBufferData(uintptr_t fnptr, GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
@@ -572,6 +579,7 @@ type defaultContext struct {
 	gpBindVertexArray          C.uintptr_t
 	gpBlendEquationSeparate    C.uintptr_t
 	gpBlendFuncSeparate        C.uintptr_t
+	gpBlitFramebuffer          C.uintptr_t
 	gpBufferData               C.uintptr_t
 	gpBufferSubData            C.uintptr_t
 	gpCheckFramebufferStatus   C.uintptr_t
@@ -713,6 +721,10 @@ func (c *defaultContext) BlendEquationSeparate(modeRGB uint32, modeAlpha uint32)
 
 func (c *defaultContext) BlendFuncSeparate(srcRGB uint32, dstRGB uint32, srcAlpha uint32, dstAlpha uint32) {
 	C.glowBlendFuncSeparate(c.gpBlendFuncSeparate, C.GLenum(srcRGB), C.GLenum(dstRGB), C.GLenum(srcAlpha), C.GLenum(dstAlpha))
+}
+
+func (c *defaultContext) BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 int32, mask uint32, filter uint32) {
+	C.glowBlitFramebuffer(c.gpBlitFramebuffer, C.GLint(srcX0), C.GLint(srcY0), C.GLint(srcX1), C.GLint(srcY1), C.GLint(dstX0), C.GLint(dstY0), C.GLint(dstX1), C.GLint(dstY1), C.GLbitfield(mask), C.GLenum(filter))
 }
 
 func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {
@@ -1048,6 +1060,7 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpBindVertexArray = C.uintptr_t(g.get("glBindVertexArray"))
 	c.gpBlendEquationSeparate = C.uintptr_t(g.get("glBlendEquationSeparate"))
 	c.gpBlendFuncSeparate = C.uintptr_t(g.get("glBlendFuncSeparate"))
+	c.gpBlitFramebuffer = C.uintptr_t(g.get("glBlitFramebuffer"))
 	c.gpBufferData = C.uintptr_t(g.get("glBufferData"))
 	c.gpBufferSubData = C.uintptr_t(g.get("glBufferSubData"))
 	c.gpCheckFramebufferStatus = C.uintptr_t(g.get("glCheckFramebufferStatus"))

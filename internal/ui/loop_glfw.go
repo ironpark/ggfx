@@ -89,6 +89,7 @@ func (u *UserInterface) runMultiThread(options *RunOptions, initMain func() erro
 func (u *UserInterface) runSingleThread(options *RunOptions, initMain func() error, start func() error) error {
 	// Initialize the main thread first so the thread is available at u.run (#809).
 	u.mainThread = thread.NewNoopThread()
+	u.renderOnMainThread = true
 
 	// The backend is published at the window creation.
 	defer u.setRunningBackend(nil)
@@ -125,6 +126,39 @@ func (u *UserInterface) initGraphicsOnMainThread(options *RunOptions) error {
 	if g, ok := u.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
 		g.SetMainThreadRunner(u.mainThread.Call)
 	}
+
+	if lib == GraphicsLibraryOpenGL {
+		if err := u.createGLContextWindow(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// createGLContextWindow creates the hidden window whose context the OpenGL driver draws in. Every
+// window's context shares objects with it and only copies its screen from there, so no window's
+// context has to outlive the others, and closing a window leaves the drawn objects alone.
+//
+// createGLContextWindow must be called from the main thread.
+func (u *UserInterface) createGLContextWindow() error {
+	if err := glfw.WindowHint(glfw.Visible, glfw.False); err != nil {
+		return err
+	}
+	if err := u.setOpenGLWindowHints(); err != nil {
+		return err
+	}
+	w, err := glfw.CreateWindow(1, 1, "", nil, nil)
+	if err != nil {
+		return err
+	}
+	// The windows set the hints they need; start them from the defaults.
+	if err := glfw.DefaultWindowHints(); err != nil {
+		return err
+	}
+	u.glContextWindow = w
+	u.graphicsDriver.(interface {
+		SetDrawingContext(interface{ MakeContextCurrent() error })
+	}).SetDrawingContext(w)
 	return nil
 }
 

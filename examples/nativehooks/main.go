@@ -18,7 +18,7 @@ import (
 )
 
 var smoke = flag.Bool("smoke", false, "inject and validate native callbacks on macOS")
-var windows = flag.Int("windows", 2, "number of windows (use 1 for OpenGL or DirectX)")
+var windows = flag.Int("windows", 2, "number of windows")
 
 type state struct {
 	text, composition string

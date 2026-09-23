@@ -68,14 +68,8 @@ func (g *Graphics) ScreenFramebufferSize() (int, int) {
 	return g.glContext.Get("drawingBufferWidth").Int(), g.glContext.Get("drawingBufferHeight").Int()
 }
 
-func (g *Graphics) initSurface(target any) error {
-	return nil
-}
-
-func (g *Graphics) makeContextCurrent() error {
-	return nil
-}
-
-func (g *Graphics) swapBuffers() error {
-	return nil
+// presenterFromTarget returns nil: the browser presents the canvas by itself, and there is only the
+// one canvas the context was created for.
+func presenterFromTarget(target any) (Presenter, error) {
+	return nil, nil
 }
