@@ -58,7 +58,6 @@ type Graphics interface {
 	// transparent asks for a surface that composites with what is behind the window; a driver
 	// that cannot present one returns an error. NewSurface is called on the main thread.
 	NewSurface(target any, transparent bool) (Surface, error)
-	SetVsyncEnabled(enabled bool)
 	NeedsClearingScreen() bool
 	MaxImageSize() int
 

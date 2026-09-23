@@ -46,9 +46,9 @@ var (
 	shadersM sync.Mutex
 )
 
-// Sampling is the WGSL body that reads and filters the source color. It is shared with the
-// ColorM variant of the shader. The result is left in `clr`.
-const Sampling = `
+// sampling is the WGSL body that reads and filters the source color. The result is left in
+// `clr`.
+const sampling = `
 {{if eq .Filter .FilterNearest}}
 {{if eq .Address .AddressUnsafe}}
 	var clr = src0_unsafe_at(v.src_pos);
@@ -111,7 +111,7 @@ fn adjust_src_pos_for_address_repeat(p: vec2f) -> vec2f {
 
 var tmpl = template.Must(template.New("tmpl").Parse(Repeat + `
 fn fragment(v: Vertex) -> vec4f {
-` + Sampling + `
+` + sampling + `
 	// Apply the color scale.
 	clr *= v.color;
 

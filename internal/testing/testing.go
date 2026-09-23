@@ -32,8 +32,7 @@ func Window() *ggfx.Window {
 
 // MainWithRunLoop runs m inside a ggfx event loop, which is what makes
 // (*Image).At and the rest of the graphics API available to a test. The tests
-// run in the window's first frame, between the atlas's begin and end of frame,
-// which is where the legacy Game path called Update.
+// run in the window's first frame, between the atlas's begin and end of frame.
 func MainWithRunLoop(m *testing.M) {
 	code := 1
 	err := ggfx.Run(ggfx.HandlerFunc(func(ev ggfx.Event) error {

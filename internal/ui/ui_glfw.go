@@ -453,7 +453,7 @@ func (u *glfwBackend) ScheduleFrame() {
 		return
 	}
 
-	// As the main thread can be blocked, do not check the current FPS mode.
+	// The main thread can be blocked in WaitEvents; wake it.
 	// PostEmptyEvent is concurrent safe.
 	if err := glfw.PostEmptyEvent(); err != nil {
 		u.setError(err)
@@ -752,7 +752,7 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(screenWidth, screenHeight
 		return
 	}
 
-	// Prevent recursive frames e.g. when the game's Update changes the window size.
+	// Prevent recursive frames e.g. when a FrameEvent handler changes the window size.
 	if u.forcingFrame {
 		return
 	}
@@ -774,7 +774,7 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(screenWidth, screenHeight
 		u.forcingFrame = false
 	}()
 
-	// Run the frame on another goroutine, as the game's Update and Draw must not run on the main
+	// Run the frame on another goroutine, as the app's event handler must not run on the main
 	// thread. Keep processing main-thread calls in a nested loop until the frame ends, since
 	// running a frame can request them.
 	var err error
@@ -864,10 +864,10 @@ event:
 	return nil
 }
 
-// layoutSizes returns the size of the final rendering destination, in pixels.
+// screenSize returns the size of the final rendering destination, in pixels.
 //
-// layoutSizes must be called from the main thread.
-func (u *glfwBackend) layoutSizes() (screenWidth, screenHeight int, err error) {
+// screenSize must be called from the main thread.
+func (u *glfwBackend) screenSize() (width, height int, err error) {
 	m, err := u.currentMonitor()
 	if err != nil {
 		return 0, 0, err
@@ -875,17 +875,6 @@ func (u *glfwBackend) layoutSizes() (screenWidth, screenHeight int, err error) {
 	if m == nil {
 		return 0, 0, nil
 	}
-	s := m.DeviceScaleFactor()
-
-	wf, err := u.isWindowedFullscreen()
-	if err != nil {
-		return 0, 0, err
-	}
-	nf, err := u.isNativeFullscreen()
-	if err != nil {
-		return 0, 0, err
-	}
-	fullscreen := wf || nf
 
 	// The framebuffer size is the exact pixel count of the rendering destination on every platform,
 	// including macOS where a GLFW pixel is a point. Read it rather than predicting it from the
@@ -896,33 +885,34 @@ func (u *glfwBackend) layoutSizes() (screenWidth, screenHeight int, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	if fw != 0 && fh != 0 {
+		return fw, fh, nil
+	}
 
+	// A minimized window reports no client area on Windows. Use the size it is restored to, which
+	// is the monitor's size in fullscreen and the requested size otherwise.
 	a, err := u.window.GetAttrib(glfw.Iconified)
 	if err != nil {
 		return 0, 0, err
 	}
-	if a == glfw.True {
-		// An iconified window has no size to lay out for; use the size it is restored to, which is
-		// the monitor's size in fullscreen and the requested size otherwise. A minimized window
-		// reports no client area on Windows, so the rendering destination comes from that same
-		// source.
-		if fullscreen {
-			if fw == 0 || fh == 0 {
-				fw, fh = m.boundsInGLFWPixels.Dx(), m.boundsInGLFWPixels.Dy()
-			}
-			return fw, fh, nil
-		}
-		if fw == 0 || fh == 0 {
-			// setWindowSizeInDIP rounds the product, so round it here as well to predict the
-			// same pixel count.
-			w := float64(u.windowWidthInDIP)
-			h := float64(u.windowHeightInDIP)
-			fw, fh = int(math.Round(w*s)), int(math.Round(h*s))
-		}
+	if a != glfw.True {
 		return fw, fh, nil
 	}
-
-	return fw, fh, nil
+	wf, err := u.isWindowedFullscreen()
+	if err != nil {
+		return 0, 0, err
+	}
+	nf, err := u.isNativeFullscreen()
+	if err != nil {
+		return 0, 0, err
+	}
+	if wf || nf {
+		return m.boundsInGLFWPixels.Dx(), m.boundsInGLFWPixels.Dy(), nil
+	}
+	// setWindowSizeInDIP rounds the product, so round it here as well to predict the same pixel
+	// count.
+	s := m.DeviceScaleFactor()
+	return int(math.Round(float64(u.windowWidthInDIP) * s)), int(math.Round(float64(u.windowHeightInDIP) * s)), nil
 }
 
 // shouldPresentFrame reports whether a frame should be presented to the window.
@@ -938,9 +928,9 @@ func shouldPresentFrame(windowOnScreen, bufferOnceSwapped, initWindowVisible boo
 		return true
 	}
 
-	// Skip the buffer swap so that the tick rate stays at the specified TPS. On macOS, a present for
-	// an occluded window waits for a display link that the OS throttles far below the refresh rate,
-	// and the tick rate would drop with it (#3405).
+	// Skip the buffer swap. On macOS, a present for an occluded window waits for a display link
+	// that the OS throttles far below the refresh rate, and the loop would slow down with it
+	// (#3405).
 	return false
 }
 

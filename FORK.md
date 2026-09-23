@@ -53,8 +53,9 @@ iconifying it, and for a window the app asked to keep hidden. Upstream skipped
 the frame in both cases, which made `WindowOptions.Hidden` a window that never
 draws. The two are now separate: a hidden-on-purpose window runs its frames and
 skips the buffer swap alone, so it is a rendering target for a screenshot dumper
-that should not show anything. `renderFrame` takes `render` and `present`
-rather than one flag, and returns `present` as whether the surface needs a swap.
+that should not show anything. The loop skips a frame that cannot render, and
+`renderFrame` reports only whether the frame ran; the loop presents it when the
+window can show it.
 An occluded window still skips the frame, which is what keeps the loop off the
 GPU when nothing can be seen.
 
@@ -111,7 +112,9 @@ monitor and window APIs. Everything outside that was dropped.
   could only ever hold `FPSModeVsyncOn` once the root-level setters went, so it
   goes with `SetFPSMode`, `applyFPSMode`, `setFPSMode` and the browser's
   `forceUpdateOnMinimumFPSMode`; the frame pacer no longer asks whether vsync
-  is on and the command queue applies it once rather than tracking four states.
+  is on, and `graphicsdriver.Graphics.SetVsyncEnabled` is gone with the
+  command queue's vsync state: every driver starts with vsync on and keeps it.
+  OpenGL re-asserts an interval of 1 on every swap, as it did.
   `setFPSMode` also set GLFW's sticky keys and mouse buttons, which only a
   polling reader would have seen. `SetScreenClearedEveryFrame` and
   `IsScreenClearedEveryFrame` stored a flag no renderer read: the screen is
@@ -197,6 +200,10 @@ WebGL feels.
   a two-window smoke test in `examples/nativehooks`.
 - Waking the loop from the macOS and Linux gamepad connection callbacks, instead
   of the one-second detection poll (`docs/window.md`).
+- The drivers' vsync-off paths are unreachable since `SetVsyncEnabled` went:
+  Metal's `vsyncDisabled` and the display-link branches that read it, and the
+  tearing branch of DirectX's `present`. The Metal branches are woven into the
+  live-resize handling, which cannot be exercised here, so they were left.
 - DirectX's refusal of a transparent surface is returned but never seen here;
   only Metal and OpenGL ran a transparent window.
 - A rendering target with no window at all. OpenGL makes its context current

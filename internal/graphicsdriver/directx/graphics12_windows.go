@@ -105,8 +105,6 @@ type graphics12 struct {
 	nextShaderID    graphicsdriver.ShaderID
 	disposedShaders [frameCount][]*shader12
 
-	vsyncEnabled bool
-
 	suspendingCh chan struct{}
 	suspendedCh  chan struct{}
 	resumeCh     chan struct{}
@@ -885,7 +883,7 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 }
 
 func (g *graphics12) presentDesktop() error {
-	return g.graphicsInfra.present(g.vsyncEnabled)
+	return g.graphicsInfra.present(true)
 }
 
 // FinishForcedFrame waits for a frame forced while the game loop is blocked (e.g. during a window
@@ -1233,10 +1231,6 @@ func (g *graphics12) addShader(s *shader12) {
 func (g *graphics12) removeShader(s *shader12) {
 	delete(g.shaders, s.id)
 	g.disposedShaders[g.frameIndex] = append(g.disposedShaders[g.frameIndex], s)
-}
-
-func (g *graphics12) SetVsyncEnabled(enabled bool) {
-	g.vsyncEnabled = enabled
 }
 
 func (g *graphics12) NeedsClearingScreen() bool {

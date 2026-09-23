@@ -141,14 +141,11 @@ type graphics11 struct {
 	rasterizerState *_ID3D11RasterizerState
 	blendStates     map[blendStateKey]*_ID3D11BlendState
 
-	vsyncEnabled bool
-	window       windows.HWND
+	window windows.HWND
 }
 
 func newGraphics11(useWARP bool, useDebugLayer bool) (gr11 *graphics11, ferr error) {
-	g := &graphics11{
-		vsyncEnabled: true,
-	}
+	g := &graphics11{}
 
 	driverType := _D3D_DRIVER_TYPE_HARDWARE
 	if useWARP {
@@ -279,7 +276,7 @@ func (g *graphics11) End(mode graphicsdriver.FlushMode) error {
 		return nil
 	}
 
-	if err := g.graphicsInfra.present(g.vsyncEnabled); err != nil {
+	if err := g.graphicsInfra.present(true); err != nil {
 		return err
 	}
 
@@ -452,10 +449,6 @@ func (g *graphics11) addImage(img *image11) {
 
 func (g *graphics11) removeImage(image *image11) {
 	delete(g.images, image.id)
-}
-
-func (g *graphics11) SetVsyncEnabled(enabled bool) {
-	g.vsyncEnabled = enabled
 }
 
 func (g *graphics11) NeedsClearingScreen() bool {

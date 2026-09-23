@@ -44,7 +44,6 @@ type Presenter interface {
 type Graphics struct {
 	state      openGLState
 	context    context
-	vsync      bool
 	colorSpace color.ColorSpace
 
 	nextImageID graphicsdriver.ImageID
@@ -69,7 +68,6 @@ type Graphics struct {
 
 func newGraphics(ctx gl.Context, colorSpace color.ColorSpace) *Graphics {
 	g := &Graphics{
-		vsync:      true,
 		colorSpace: colorSpace,
 	}
 	if isDebug {
@@ -274,10 +272,6 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 	}
 
 	return nil
-}
-
-func (g *Graphics) SetVsyncEnabled(enabled bool) {
-	g.vsync = enabled
 }
 
 func (g *Graphics) NeedsClearingScreen() bool {

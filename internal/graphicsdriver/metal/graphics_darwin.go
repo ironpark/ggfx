@@ -44,8 +44,6 @@ type Graphics struct {
 	// runOnMainThread runs a function on the main thread synchronously. It is set at most once.
 	runOnMainThread func(f func())
 
-	vsync bool
-
 	tmpUniforms []uint32
 
 	colorSpace color.ColorSpace
@@ -119,7 +117,6 @@ func NewGraphics(colorSpace color.ColorSpace) (graphicsdriver.Graphics, error) {
 	g := &Graphics{
 		colorSpace: colorSpace,
 		device:     systemDefaultDevice,
-		vsync:      true,
 	}
 	return g, nil
 }
@@ -152,7 +149,7 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 		return nil, err
 	}
 	s.view.ml.SetOpaque(!transparent)
-	s.view.setDisplaySyncEnabled(g.vsync)
+	s.view.setDisplaySyncEnabled(true)
 	s.view.setWindow(window)
 	g.surfaces = append(g.surfaces, s)
 	return s, nil
@@ -636,13 +633,6 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 	}
 
 	return nil
-}
-
-func (g *Graphics) SetVsyncEnabled(enabled bool) {
-	g.vsync = enabled
-	for _, s := range g.surfaces {
-		s.view.setDisplaySyncEnabled(enabled)
-	}
 }
 
 func (g *Graphics) NeedsClearingScreen() bool {

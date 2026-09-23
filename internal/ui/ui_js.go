@@ -344,7 +344,7 @@ func (u *UserInterface) updateImpl(force bool) error {
 			return err
 		}
 	} else {
-		needsSwapBuffers, err := u.context.renderFrame(u.graphicsDriver, sw, sh, theMonitor.DeviceScaleFactor(), u, true, true, false)
+		needsSwapBuffers, err := u.context.renderFrame(u.graphicsDriver, sw, sh, theMonitor.DeviceScaleFactor(), u, false)
 		if err != nil {
 			return err
 		}

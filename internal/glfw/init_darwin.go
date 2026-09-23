@@ -12,7 +12,7 @@ import (
 func init() {
 	// Change the working directory to the application bundle's resources
 	// directory at package initialization, so that it is already in effect when
-	// main runs. GLFW is otherwise initialized lazily in RunGame, which would
+	// main runs. GLFW is otherwise initialized lazily in Run, which would
 	// defer the chdir until after main has started.
 	//
 	// TODO: Remove this implicit chdir in the future (#2919).

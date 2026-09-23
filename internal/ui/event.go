@@ -382,19 +382,13 @@ func (c *eventContext) dispose() {
 	}
 }
 
-// renderFrame runs one frame. render reports whether the frame should run at all and present
-// whether its result can reach the display; force draws regardless of the draw-skipping states.
-// It returns whether the surface must be presented, which the caller does by flushing the
-// commands with a present.
-func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, render, present, force bool) (needsSwapBuffers bool, err error) {
+// renderFrame runs one frame if one was requested, or regardless when force is set. It returns
+// whether the frame ran; the caller decides whether that frame is presented.
+func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, force bool) (ran bool, err error) {
 	if screenWidth == 0 || screenHeight == 0 {
 		return false, nil
 	}
 	if !force && !c.frameRequested.Load() {
-		return false, nil
-	}
-	if !render {
-		// Keep the request until the window can show the frame.
 		return false, nil
 	}
 	c.frameRequested.Store(false)
@@ -404,7 +398,7 @@ func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, scree
 	}
 	defer func() {
 		if atlasErr := atlas.EndFrame(graphicsDriver); atlasErr != nil {
-			needsSwapBuffers = false
+			ran = false
 			err = atlasErr
 		}
 	}()
@@ -434,7 +428,7 @@ func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, scree
 	}); err != nil {
 		return false, err
 	}
-	return present, nil
+	return true, nil
 }
 
 func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error {
@@ -442,7 +436,7 @@ func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, 
 	if err := ui.dispatchEvents(); err != nil {
 		return err
 	}
-	needsSwapBuffers, err := c.renderFrame(graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, ui, true, true, true)
+	needsSwapBuffers, err := c.renderFrame(graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, ui, true)
 	if err != nil {
 		return err
 	}

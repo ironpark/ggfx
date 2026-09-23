@@ -356,7 +356,7 @@ func (u *glfwBackend) cachedNativeWindow() (uintptr, error) {
 	return h, nil
 }
 
-// pumpEvents processes the OS event queue once, waiting for an event when the FPS mode says so.
+// pumpEvents processes the OS event queue once, waiting for an event when no window wants a frame.
 // pumpEvents must be called from the main thread.
 func (u *UserInterface) pumpEvents() error {
 	u.pollingEvents = true
@@ -474,10 +474,10 @@ func (u *glfwBackend) updateWindow() (screenWidth, screenHeight int, err error) 
 		}
 	}
 
-	return u.layoutSizes()
+	return u.screenSize()
 }
 
-// waitWhileUnfocused blocks while no window is focused and the game must not run unfocused.
+// waitWhileUnfocused blocks while no window is focused and the loop must not run unfocused.
 // waitWhileUnfocused must be called from the main thread.
 func (u *UserInterface) waitWhileUnfocused() error {
 	// If isRunnableOnUnfocused is false and the window is not focused, wait here.
@@ -681,14 +681,15 @@ func (u *UserInterface) updateFrame() error {
 
 	var needsSwapBuffers bool
 	for _, f := range frames {
-		if !f.window.context.wantsFrame() {
+		// A frame that cannot be rendered keeps its request for a later iteration.
+		if !f.render || !f.window.context.wantsFrame() {
 			continue
 		}
-		n, err := f.window.context.renderFrame(u.graphicsDriver, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, f.render, f.present, false)
+		ran, err := f.window.context.renderFrame(u.graphicsDriver, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, false)
 		if err != nil {
 			return err
 		}
-		needsSwapBuffers = needsSwapBuffers || n
+		needsSwapBuffers = needsSwapBuffers || (ran && f.present)
 	}
 	if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.RefreshRate()); err != nil {
 		return err

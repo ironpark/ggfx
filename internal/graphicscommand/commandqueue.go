@@ -44,24 +44,6 @@ const (
 	maxVertexFloatCount = MaxVertexCount * graphics.VertexFloatCount
 )
 
-// vsyncApplied reports whether the graphics driver has been told that vsync is on. Vsync is
-// always on since the FPS modes went, but the driver still has to hear it once.
-var vsyncApplied atomic.Bool
-
-// enableVsyncOnce tells the graphics driver that vsync is on, the first time it is called.
-//
-// The state is applied on the render thread at a flush, as the main thread must never wait for
-// the render thread, which can be waiting for the main thread in the middle of a frame.
-//
-// enableVsyncOnce must be called on the render thread.
-func enableVsyncOnce(graphicsDriver graphicsdriver.Graphics) {
-	if vsyncApplied.Load() {
-		return
-	}
-	graphicsDriver.SetVsyncEnabled(true)
-	vsyncApplied.Store(true)
-}
-
 // FlushCommands executes queued commands with the given flush mode.
 func FlushCommands(graphicsDriver graphicsdriver.Graphics, mode graphicsdriver.FlushMode) error {
 	if err := theCommandQueueManager.flush(graphicsDriver, mode); err != nil {
@@ -212,8 +194,6 @@ func (q *commandQueue) Flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 	var flushErr error
 	runOnRenderThread(func() {
 		defer logger.Flush()
-
-		enableVsyncOnce(graphicsDriver)
 
 		if err := q.flush(graphicsDriver, mode, logger); err != nil {
 			if sync {

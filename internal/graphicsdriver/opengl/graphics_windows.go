@@ -63,11 +63,7 @@ func (g *Graphics) swapBuffers() error {
 	// SwapInterval is affected by the current monitor of the window.
 	// This needs to be called at least after SetMonitor.
 	// Without SwapInterval after SetMonitor, vsynch doesn't work (#375).
-	var interval int
-	if g.vsync {
-		interval = 1
-	}
-	if err := g.presenter.SwapInterval(interval); err != nil {
+	if err := g.presenter.SwapInterval(1); err != nil {
 		return err
 	}
 

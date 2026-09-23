@@ -53,15 +53,12 @@ func (c *framePacer) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver 
 
 	now := time.Now()
 
-	// A frame that is not swapped tells nothing about whether swapping buffers waits for the
-	// display, and breaks the run of the frames that returned early.
-	if !needsSwapBuffers || occluded {
-		c.vsyncIgnoredCount = 0
-	}
-
 	var waitTime time.Duration
 	if !needsSwapBuffers || occluded {
-		// When swapping buffers is skipped and Draw is called too early, sleep for a while to suppress CPU usages (#2890).
+		// A frame that is not swapped tells nothing about whether swapping buffers waits for the
+		// display, and breaks the run of the frames that returned early.
+		c.vsyncIgnoredCount = 0
+		// Nothing waited for the display, so sleep to keep the loop off the CPU (#2890).
 		waitTime = time.Second / 60
 	} else {
 		// In some environments, e.g. Linux on Parallels, SwapBuffers doesn't wait for the vsync (#2952).

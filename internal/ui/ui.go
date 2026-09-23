@@ -190,7 +190,7 @@ func (u *UserInterface) readPixels(img *Image, pixels []byte, region image.Recta
 	// ReadPixels failed since this was called in between two frames.
 	// Try this again at the next frame.
 	if !ok {
-		// If this function is called from the same sequence as a game's Update and Draw,
+		// If this function is called from the same sequence as a frame's event handler,
 		// this causes a dead lock.
 		// This never happens so far, but if handling inputs after EndFrame is implemented,
 		// this might be possible (#1704).

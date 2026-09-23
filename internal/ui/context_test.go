@@ -109,9 +109,6 @@ func (*frameDriver) Begin() error {
 	return nil
 }
 
-func (*frameDriver) SetVsyncEnabled(bool) {
-}
-
 func (g *frameDriver) NewImage(int, int) (graphicsdriver.Image, error) {
 	g.images++
 	return nil, nil
