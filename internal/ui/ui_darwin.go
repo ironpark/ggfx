@@ -123,10 +123,8 @@ func (u *UserInterface) initializePlatform() error {
 			{
 				Cmd: sel_windowWillEnterFullScreen,
 				Fn: func(id objc.ID, cmd objc.SEL, notification objc.ID) {
-					// The window delegate methods are invoked only while a GLFW window exists,
-					// so the running backend is the GLFW backend.
-					b, ok := u.runningBackend().(*glfwBackend)
-					if !ok {
+					b := u.backendForCocoaWindow(cocoa.NSNotification{ID: notification}.Object())
+					if b == nil {
 						return
 					}
 					if err := b.captureWindowPosToRestore(); err != nil {
@@ -149,10 +147,8 @@ func (u *UserInterface) initializePlatform() error {
 					// Even a window has a size limitation, a window can be fullscreen by calling SetFullscreen(true).
 					// In this case, the window size limitation is disabled temporarily.
 					// When exiting from fullscreen, reset the window size limitation.
-					// The window delegate methods are invoked only while a GLFW window exists,
-					// so the running backend is the GLFW backend.
-					b, ok := u.runningBackend().(*glfwBackend)
-					if !ok {
+					b := u.backendForCocoaWindow(cocoa.NSNotification{ID: notification}.Object())
+					if b == nil {
 						return
 					}
 					if err := b.updateWindowSizeLimits(); err != nil {
@@ -472,6 +468,22 @@ func (u *glfwBackend) initializeWindowAfterCreation(w *glfw.Window) error {
 	nswindow := objc.ID(cocoaWindow)
 	delegate := objc.ID(class_EbitengineWindowDelegate).Send(sel_alloc).Send(sel_initWithOrigDelegate, nswindow.Send(sel_delegate))
 	nswindow.Send(sel_setDelegate, delegate)
+	return nil
+}
+
+// backendForCocoaWindow returns the window whose NSWindow is win, or nil when it is not open.
+//
+// backendForCocoaWindow must be called from the main thread.
+func (u *UserInterface) backendForCocoaWindow(win objc.ID) *glfwBackend {
+	for _, b := range u.windows {
+		w, err := b.window.GetCocoaWindow()
+		if err != nil {
+			continue
+		}
+		if objc.ID(w) == win {
+			return b
+		}
+	}
 	return nil
 }
 
