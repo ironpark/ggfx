@@ -261,9 +261,15 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 	}
 
 	for _, dstRegion := range dstRegions {
+		// The scissor box is in window coordinates, whose Y is upward too, so
+		// a region of the final framebuffer is flipped like the projection.
+		y := dstRegion.Region.Min.Y
+		if destination.screen {
+			y = destination.framebuffer.viewportHeight - dstRegion.Region.Max.Y
+		}
 		g.context.ctx.Scissor(
 			int32(dstRegion.Region.Min.X),
-			int32(dstRegion.Region.Min.Y),
+			int32(y),
 			int32(dstRegion.Region.Dx()),
 			int32(dstRegion.Region.Dy()),
 		)
