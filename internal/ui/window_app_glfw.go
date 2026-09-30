@@ -144,12 +144,16 @@ func (u *UserInterface) NewWindow(o *WindowOptions, handle any) (AppWindow, erro
 		}
 		u.windows = append(u.windows, b)
 
-		// Tell the app the initial size, so that it has one path for sizes.
+		// Tell the app the initial size, so that it has one path for sizes, unless creating the
+		// window already did.
 		s := 1.0
 		if m, e := b.currentMonitor(); e == nil && m != nil {
 			s = m.DeviceScaleFactor()
 		}
-		u.pushEvent(ResizeEvent{Window: w, Width: float64(b.windowWidthInDIP), Height: float64(b.windowHeightInDIP), Scale: s})
+		if b.reportedWidth == 0 && b.reportedHeight == 0 {
+			b.reportedWidth, b.reportedHeight, b.reportedScale = b.windowWidthInDIP, b.windowHeightInDIP, s
+			u.pushEvent(ResizeEvent{Window: w, Width: float64(b.windowWidthInDIP), Height: float64(b.windowHeightInDIP), Scale: s})
+		}
 	})
 	if err != nil {
 		return nil, err

@@ -110,6 +110,20 @@ type glfwBackend struct {
 	windowWidthInDIP  int
 	windowHeightInDIP int
 
+	// reportedWidth, reportedHeight and reportedScale are the size in device-independent
+	// pixels and the scale the app was last told of in a ResizeEvent.
+	reportedWidth  int
+	reportedHeight int
+	reportedScale  float64
+
+	// framebufferWidth and framebufferHeight are the framebuffer size reportSize last saw.
+	framebufferWidth  int
+	framebufferHeight int
+
+	// sizeChanged is set when reportSize sees a new size, which makes a size gathered for a
+	// frame before it stale. The loop clears it when it gathers the size again.
+	sizeChanged atomic.Bool
+
 	// windowXInDIP and windowYInDIP are the window position relative to its monitor, in
 	// device-independent pixels, as it was requested. Converting a pixel position back does not
 	// return the requested position at a fractional scale factor (#2978).
@@ -721,9 +735,7 @@ func (u *glfwBackend) registerWindowFramebufferSizeCallback() error {
 				return
 			}
 
-			if aw := u.appWindow(); aw != nil {
-				u.pushEvent(ResizeEvent{Window: aw, Width: float64(ww), Height: float64(wh), Scale: s})
-			}
+			u.report(ww, wh, s)
 
 			// While the window is being resized on macOS or Windows, the OS traps the main
 			// thread in an event-handling loop and the game loop cannot proceed. Render a frame
@@ -869,7 +881,61 @@ event:
 	close(u.framebufferSizeCallbackCh)
 	u.framebufferSizeCallbackCh = nil
 
+	// The default callback, which reports sizes, was replaced while f ran.
+	return u.reportSize()
+}
+
+// reportSize tells the app of the window's size when it differs from what was last reported:
+// after a resize the app asked for, which the default framebuffer callback does not see, and
+// while the window is fullscreen, which that callback ignores. It must be called from the main
+// thread.
+func (u *glfwBackend) reportSize() error {
+	gw, gh, err := u.window.GetSize()
+	if err != nil {
+		return err
+	}
+	if gw <= 0 || gh <= 0 {
+		// Iconified on Windows: there is no size to report until the window is restored.
+		return nil
+	}
+	m, err := u.currentMonitor()
+	if err != nil {
+		return err
+	}
+	s := m.DeviceScaleFactor()
+	ww := int(math.Round(dipFromGLFWPixel(float64(gw), s)))
+	wh := int(math.Round(dipFromGLFWPixel(float64(gh), s)))
+	resized := u.report(ww, wh, s)
+
+	// On macOS the framebuffer follows the window's size a little later, so the frame asked for
+	// with the ResizeEvent can still have the old one. Ask again once it has changed.
+	fw, fh, err := u.window.GetFramebufferSize()
+	if err != nil {
+		return err
+	}
+	if fw != u.framebufferWidth || fh != u.framebufferHeight {
+		u.framebufferWidth, u.framebufferHeight = fw, fh
+		resized = true
+	}
+	if resized && u.context != nil {
+		// A resize is followed by a frame at the new size.
+		u.sizeChanged.Store(true)
+		u.context.requestFrame()
+	}
 	return nil
+}
+
+// report queues a ResizeEvent unless the size and scale are the ones last reported, and
+// reports whether it did. It must be called from the main thread.
+func (u *glfwBackend) report(width, height int, scale float64) bool {
+	if width == u.reportedWidth && height == u.reportedHeight && scale == u.reportedScale {
+		return false
+	}
+	u.reportedWidth, u.reportedHeight, u.reportedScale = width, height, scale
+	if aw := u.appWindow(); aw != nil {
+		u.pushEvent(ResizeEvent{Window: aw, Width: float64(width), Height: float64(height), Scale: scale})
+	}
+	return true
 }
 
 // screenSize returns the size of the final rendering destination, in pixels.

@@ -630,6 +630,12 @@ func (u *UserInterface) updateFrame() error {
 			render := present || !w.desktopWindow.isInitWindowVisible()
 
 			sw, sh, e := w.updateWindow()
+			if e == nil {
+				// Catches every change of size the callbacks did not report.
+				e = w.reportSize()
+				// The size is gathered now; only a change after this makes it stale.
+				w.sizeChanged.Store(false)
+			}
 			if errors.Is(e, errWindowClosed) {
 				if w.primary {
 					err = RegularTermination
@@ -715,8 +721,10 @@ func (u *UserInterface) updateFrame() error {
 
 	var needsSwapBuffers bool
 	for _, f := range frames {
-		// A frame that cannot be rendered keeps its request for a later iteration.
-		if !f.render || !f.window.context.wantsFrame() {
+		// A frame that cannot be rendered keeps its request for a later iteration. So does one
+		// whose window the app resized while its events were dispatched: the size gathered for it
+		// is stale, and the frame would be drawn at the old size and use up the request.
+		if !f.render || !f.window.context.wantsFrame() || f.window.sizeChanged.Load() {
 			continue
 		}
 		ran, err := f.window.context.renderFrame(u.graphicsDriver, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, false)

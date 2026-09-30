@@ -59,7 +59,17 @@ window can show it.
 An occluded window still skips the frame, which is what keeps the loop off the
 GPU when nothing can be seen.
 
-## Wake
+## Every change of size is a ResizeEvent
+
+Upstream reported a resize only from the default framebuffer-size callback, which is swapped
+out while a resize the app asked for waits for the framebuffer, and which ignores a window in
+fullscreen. Such a resize reached the app as no event, and its frame was drawn at the old size.
+Each loop iteration now compares the window's size and scale with what it last reported
+(`reportSize`), and so does the end of every wait for the framebuffer: a difference is a
+`ResizeEvent` and a frame request. The framebuffer is compared too, since on macOS it follows the
+window a little later. A size that changes while events are dispatched makes the size gathered
+for that iteration's frame stale, so the frame waits for the next iteration instead of being drawn
+at the old size and using up the request.
 
 `Wake` queues a `WakeEvent`, which is for no window and is dispatched whether or not any window
 draws, so that work handed over from another goroutine reaches the handler while every window is
