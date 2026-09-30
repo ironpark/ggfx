@@ -62,7 +62,7 @@ func ensureTemporaryArrayBufferSize(byteLength int) {
 // Be careful that the length can exceed the given byte length.
 // data is copied to the head of the array for initialization, or nil if you don't need initialization.
 // Pass T explicitly for nil, e.g. tmpUint8ArrayFromSlice[uint8](n, nil).
-func tmpUint8ArrayFromSlice[T ~uint8 | ~uint16 | ~float32](minLength int, data []T) js.Value {
+func tmpUint8ArrayFromSlice[T numeric](minLength int, data []T) js.Value {
 	ensureTemporaryArrayBufferSize(minLength * int(unsafe.Sizeof(T(0))))
 	copySliceToTemporaryArrayBuffer(data)
 	return tmpUint8Array

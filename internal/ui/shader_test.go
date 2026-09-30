@@ -56,13 +56,13 @@ var (
 )
 
 func putTestUniforms(s *ui.Shader, block []uint32, scale float32) {
-	ui.PutUniform(s, block, "scale", scale)
-	ui.PutUniformSlice(s, block, "offset", testOffset)
-	ui.PutUniformSlice(s, block, "m", testM)
-	ui.PutUniformSlice(s, block, "colors", testColors)
-	ui.PutUniform(s, block, "index", 1)
-	ui.PutUniform(s, block, "count", uint32(4))
-	ui.PutUniformBool(s, block, "on", true)
+	s.PutUniform(block, "scale", scale)
+	s.PutUniformSlice(block, "offset", testOffset)
+	s.PutUniformSlice(block, "m", testM)
+	s.PutUniformSlice(block, "colors", testColors)
+	s.PutUniform(block, "index", 1)
+	s.PutUniform(block, "count", uint32(4))
+	s.PutUniformBool(block, "on", true)
 }
 
 func testUniformsMap(scale float32) map[string]any {
@@ -90,8 +90,8 @@ func TestPutUniformMatchesAppendUniforms(t *testing.T) {
 	// An integer given for a float uniform converts as the map converts it.
 	want = s.AppendUniforms(nil, map[string]any{"scale": -3, "offset": []int{2, -1}})
 	got = make([]uint32, s.UniformDwordCount())
-	ui.PutUniform(s, got, "scale", -3)
-	ui.PutUniformSlice(s, got, "offset", []int{2, -1})
+	s.PutUniform(got, "scale", -3)
+	s.PutUniformSlice(got, "offset", []int{2, -1})
 	if !slices.Equal(got, want) {
 		t.Errorf("integers: got: %v, want: %v", got, want)
 	}

@@ -558,7 +558,8 @@ func (i *Image) indices32[I Index](indices []I) []uint32 {
 	if is, ok := any(indices).([]uint32); ok {
 		return is
 	}
-	is := i.ensureTmpIndices(len(indices))
+	i.tmpIndices = scratch.Resize(i.tmpIndices, len(indices))
+	is := i.tmpIndices
 	for j, idx := range indices {
 		is[j] = uint32(idx)
 	}
@@ -769,6 +770,7 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 				panic("ggfx: the given image to DrawTrianglesShader must not be disposed")
 			}
 		}
+		checkUniformBlock(shader, options.UniformBlock, options.Uniforms)
 	}
 
 	if i.isDisposed() {
@@ -944,6 +946,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 				panic("ggfx: the given image to DrawRectShader must not be disposed")
 			}
 		}
+		checkUniformBlock(shader, options.UniformBlock, options.Uniforms)
 	}
 
 	if i.isDisposed() {
@@ -1536,19 +1539,28 @@ func (i *Image) ensureTmpVertices(n int) []float32 {
 	return i.tmpVertices
 }
 
-func (i *Image) ensureTmpIndices(n int) []uint32 {
-	i.tmpIndices = scratch.Resize(i.tmpIndices, n)
-	return i.tmpIndices
-}
-
 // uniforms returns the user's uniform block for a draw with shader: block's own when it is given,
-// or uniforms laid out in i.tmpUniforms otherwise.
+// or uniforms laid out in i.tmpUniforms otherwise. checkUniformBlock must have accepted block.
 func (i *Image) uniforms(shader *Shader, block *Uniforms, uniforms map[string]any) []uint32 {
 	if block != nil {
-		return block.blockFor(shader, uniforms)
+		return block.block
 	}
 	i.tmpUniforms = shader.appendUniforms(i.tmpUniforms[:0], uniforms)
 	return i.tmpUniforms
+}
+
+// checkUniformBlock panics if block cannot be drawn with shader. uniforms is the map of the same
+// draw options.
+func checkUniformBlock(shader *Shader, block *Uniforms, uniforms map[string]any) {
+	if block == nil {
+		return
+	}
+	if uniforms != nil {
+		panic("ggfx: Uniforms and UniformBlock must not be specified at the same time")
+	}
+	if block.shader != shader {
+		panic("ggfx: UniformBlock must be created by the shader it is drawn with")
+	}
 }
 
 // private implements FinalScreen.
