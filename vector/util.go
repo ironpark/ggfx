@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/pool"
 )
 
 var (
@@ -66,8 +67,8 @@ func circleVertexCount(r float32) int {
 }
 
 var (
-	thePathPool = sync.Pool{
-		New: func() any {
+	thePathPool = pool.Pool[*Path]{
+		New: func() *Path {
 			return &Path{}
 		},
 	}
@@ -76,7 +77,7 @@ var (
 // StrokeLine strokes a line (x0, y0)-(x1, y1) with the specified width and color.
 func StrokeLine(dst *ggfx.Image, x0, y0, x1, y1 float32, strokeWidth float32, clr color.Color, antialias bool) {
 	if antialias {
-		path := thePathPool.Get().(*Path)
+		path := thePathPool.Get()
 		defer func() {
 			path.Reset()
 			thePathPool.Put(path)
@@ -105,7 +106,7 @@ func StrokeLine(dst *ggfx.Image, x0, y0, x1, y1 float32, strokeWidth float32, cl
 // FillRect fills a rectangle with the specified width and color.
 func FillRect(dst *ggfx.Image, x, y, width, height float32, clr color.Color, antialias bool) {
 	if antialias {
-		path := thePathPool.Get().(*Path)
+		path := thePathPool.Get()
 		defer func() {
 			path.Reset()
 			thePathPool.Put(path)
@@ -139,7 +140,7 @@ func DrawFilledRect(dst *ggfx.Image, x, y, width, height float32, clr color.Colo
 // StrokeRect strokes a rectangle with the specified width and color.
 func StrokeRect(dst *ggfx.Image, x, y, width, height float32, strokeWidth float32, clr color.Color, antialias bool) {
 	if antialias {
-		path := thePathPool.Get().(*Path)
+		path := thePathPool.Get()
 		defer func() {
 			path.Reset()
 			thePathPool.Put(path)
@@ -206,7 +207,7 @@ func StrokeRect(dst *ggfx.Image, x, y, width, height float32, strokeWidth float3
 // FillCircle fills a circle with the specified center position (cx, cy), the radius (r) and color.
 func FillCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antialias bool) {
 	if antialias {
-		path := thePathPool.Get().(*Path)
+		path := thePathPool.Get()
 		defer func() {
 			path.Reset()
 			thePathPool.Put(path)
@@ -224,7 +225,7 @@ func FillCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antialias b
 		return
 	}
 
-	// Use a regular DrawTriangles32 for batching.
+	// Use a regular DrawTriangles for batching.
 	cr, cg, cb, ca := clr.RGBA()
 	crf := float32(cr) / 0xffff
 	cgf := float32(cg) / 0xffff
@@ -253,7 +254,7 @@ func FillCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antialias b
 		}
 		op := &ggfx.DrawTrianglesOptions{}
 		op.ColorScaleMode = ggfx.ColorScaleModePremultipliedAlpha
-		dst.DrawTriangles32(vs, is, whiteSubImage, op)
+		dst.DrawTriangles(vs, is, whiteSubImage, op)
 		return vs, is
 	})
 }
@@ -268,7 +269,7 @@ func DrawFilledCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antia
 // StrokeCircle strokes a circle with the specified center position (cx, cy), the radius (r), width and color.
 func StrokeCircle(dst *ggfx.Image, cx, cy, r float32, strokeWidth float32, clr color.Color, antialias bool) {
 	if antialias {
-		path := thePathPool.Get().(*Path)
+		path := thePathPool.Get()
 		defer func() {
 			path.Reset()
 			thePathPool.Put(path)
@@ -299,7 +300,7 @@ func StrokeCircle(dst *ggfx.Image, cx, cy, r float32, strokeWidth float32, clr c
 		return
 	}
 
-	// Use a regular DrawTriangles32 for batching.
+	// Use a regular DrawTriangles for batching.
 	cr, cg, cb, ca := clr.RGBA()
 	crf := float32(cr) / 0xffff
 	cgf := float32(cg) / 0xffff
@@ -339,7 +340,7 @@ func StrokeCircle(dst *ggfx.Image, cx, cy, r float32, strokeWidth float32, clr c
 		}
 		op := &ggfx.DrawTrianglesOptions{}
 		op.ColorScaleMode = ggfx.ColorScaleModePremultipliedAlpha
-		dst.DrawTriangles32(vs, is, whiteSubImage, op)
+		dst.DrawTriangles(vs, is, whiteSubImage, op)
 		return vs, is
 	})
 }
@@ -349,7 +350,7 @@ func StrokePath(dst *ggfx.Image, path *Path, strokeOptions *StrokeOptions, drawP
 	if strokeOptions == nil {
 		strokeOptions = &StrokeOptions{}
 	}
-	stroke := thePathPool.Get().(*Path)
+	stroke := thePathPool.Get()
 	defer func() {
 		stroke.Reset()
 		thePathPool.Put(stroke)

@@ -238,13 +238,14 @@ func doDrawTrianglesWithAntialias(dst *Image, vertices []Vertex, indices []uint3
 		op.Filter = dtOptions.Filter
 		op.Address = dtOptions.Address
 		op.DisableMipmaps = dtOptions.DisableMipmaps
-		os1.DrawTriangles32(vs, indices, img, op)
+		os1.DrawTriangles(vs, indices, img, op)
 	} else if dtsOptions != nil {
 		op := &DrawTrianglesShaderOptions{}
 		op.Uniforms = dtsOptions.Uniforms
+		op.UniformBlock = dtsOptions.UniformBlock
 		op.Images = dtsOptions.Images
 		op.Blend = dtsOptions.Blend
-		os1.DrawTrianglesShader32(vs, indices, shader, op)
+		os1.DrawTrianglesShader(vs, indices, shader, op)
 	}
 
 	op := &DrawImageOptions{}
@@ -294,12 +295,13 @@ func doDrawTrianglesShaderWithStencilBuffer(dst *Image, vertices []Vertex, indic
 		op.Filter = dtOptions.Filter
 		op.Address = dtOptions.Address
 		op.DisableMipmaps = dtOptions.DisableMipmaps
-		os1.DrawTriangles32(vs, indices, img, op)
+		os1.DrawTriangles(vs, indices, img, op)
 	} else if dtsOptions != nil {
 		op := &DrawTrianglesShaderOptions{}
 		op.Uniforms = dtsOptions.Uniforms
+		op.UniformBlock = dtsOptions.UniformBlock
 		op.Images = dtsOptions.Images
-		os1.DrawTrianglesShader32(vs, indices, shader, op)
+		os1.DrawTrianglesShader(vs, indices, shader, op)
 	}
 
 	// Create an offscreen image with the stencil buffer.
@@ -313,7 +315,7 @@ func doDrawTrianglesShaderWithStencilBuffer(dst *Image, vertices []Vertex, indic
 		stencilImg := ensureStencilBufferImage(bounds).SubImage(bounds).(*Image)
 		stencilOp := &DrawTrianglesShaderOptions{}
 		stencilOp.Blend = BlendLighter
-		stencilImg.DrawTrianglesShader32(vs, indices, stencilBufferShader, stencilOp)
+		stencilImg.DrawTrianglesShader(vs, indices, stencilBufferShader, stencilOp)
 
 		op := &DrawRectShaderOptions{}
 		op.Images[0] = stencilImg

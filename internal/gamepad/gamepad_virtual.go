@@ -67,7 +67,7 @@ func (g *gamepads) appendVirtualVibrations(dst []VirtualGamepadVibration) []Virt
 		if gp == nil || !gp.virtual {
 			continue
 		}
-		withNative(gp, func(n *nativeGamepadVirtual) {
+		gp.withNative(func(n *nativeGamepadVirtual) {
 			if !n.vibrationPending {
 				return
 			}
@@ -136,7 +136,7 @@ func containsVirtualGamepadID(states []VirtualGamepadState, id ID) bool {
 }
 
 func (g *Gamepad) setVirtualState(s *VirtualGamepadState) {
-	withNative(g, func(n *nativeGamepadVirtual) {
+	g.withNative(func(n *nativeGamepadVirtual) {
 		// Copy into the gamepad's own (reused) storage so its state does not alias the caller's buffers,
 		// which Update is free to reuse or mutate after it returns.
 		n.axes = append(n.axes[:0], s.Axes...)

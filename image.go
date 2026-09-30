@@ -29,6 +29,8 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/pool"
+	"github.com/ironpark/ggfx/internal/scratch"
 	"github.com/ironpark/ggfx/internal/ui"
 )
 
@@ -88,8 +90,8 @@ type Image struct {
 
 // theImagePool is a global pool of Image structs to reduce allocations.
 // [Image.RecyclableSubImage] draws from this pool; [Image.Recycle] returns to it.
-var theImagePool = sync.Pool{
-	New: func() any { return &Image{} },
+var theImagePool = pool.Pool[*Image]{
+	New: func() *Image { return &Image{} },
 }
 
 type usageCallback struct {
@@ -509,7 +511,16 @@ const MaxVerticesCount = graphicscommand.MaxVertexCount
 // MaxVertexCount is the maximum number of vertices for DrawTriangles and DrawTrianglesShader.
 const MaxVertexCount = graphicscommand.MaxVertexCount
 
+// Index is the type of the vertex indices given to [Image.DrawTriangles] and [Image.DrawTrianglesShader].
+type Index interface {
+	uint16 | uint32
+}
+
 // DrawTriangles draws triangles with the specified vertices and their indices.
+//
+// The indices are uint16 or uint32 values. uint32 indices are used as they are,
+// and uint16 indices are converted to uint32 in a buffer of the image i.
+// For a nil slice, specify the index type explicitly like DrawTriangles[uint16].
 //
 // img is used as a source image. img cannot be nil.
 // If you want to draw triangles with a solid color, use a small white image
@@ -530,37 +541,31 @@ const MaxVertexCount = graphicscommand.MaxVertexCount
 // When the given image is disposed, DrawTriangles panics.
 //
 // When the image i is disposed and the given image is not, DrawTriangles does nothing.
-func (i *Image) DrawTriangles(vertices []Vertex, indices []uint16, img *Image, options *DrawTrianglesOptions) {
-	is := i.ensureTmpIndices(len(indices))
-	for i := range is {
-		is[i] = uint32(indices[i])
-	}
-	i.DrawTriangles32(vertices, is, img, options)
+func (i *Image) DrawTriangles[I Index](vertices []Vertex, indices []I, img *Image, options *DrawTrianglesOptions) {
+	i.drawTriangles(vertices, i.indices32(indices), img, options)
 }
 
-// DrawTriangles32 draws triangles with the specified vertices and their indices.
-// DrawTriangles32 is the version of DrawTriangles with uint32 indices.
+// DrawTriangles32 draws triangles with the specified vertices and their uint32 indices.
 //
-// img is used as a source image. img cannot be nil.
-// If you want to draw triangles with a solid color, use a small white image
-// and adjust the color elements in the vertices. For an actual implementation,
-// see the example 'vector'.
-//
-// Vertex contains color values, which are interpreted as straight-alpha colors by default.
-// This depends on the option's ColorScaleMode.
-//
-// If len(vertices) is more than MaxVertexCount, the exceeding part is ignored.
-//
-// If len(indices) is not multiple of 3, DrawTriangles32 panics.
-//
-// If a value in indices is out of range of vertices, or not less than MaxVertexCount, DrawTriangles32 panics.
-//
-// The rule in which DrawTriangles32 works effectively is same as DrawImage's.
-//
-// When the given image is disposed, DrawTriangles32 panics.
-//
-// When the image i is disposed and the given image is not, DrawTriangles32 does nothing.
+// Deprecated: use [Image.DrawTriangles], which accepts uint32 indices.
 func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image, options *DrawTrianglesOptions) {
+	i.drawTriangles(vertices, indices, img, options)
+}
+
+// indices32 returns indices as uint32 values. uint32 indices are returned as they are; uint16
+// indices are converted in i's temporary index buffer.
+func (i *Image) indices32[I Index](indices []I) []uint32 {
+	if is, ok := any(indices).([]uint32); ok {
+		return is
+	}
+	is := i.ensureTmpIndices(len(indices))
+	for j, idx := range indices {
+		is[j] = uint32(idx)
+	}
+	return is
+}
+
+func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, options *DrawTrianglesOptions) {
 	i.copyCheck()
 
 	if img != nil && img.isDisposed() {
@@ -672,6 +677,14 @@ type DrawTrianglesShaderOptions struct {
 	// If a uniform variable's name doesn't exist in Uniforms, this is treated as if zero values are specified.
 	Uniforms map[string]any
 
+	// UniformBlock is the shader's uniform block, set by name ahead of the draw.
+	// It avoids the map lookups and the reflection of Uniforms, so prefer it for a draw repeated every frame.
+	// UniformBlock must be created by the shader of the draw with [Shader.NewUniforms].
+	// If both Uniforms and UniformBlock are specified, the draw panics.
+	//
+	// The default (zero) value is nil, which uses Uniforms.
+	UniformBlock *Uniforms
+
 	// Images is a set of the source images. The images may have different sizes.
 	Images [4]*Image
 
@@ -705,6 +718,8 @@ var _ [len(DrawTrianglesShaderOptions{}.Images) - graphics.ShaderSrcImageCount]s
 //
 // Vertex contains color values, which can be interpreted for any purpose by the shader.
 //
+// The indices are uint16 or uint32 values, as for [Image.DrawTriangles].
+//
 // For the details about shaders, see docs/shaders.md.
 //
 // the size of the image at index 0 of the specified images.
@@ -727,42 +742,18 @@ var _ [len(DrawTrianglesShaderOptions{}.Images) - graphics.ShaderSrcImageCount]s
 // the value is kept and is not clamped.
 //
 // When the image i is disposed and no disposed shader or image is given, DrawTrianglesShader does nothing.
-func (i *Image) DrawTrianglesShader(vertices []Vertex, indices []uint16, shader *Shader, options *DrawTrianglesShaderOptions) {
-	is := i.ensureTmpIndices(len(indices))
-	for i := range is {
-		is[i] = uint32(indices[i])
-	}
-	i.DrawTrianglesShader32(vertices, is, shader, options)
+func (i *Image) DrawTrianglesShader[I Index](vertices []Vertex, indices []I, shader *Shader, options *DrawTrianglesShaderOptions) {
+	i.drawTrianglesShader(vertices, i.indices32(indices), shader, options)
 }
 
-// DrawTrianglesShader32 draws triangles with the specified vertices and their indices with the specified shader.
-// DrawTrianglesShader32 is the version of DrawTrianglesShader with uint32 indices.
+// DrawTrianglesShader32 draws triangles with the specified vertices and their uint32 indices with the specified shader.
 //
-// Vertex contains color values, which can be interpreted for any purpose by the shader.
-//
-// For the details about shaders, see docs/shaders.md.
-//
-// the size of the image at index 0 of the specified images.
-// If the image at index 0 is nil, its size is treated as (0, 0) for this comparison.
-// If one of the specified image is non-nil and is disposed, DrawTrianglesShader32 panics.
-//
-// If len(vertices) is more than MaxVertexCount, the exceeding part is ignored.
-//
-// If len(indices) is not multiple of 3, DrawTrianglesShader32 panics.
-//
-// If a value in indices is out of range of vertices, or not less than MaxVertexCount, DrawTrianglesShader32 panics.
-//
-// When the given shader is disposed, DrawTrianglesShader32 panics.
-//
-// When a specified image is non-nil and is disposed, DrawTrianglesShader32 panics.
-//
-// If a specified uniform variable's length or type doesn't match with an expected one, DrawTrianglesShader32 panics.
-//
-// Even if a result is an invalid color as a premultiplied-alpha color, i.e. an alpha value exceeds other color values,
-// the value is kept and is not clamped.
-//
-// When the image i is disposed and no disposed shader or image is given, DrawTrianglesShader32 does nothing.
+// Deprecated: use [Image.DrawTrianglesShader], which accepts uint32 indices.
 func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shader *Shader, options *DrawTrianglesShaderOptions) {
+	i.drawTrianglesShader(vertices, indices, shader, options)
+}
+
+func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader *Shader, options *DrawTrianglesShaderOptions) {
 	i.copyCheck()
 
 	if shader.isDisposed() {
@@ -874,10 +865,8 @@ func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shade
 		srcRegions[i] = img.adjustedBounds()
 	}
 
-	i.tmpUniforms = i.tmpUniforms[:0]
-	i.tmpUniforms = shader.appendUniforms(i.tmpUniforms, options.Uniforms)
-
-	i.image.DrawTriangles(imgs, vs, indices, blend, i.adjustedBounds(), srcRegions, shader.shader, i.tmpUniforms, true)
+	uniforms := i.uniforms(shader, options.UniformBlock, options.Uniforms)
+	i.image.DrawTriangles(imgs, vs, indices, blend, i.adjustedBounds(), srcRegions, shader.shader, uniforms, true)
 }
 
 // DrawRectShaderOptions represents options for DrawRectShader.
@@ -904,6 +893,14 @@ type DrawRectShaderOptions struct {
 	//
 	// If a uniform variable's name doesn't exist in Uniforms, this is treated as if zero values are specified.
 	Uniforms map[string]any
+
+	// UniformBlock is the shader's uniform block, set by name ahead of the draw.
+	// It avoids the map lookups and the reflection of Uniforms, so prefer it for a draw repeated every frame.
+	// UniformBlock must be created by the shader of the draw with [Shader.NewUniforms].
+	// If both Uniforms and UniformBlock are specified, the draw panics.
+	//
+	// The default (zero) value is nil, which uses Uniforms.
+	UniformBlock *Uniforms
 
 	// Images is a set of the source images.
 	// All the images' sizes must be the same.
@@ -1020,12 +1017,9 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 		a, b, c, d, tx, ty, cr, cg, cb, ca)
 	is := graphics.QuadIndices()
 
-	i.tmpUniforms = i.tmpUniforms[:0]
-	i.tmpUniforms = shader.appendUniforms(i.tmpUniforms, options.Uniforms)
-
+	uniforms := i.uniforms(shader, options.UniformBlock, options.Uniforms)
 	dr := i.adjustedBounds()
-
-	i.image.DrawTriangles(imgs, vs, is, blend, dr, srcRegions, shader.shader, i.tmpUniforms, true)
+	i.image.DrawTriangles(imgs, vs, is, blend, dr, srcRegions, shader.shader, uniforms, true)
 }
 
 // SubImage returns an image representing the portion of the image p visible through r.
@@ -1122,7 +1116,7 @@ func (i *Image) RecyclableSubImage(r image.Rectangle) *Image {
 		r = image.Rectangle{}
 	}
 
-	img := theImagePool.Get().(*Image)
+	img := theImagePool.Get()
 	img.image = i.image
 	img.bounds = r
 	img.original = i
@@ -1538,17 +1532,23 @@ func NewImageFromImageWithOptions(source image.Image, options *NewImageFromImage
 }
 
 func (i *Image) ensureTmpVertices(n int) []float32 {
-	if cap(i.tmpVertices) < n {
-		i.tmpVertices = make([]float32, n)
-	}
-	return i.tmpVertices[:n]
+	i.tmpVertices = scratch.Resize(i.tmpVertices, n)
+	return i.tmpVertices
 }
 
 func (i *Image) ensureTmpIndices(n int) []uint32 {
-	if cap(i.tmpIndices) < n {
-		i.tmpIndices = make([]uint32, n)
+	i.tmpIndices = scratch.Resize(i.tmpIndices, n)
+	return i.tmpIndices
+}
+
+// uniforms returns the user's uniform block for a draw with shader: block's own when it is given,
+// or uniforms laid out in i.tmpUniforms otherwise.
+func (i *Image) uniforms(shader *Shader, block *Uniforms, uniforms map[string]any) []uint32 {
+	if block != nil {
+		return block.blockFor(shader, uniforms)
 	}
-	return i.tmpIndices[:n]
+	i.tmpUniforms = shader.appendUniforms(i.tmpUniforms[:0], uniforms)
+	return i.tmpUniforms
 }
 
 // private implements FinalScreen.
@@ -1607,8 +1607,8 @@ func (i *Image) removeUsageCallback(token int64) {
 	delete(i.usageCallbacks, token)
 }
 
-var theTmpUsageCallbackSlicePool = sync.Pool{
-	New: func() any {
+var theTmpUsageCallbackSlicePool = pool.Pool[*[]usageCallback]{
+	New: func() *[]usageCallback {
 		slice := make([]usageCallback, 0, 16)
 		return &slice
 	},
@@ -1626,7 +1626,7 @@ func (i *Image) invokeUsageCallbacks() {
 	}
 	defer i.inUsageCallbacks.Store(false)
 
-	tmpUsageCallbackSlice := theTmpUsageCallbackSlicePool.Get().(*[]usageCallback)
+	tmpUsageCallbackSlice := theTmpUsageCallbackSlicePool.Get()
 
 	func() {
 		i.usageCallbacksM.Lock()

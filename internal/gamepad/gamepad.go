@@ -308,7 +308,7 @@ func (g *Gamepad) close() {
 
 // withNative calls f with g's native state while holding g's lock. T must be the concrete native type
 // of the backend that owns g.
-func withNative[T nativeGamepad](g *Gamepad, f func(n T)) {
+func (g *Gamepad) withNative[T nativeGamepad](f func(n T)) {
 	g.m.Lock()
 	defer g.m.Unlock()
 

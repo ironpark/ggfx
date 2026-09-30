@@ -16,11 +16,12 @@ package text
 
 import (
 	"image"
-	"sync"
+
+	"github.com/ironpark/ggfx/internal/pool"
 )
 
-var theRGBAPool = sync.Pool{
-	New: func() any {
+var theRGBAPool = pool.Pool[*image.RGBA]{
+	New: func() *image.RGBA {
 		return &image.RGBA{}
 	},
 }
@@ -30,7 +31,7 @@ var theRGBAPool = sync.Pool{
 // The Pix buffer is guaranteed to be zero-filled.
 func newPooledRGBA(w, h int) *image.RGBA {
 	size := 4 * w * h
-	rgba := theRGBAPool.Get().(*image.RGBA)
+	rgba := theRGBAPool.Get()
 	if cap(rgba.Pix) < size {
 		rgba.Pix = make([]byte, size)
 	} else {

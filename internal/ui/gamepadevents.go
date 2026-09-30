@@ -20,6 +20,7 @@ import (
 
 	"github.com/ironpark/ggfx/internal/gamepad"
 	"github.com/ironpark/ggfx/internal/gamepaddb"
+	"github.com/ironpark/ggfx/internal/scratch"
 )
 
 // gamepadAxisThreshold is how far an axis must move before the change is reported. Sticks rest
@@ -99,23 +100,15 @@ func (t *gamepadTracker) due(now time.Time) bool {
 	return true
 }
 
-// resize returns a slice of length n backed by s's array when it is big enough, so that a poll
-// after the first allocates nothing.
-func resize[T any](s []T, n int) []T {
-	if cap(s) >= n {
-		return s[:n]
-	}
-	return make([]T, n)
-}
-
-// read fills s with g's current inputs, reusing s's slices.
+// read fills s with g's current inputs, reusing s's slices so that a poll after the first
+// allocates nothing.
 func (e *gamepadEntry) read(s *gamepadState, g *gamepad.Gamepad) {
-	s.buttons = resize(s.buttons, g.ButtonCountWithHats())
+	s.buttons = scratch.Resize(s.buttons, g.ButtonCountWithHats())
 	for i := range s.buttons {
 		s.buttons[i] = g.IsButtonPressedWithHats(i)
 	}
 
-	s.axes = resize(s.axes, g.AxisCount())
+	s.axes = scratch.Resize(s.axes, g.AxisCount())
 	for i := range s.axes {
 		s.axes[i] = 0
 	}

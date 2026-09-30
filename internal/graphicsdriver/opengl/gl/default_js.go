@@ -316,7 +316,7 @@ func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {
 
 func (c *defaultContext) BufferSubData(target uint32, offset int, data []byte) {
 	l := len(data)
-	arr := tmpUint8ArrayFromUint8Slice(l, data)
+	arr := tmpUint8ArrayFromSlice(l, data)
 	c.fnBufferSubData.Invoke(target, offset, arr, 0, l)
 }
 
@@ -554,7 +554,7 @@ func (c *defaultContext) ReadPixels(dst []byte, x int32, y int32, width int32, h
 		c.fnReadPixels.Invoke(x, y, width, height, format, xtype, 0)
 		return
 	}
-	p := tmpUint8ArrayFromUint8Slice(len(dst), nil)
+	p := tmpUint8ArrayFromSlice[uint8](len(dst), nil)
 	c.fnReadPixels.Invoke(x, y, width, height, format, xtype, p)
 	js.CopyBytesToGo(dst, p)
 }
@@ -591,7 +591,7 @@ func (c *defaultContext) TexParameteri(target uint32, pname uint32, param int32)
 }
 
 func (c *defaultContext) TexSubImage2D(target uint32, level int32, xoffset int32, yoffset int32, width int32, height int32, format uint32, xtype uint32, pixels []byte) {
-	arr := tmpUint8ArrayFromUint8Slice(len(pixels), pixels)
+	arr := tmpUint8ArrayFromSlice(len(pixels), pixels)
 	// void texSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
 	//                    GLsizei width, GLsizei height,
 	//                    GLenum format, GLenum type, ArrayBufferView pixels, srcOffset);

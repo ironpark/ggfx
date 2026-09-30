@@ -18,9 +18,9 @@ import (
 	"image"
 	"math"
 	"slices"
-	"sync"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/pool"
 	"github.com/ironpark/ggfx/text/v2/internal/textutil"
 	"github.com/ironpark/ggfx/vector"
 )
@@ -70,8 +70,8 @@ type LayoutOptions struct {
 	SecondaryAlign Align
 }
 
-var theDrawGlyphsPool = sync.Pool{
-	New: func() any {
+var theDrawGlyphsPool = pool.Pool[*[]LazyGlyph]{
+	New: func() *[]LazyGlyph {
 		// 64 is an arbitrary number for the initial capacity.
 		s := make([]LazyGlyph, 0, 64)
 		// Return a pointer instead of a slice, or go-vet warns at Put.
@@ -90,8 +90,8 @@ type drawGlyphEntry struct {
 	colored bool
 }
 
-var theDrawGlyphEntriesPool = sync.Pool{
-	New: func() any {
+var theDrawGlyphEntriesPool = pool.Pool[*[]drawGlyphEntry]{
+	New: func() *[]drawGlyphEntry {
 		s := make([]drawGlyphEntry, 0, 64)
 		return &s
 	},
@@ -148,7 +148,7 @@ func Draw(dst *ggfx.Image, text string, face Face, options *DrawOptions) {
 	geoM := drawOp.GeoM
 	dstBounds := dst.Bounds()
 
-	glyphs := theDrawGlyphsPool.Get().(*[]LazyGlyph)
+	glyphs := theDrawGlyphsPool.Get()
 	defer func() {
 		// Clear the content to avoid memory leaks.
 		// The capacity is kept so that the next call to Draw can reuse it.
@@ -157,7 +157,7 @@ func Draw(dst *ggfx.Image, text string, face Face, options *DrawOptions) {
 	}()
 	*glyphs = appendLazyGlyphs((*glyphs)[:0], text, face, 0, 0, &layoutOp, keepGlyphFilter(face, geoM, dstBounds))
 
-	entries := theDrawGlyphEntriesPool.Get().(*[]drawGlyphEntry)
+	entries := theDrawGlyphEntriesPool.Get()
 	defer func() {
 		*entries = slices.Delete(*entries, 0, len(*entries))
 		theDrawGlyphEntriesPool.Put(entries)
@@ -300,7 +300,7 @@ func transformedRectOverlaps(geoM ggfx.GeoM, rect, dst image.Rectangle) bool {
 //
 // AppendGlyphs is concurrent-safe.
 func AppendGlyphs(glyphs []Glyph, text string, face Face, options *LayoutOptions) []Glyph {
-	lazyBufP := theAppendGlyphsLazyBufPool.Get().(*[]LazyGlyph)
+	lazyBufP := theAppendGlyphsLazyBufPool.Get()
 	lazyBuf := (*lazyBufP)[:0]
 	defer func() {
 		*lazyBufP = slices.Delete(lazyBuf, 0, len(lazyBuf))
@@ -370,8 +370,8 @@ func appendLazyGlyphs(glyphs []LazyGlyph, text string, face Face, x, y float64, 
 	return glyphs
 }
 
-var theAppendGlyphsLazyBufPool = sync.Pool{
-	New: func() any {
+var theAppendGlyphsLazyBufPool = pool.Pool[*[]LazyGlyph]{
+	New: func() *[]LazyGlyph {
 		s := make([]LazyGlyph, 0, 64)
 		return &s
 	},

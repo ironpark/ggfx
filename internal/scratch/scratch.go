@@ -1,4 +1,4 @@
-// Copyright 2019 The Ebiten Authors
+// Copyright 2026 The ggfx Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package gl
+// Package scratch provides helpers for reusable temporary buffers.
+package scratch
 
-import (
-	"runtime"
-	"syscall/js"
-	"unsafe"
-)
-
-type numeric interface {
-	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr | ~float32 | ~float64
-}
-
-func copySliceToTemporaryArrayBuffer[T numeric](src []T) {
-	if len(src) == 0 {
-		return
+// Resize returns a slice of length n backed by s's array when it is big enough.
+// Otherwise it allocates a new slice without copying s's contents,
+// so it is only for buffers whose contents need not be preserved.
+func Resize[T any](s []T, n int) []T {
+	if cap(s) >= n {
+		return s[:n]
 	}
-	js.CopyBytesToJS(tmpUint8Array, unsafe.Slice((*byte)(unsafe.Pointer(&src[0])), len(src)*int(unsafe.Sizeof(T(0)))))
-	runtime.KeepAlive(src)
+	return make([]T, n)
 }

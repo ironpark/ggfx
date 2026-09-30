@@ -47,7 +47,7 @@ func NewGamepadForTest(sdlID string) *Gamepad {
 
 // SetReportForTest replaces the gamepad's raw state with one report, as an update from a device does.
 func (g *Gamepad) SetReportForTest(axes []float64, buttons []bool, hats []int) {
-	withNative(g, func(n *nativeGamepadForTest) {
+	g.withNative(func(n *nativeGamepadForTest) {
 		n.axes = append(n.axes[:0], axes...)
 		n.buttons = append(n.buttons[:0], buttons...)
 		n.hats = append(n.hats[:0], hats...)

@@ -1,4 +1,4 @@
-// Copyright 2019 The Ebiten Authors
+// Copyright 2026 The ggfx Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package gl
+package scratch_test
 
 import (
-	"runtime"
-	"syscall/js"
-	"unsafe"
+	"testing"
+
+	"github.com/ironpark/ggfx/internal/scratch"
 )
 
-type numeric interface {
-	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr | ~float32 | ~float64
-}
-
-func copySliceToTemporaryArrayBuffer[T numeric](src []T) {
-	if len(src) == 0 {
-		return
+func TestResize(t *testing.T) {
+	s := make([]int, 2, 8)
+	got := scratch.Resize(s, 6)
+	if len(got) != 6 || &got[0] != &s[0] {
+		t.Errorf("Resize within capacity must reuse the array")
 	}
-	js.CopyBytesToJS(tmpUint8Array, unsafe.Slice((*byte)(unsafe.Pointer(&src[0])), len(src)*int(unsafe.Sizeof(T(0)))))
-	runtime.KeepAlive(src)
+	got = scratch.Resize(s, 9)
+	if len(got) != 9 || &got[0] == &s[0] {
+		t.Errorf("Resize beyond capacity must allocate")
+	}
 }

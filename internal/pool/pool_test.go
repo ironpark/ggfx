@@ -1,4 +1,4 @@
-// Copyright 2019 The Ebiten Authors
+// Copyright 2026 The ggfx Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package gl
+package pool_test
 
 import (
-	"runtime"
-	"syscall/js"
-	"unsafe"
+	"testing"
+
+	"github.com/ironpark/ggfx/internal/pool"
 )
 
-type numeric interface {
-	~int | ~int8 | ~int16 | ~int32 | ~int64 | ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr | ~float32 | ~float64
-}
-
-func copySliceToTemporaryArrayBuffer[T numeric](src []T) {
-	if len(src) == 0 {
-		return
+func TestPoolNew(t *testing.T) {
+	var created int
+	p := pool.Pool[*[]int]{
+		New: func() *[]int {
+			created++
+			s := make([]int, 0, 4)
+			return &s
+		},
 	}
-	js.CopyBytesToJS(tmpUint8Array, unsafe.Slice((*byte)(unsafe.Pointer(&src[0])), len(src)*int(unsafe.Sizeof(T(0)))))
-	runtime.KeepAlive(src)
+	s := p.Get()
+	if s == nil || cap(*s) != 4 {
+		t.Fatalf("Get() = %v, want a new slice of capacity 4", s)
+	}
+	if created != 1 {
+		t.Errorf("created = %d, want 1", created)
+	}
+	p.Put(s)
+	_ = p.Get()
 }

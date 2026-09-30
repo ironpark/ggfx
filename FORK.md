@@ -13,6 +13,7 @@ engine and does not track Ebitengine releases.
 | Forked at | tag `v2.10.2`, commit `221aa13ad` |
 | Upstream remote | `upstream` (kept for cherry-picks) |
 | License | Apache-2.0, unchanged. See `LICENSE` and `NOTICE.md`. |
+| Go | 1.27 or later; the fork uses generic methods. |
 
 The module path is `github.com/ironpark/ggfx` and the root package is
 `ggfx`. Everything else keeps its upstream file layout so that upstream
@@ -178,6 +179,23 @@ kept close to upstream: `internal/graphicsdriver` (except the shader files),
 `text/v2`, `vector` (except the stencil shaders). The shader stack, the
 windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 `input.go`) diverge and are not expected to merge.
+
+## Generic draw methods and uniform blocks
+
+`DrawTriangles` and `DrawTrianglesShader` take `[]uint16` or `[]uint32`
+indices through a type parameter, which needs Go 1.27's generic methods.
+uint32 indices are passed on without the conversion `DrawTriangles` does
+for uint16. `DrawTriangles32` and `DrawTrianglesShader32` remain as
+deprecated wrappers. A `nil` index slice needs the type spelled out, as in
+`DrawTriangles[uint16]`.
+
+`Shader.NewUniforms` returns a `Uniforms` block that the draw options take
+as `UniformBlock`, beside the `Uniforms` map. Its generic setters write
+values in the shader's layout ahead of the draw, so a draw skips the map
+lookups and the reflection. See `docs/shaders.md`.
+
+These change `image.go` and the shader files, so upstream commits to them
+no longer merge cleanly.
 
 ## Windows and the event loop
 

@@ -64,6 +64,38 @@ variable's name.
 `bool` is not a host-shareable WGSL type; use `i32` or `u32` and pass a Go
 bool, which becomes 0 or 1.
 
+### Uniform blocks
+
+A draw repeated every frame can fill a `Uniforms` block instead of a map.
+`Shader.NewUniforms` returns a zeroed block laid out as the shader reads it,
+and its setters write each value into it at once, so a draw neither builds
+a map nor reflects on its values.
+
+```go
+u := s.NewUniforms()
+u.SetSlice("center", []float32{8, 8})
+u.Set("radius", float32(6))
+u.SetSlice("tint", []float32{1, 0, 0, 1})
+
+op := &ggfx.DrawRectShaderOptions{UniformBlock: u}
+op.Images[0] = img
+dst.DrawRectShader(16, 16, s, op)
+```
+
+`Set` takes one scalar, `SetSlice` a flattened slice as above, and
+`SetBool` a Go bool. The scalar types are `int`, `int32`, `uint32`,
+`float32` and `float64`, converted as the map converts them. A block
+differs from the map in these ways:
+
+- A value stays in the block until it is set again or `Reset` is called.
+  A member never set is zero.
+- A name the shader does not declare panics, since the block belongs to
+  one shader. Drawing with another shader's block panics too.
+- Specifying both `Uniforms` and `UniformBlock` panics.
+
+A draw copies the block before it returns, so the block may be changed for
+the next draw right away. A block is not safe for concurrent use.
+
 ## Source images
 
 Up to four source images are bound. Positions are in pixels of the texture

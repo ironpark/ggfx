@@ -45,25 +45,25 @@ fn fragment(v: Vertex) -> vec4f {
 		{
 			name: "FillRule",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{FillRule: ggfx.FillRuleNonZero})
+				dst.DrawTriangles(vs, is, src, &ggfx.DrawTrianglesOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "AntiAlias",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
+				dst.DrawTriangles(vs, is, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
 			},
 		},
 		{
 			name: "ShaderFillRule",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{FillRule: ggfx.FillRuleNonZero})
+				dst.DrawTrianglesShader(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "ShaderAntiAlias",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
+				dst.DrawTrianglesShader(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
 			},
 		},
 	} {
@@ -93,13 +93,13 @@ fn fragment(v: Vertex) -> vec4f {
 		{
 			name: "DrawTriangles",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTriangles32(nil, []uint32{0}, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
+				dst.DrawTriangles(nil, []uint32{0}, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
 			},
 		},
 		{
 			name: "DrawTrianglesShader",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTrianglesShader32(nil, []uint32{0}, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
+				dst.DrawTrianglesShader(nil, []uint32{0}, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
 			},
 		},
 	} {
@@ -164,13 +164,13 @@ fn fragment(v: Vertex) -> vec4f {
 
 	dt := func(options *ggfx.DrawTrianglesOptions) func(*ggfx.Image, int, int) {
 		return func(dst *ggfx.Image, ox, oy int) {
-			dst.DrawTriangles32(vertices(ox, oy), is, whiteSubImage, options)
+			dst.DrawTriangles(vertices(ox, oy), is, whiteSubImage, options)
 		}
 	}
 	dts := func(options *ggfx.DrawTrianglesShaderOptions) func(*ggfx.Image, int, int) {
 		return func(dst *ggfx.Image, ox, oy int) {
 			options.Images[0] = whiteSubImage
-			dst.DrawTrianglesShader32(vertices(ox, oy), is, shader, options)
+			dst.DrawTrianglesShader(vertices(ox, oy), is, shader, options)
 		}
 	}
 
@@ -397,25 +397,25 @@ fn fragment(v: Vertex) -> vec4f {
 		{
 			name: "FillRule",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{FillRule: ggfx.FillRuleNonZero})
+				dst.DrawTriangles(vs, is, src, &ggfx.DrawTrianglesOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "AntiAlias",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTriangles32(vs, is, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
+				dst.DrawTriangles(vs, is, src, &ggfx.DrawTrianglesOptions{AntiAlias: true})
 			},
 		},
 		{
 			name: "ShaderFillRule",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{FillRule: ggfx.FillRuleNonZero})
+				dst.DrawTrianglesShader(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{FillRule: ggfx.FillRuleNonZero})
 			},
 		},
 		{
 			name: "ShaderAntiAlias",
 			draw: func(dst *ggfx.Image) {
-				dst.DrawTrianglesShader32(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
+				dst.DrawTrianglesShader(vs, is, shader, &ggfx.DrawTrianglesShaderOptions{AntiAlias: true})
 			},
 		},
 	} {

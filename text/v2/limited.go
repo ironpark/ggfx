@@ -16,9 +16,9 @@ package text
 
 import (
 	"slices"
-	"sync"
 	"unicode/utf8"
 
+	"github.com/ironpark/ggfx/internal/pool"
 	"github.com/ironpark/ggfx/text/v2/internal/textutil"
 	"github.com/ironpark/ggfx/vector"
 )
@@ -97,7 +97,7 @@ func (l *LimitedFace) appendLazyGlyphsForLine(glyphs []LazyGlyph, line string, i
 	// The appended glyphs' indices are indices in filtered, not in line, so
 	// they have to be translated back (see limitedFilterMapping).
 	// The buffer is pooled for this is in the text rendering hot path.
-	mappingP := theLimitedFilterMappingPool.Get().(*[]int)
+	mappingP := theLimitedFilterMappingPool.Get()
 	var mapping []int
 	defer func() {
 		*mappingP = mapping[:0]
@@ -116,8 +116,8 @@ func (l *LimitedFace) appendLazyGlyphsForLine(glyphs []LazyGlyph, line string, i
 	return glyphs
 }
 
-var theLimitedFilterMappingPool = sync.Pool{
-	New: func() any {
+var theLimitedFilterMappingPool = pool.Pool[*[]int]{
+	New: func() *[]int {
 		// 64 is an arbitrary number for the initial capacity.
 		s := make([]int, 0, 64)
 		// Return a pointer instead of a slice, or go-vet warns at Put.

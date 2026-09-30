@@ -695,6 +695,15 @@ func BenchmarkDrawImage(b *testing.B) {
 }
 
 func BenchmarkDrawTriangles(b *testing.B) {
+	benchmarkDrawTriangles(b, []uint16{0, 1, 2, 1, 2, 3})
+}
+
+// BenchmarkDrawTrianglesUint32 checks that uint32 indices are passed without a conversion.
+func BenchmarkDrawTrianglesUint32(b *testing.B) {
+	benchmarkDrawTriangles(b, []uint32{0, 1, 2, 1, 2, 3})
+}
+
+func benchmarkDrawTriangles[I ggfx.Index](b *testing.B, is []I) {
 	const w, h = 16, 16
 	img0 := ggfx.NewImage(w, h)
 	img1 := ggfx.NewImage(w, h)
@@ -741,7 +750,7 @@ func BenchmarkDrawTriangles(b *testing.B) {
 			ColorA: 1,
 		},
 	}
-	is := []uint16{0, 1, 2, 1, 2, 3}
+	b.ReportAllocs()
 	for range b.N {
 		img0.DrawTriangles(vs, is, img1, op)
 	}
@@ -4298,7 +4307,7 @@ func TestImageDrawTriangles32WithGreaterIndexThanVerticesCount(t *testing.T) {
 
 	vs := make([]ggfx.Vertex, 4)
 	is := []uint32{0, 1, 2, 1, 2, math.MaxUint32}
-	dst.DrawTriangles32(vs, is, src, nil)
+	dst.DrawTriangles(vs, is, src, nil)
 }
 
 func TestImageDrawTrianglesShader32WithGreaterIndexThanVerticesCount(t *testing.T) {
@@ -4321,7 +4330,7 @@ func TestImageDrawTrianglesShader32WithGreaterIndexThanVerticesCount(t *testing.
 	if err != nil {
 		t.Fatalf("could not compile shader: %v", err)
 	}
-	dst.DrawTrianglesShader32(vs, is, shader, nil)
+	dst.DrawTrianglesShader(vs, is, shader, nil)
 }
 
 // Issue #2733
@@ -4524,7 +4533,7 @@ func TestImageDrawTriangles32(t *testing.T) {
 	}
 	is := []uint32{0, 1, 2, 1, 2, 3}
 	op := &ggfx.DrawTrianglesOptions{}
-	dst.DrawTriangles32(vs, is, src, op)
+	dst.DrawTriangles(vs, is, src, op)
 	// Even if the indices are modified, this should not affect the rendering result.
 	for i := range is {
 		is[i] = 0
@@ -4601,7 +4610,7 @@ fn fragment(v: Vertex) -> vec4f {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst.DrawTrianglesShader32(vs, is, shader, op)
+	dst.DrawTrianglesShader(vs, is, shader, op)
 	// Even if the indices are modified, this should not affect the rendering result.
 	for i := range is {
 		is[i] = 0
@@ -4843,13 +4852,13 @@ fn fragment(v: Vertex) -> vec4f {
 
 	drawTrianglesShaderWithDisposedShader := func(options *ggfx.DrawTrianglesShaderOptions) func(*ggfx.Image) {
 		return func(dst *ggfx.Image) {
-			dst.DrawTrianglesShader32(vs, is, disposedShader, options)
+			dst.DrawTrianglesShader(vs, is, disposedShader, options)
 		}
 	}
 	drawTrianglesShaderWithDisposedImage := func(options *ggfx.DrawTrianglesShaderOptions) func(*ggfx.Image) {
 		return func(dst *ggfx.Image) {
 			options.Images[0] = disposedImage
-			dst.DrawTrianglesShader32(vs, is, shader, options)
+			dst.DrawTrianglesShader(vs, is, shader, options)
 		}
 	}
 

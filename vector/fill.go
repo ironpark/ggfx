@@ -24,6 +24,7 @@ import (
 	"weak"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/pool"
 )
 
 // FillRule is the rule whether an overlapped region is rendered or not.
@@ -47,8 +48,8 @@ var (
 	// When a destination image is collected before being used again, releaseFillPathsState removes the entries.
 	theCallbackTokens      = map[weak.Pointer[ggfx.Image]]int64{}
 	theFillPathsStates     = map[weak.Pointer[ggfx.Image]]*fillPathsState{}
-	theFillPathsStatesPool = sync.Pool{
-		New: func() any {
+	theFillPathsStatesPool = pool.Pool[*fillPathsState]{
+		New: func() *fillPathsState {
 			return &fillPathsState{}
 		},
 	}
@@ -104,7 +105,7 @@ func FillPath(dst *ggfx.Image, path *Path, fillOptions *FillOptions, drawPathOpt
 
 	s, ok := theFillPathsStates[key]
 	if !ok {
-		s = theFillPathsStatesPool.Get().(*fillPathsState)
+		s = theFillPathsStatesPool.Get()
 		theFillPathsStates[key] = s
 		s.cleanup = runtime.AddCleanup(dst, releaseFillPathsState, key)
 	}
@@ -465,7 +466,7 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 			if err != nil {
 				panic(fmt.Sprintf("vector: failed to create stencil buffer shader: %v", err))
 			}
-			stencilBufferImage.DrawTrianglesShader32(vs, is, shader, op)
+			stencilBufferImage.DrawTrianglesShader(vs, is, shader, op)
 		}
 	}
 
@@ -541,7 +542,7 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 			if err != nil {
 				panic(fmt.Sprintf("vector: failed to create stencil buffer bezier shader: %v", err))
 			}
-			stencilBufferImage.DrawTrianglesShader32(vs, is, shader, op)
+			stencilBufferImage.DrawTrianglesShader(vs, is, shader, op)
 		}
 	}
 
@@ -650,7 +651,7 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 			dst2 = dst.RecyclableSubImage(f.bounds[i])
 			recycle = true
 		}
-		dst2.DrawTrianglesShader32(vs, is, shader, op)
+		dst2.DrawTrianglesShader(vs, is, shader, op)
 		if recycle {
 			dst2.Recycle()
 		}

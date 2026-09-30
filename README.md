@@ -14,6 +14,8 @@ brought in.
 
 ## Platforms
 
+ggfx requires Go 1.27 or later, and so macOS 13 Ventura or later.
+
 - macOS: Metal, OpenGL
 - Windows: DirectX 11/12 (feature level 11.0), OpenGL
 - Linux, FreeBSD, NetBSD, OpenBSD: OpenGL (requires cgo for glfw)

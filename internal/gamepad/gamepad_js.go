@@ -92,7 +92,7 @@ func (g *nativeGamepadsImpl) update(gamepads *gamepads) error {
 				mapping: gp.Get("mapping").String(),
 			}
 		}
-		withNative(gamepad, func(n *nativeGamepadImpl) {
+		gamepad.withNative(func(n *nativeGamepadImpl) {
 			n.value = gp
 		})
 	}

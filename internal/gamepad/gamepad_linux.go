@@ -298,7 +298,7 @@ func (g *nativeGamepadsImpl) update(gamepads *gamepads) error {
 			}); gp != nil {
 				// Lock the gamepad so the close cannot race with a
 				// concurrent Vibrate using the file descriptor.
-				withNative(gp, func(n *nativeGamepadImpl) {
+				gp.withNative(func(n *nativeGamepadImpl) {
 					n.close()
 				})
 				gamepads.remove(func(gamepad *Gamepad) bool {
