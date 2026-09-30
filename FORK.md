@@ -176,7 +176,9 @@ pass; Windows and wasm were cross-compiled; Linux and BSD were not built.
 Do not merge upstream wholesale. Cherry-pick fixes to the layers that are
 kept close to upstream: `internal/graphicsdriver` (except the shader files),
 `internal/graphicscommand`, `internal/atlas`, `internal/restorable`,
-`text/v2`, `vector` (except the stencil shaders). The shader stack, the
+`text/v2`, `vector` (except the stencil shaders and the batched fill in
+`fill.go` and `atlas.go`). The Metal driver's per-draw calls also diverge;
+see "Draw call cost" below. The shader stack, the
 windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 `input.go`) diverge and are not expected to merge.
 
@@ -217,6 +219,27 @@ zeroes the dwords the program cannot reach (computed from the compacted naga
 IR once per program), which is what ebiten's `FilterUniformVariables` did for
 Kage. Without it the gallery example issued seven times the draw calls, which
 WebGL feels.
+
+## Draw call cost
+
+The Metal driver calls `objc_msgSend` directly through `purego.SyscallN` for
+the calls made on every draw (`mtl/msgsend_darwin.go`), instead of
+`objc.ID.Send`, which boxes its arguments and dispatches through reflection
+at several allocations per call. On arm64 the struct arguments of
+`setViewport:` and `setScissorRect:` are passed by reference; amd64 passes
+them on the stack, so it keeps `Send` for those two. The driver also tracks
+the state set on the current render command encoder and sets only what
+changed, so the pipeline is set once per command rather than once per region.
+
+`vector.FillPath` with antialiasing drew every path to its own stencil
+sub-image once per sample: eight draws, eight more for curves, and one to
+color it. A path contained in its bounds now joins one draw per atlas image
+for each stencil pass, and paths drawn to the destination itself share the
+coloring draw. This is sound because a contained path's points lie in its
+stencil buffer and the sample offsets are under half a pixel, so no triangle
+covers a pixel center of another buffer. Clipped paths and paths drawn to a
+sub-image keep the old per-path draws. `vector/batch_test.go` checks that
+both ways render the same pixels.
 
 ## Not done yet
 

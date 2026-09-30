@@ -110,6 +110,26 @@ type imagesLocker struct {
 }
 
 func (l *imagesLocker) lock(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image) {
+	// Most draws have one source. Order the two by id as the sort below does, without sorting.
+	if onlyFirst(srcs) {
+		src := srcs[0]
+		switch {
+		case src == nil || src == dst:
+			l.imgs[0] = dst
+			l.count = 1
+		case dst.id < src.id:
+			l.imgs[0], l.imgs[1] = dst, src
+			l.count = 2
+		default:
+			l.imgs[0], l.imgs[1] = src, dst
+			l.count = 2
+		}
+		for _, img := range l.imgs[:l.count] {
+			img.mu.Lock()
+		}
+		return
+	}
+
 	l.imgs[0] = dst
 	copy(l.imgs[1:], srcs[:])
 
@@ -137,6 +157,16 @@ func (l *imagesLocker) lock(dst *Image, srcs [graphics.ShaderSrcImageCount]*Imag
 	for _, img := range imgs {
 		img.mu.Lock()
 	}
+}
+
+// onlyFirst reports whether srcs has no image but the first.
+func onlyFirst(srcs [graphics.ShaderSrcImageCount]*Image) bool {
+	for _, src := range srcs[1:] {
+		if src != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *imagesLocker) unlock() {

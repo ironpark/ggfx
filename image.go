@@ -78,6 +78,10 @@ type Image struct {
 	// usageCallbacks is valid only when the image is not a sub-image.
 	usageCallbacks map[int64]usageCallback
 
+	// usageCallbackCount is len(usageCallbacks), readable without usageCallbacksM so that a draw
+	// skips invokeUsageCallbacks's work when there are no callbacks.
+	usageCallbackCount atomic.Int32
+
 	// inUsageCallbacks reports whether the image is in usageCallbacks.
 	inUsageCallbacks atomic.Bool
 
@@ -1284,6 +1288,7 @@ func (i *Image) Dispose() {
 	i.subImageCache = nil
 	i.subImageCacheM.Unlock()
 	i.usageCallbacks = nil
+	i.usageCallbackCount.Store(0)
 }
 
 // Deallocate clears the image and deallocates the internal state of the image.
@@ -1309,6 +1314,7 @@ func (i *Image) Deallocate() {
 	i.invokeUsageCallbacks()
 	i.image.Deallocate()
 	i.usageCallbacks = nil
+	i.usageCallbackCount.Store(0)
 }
 
 // Recycle puts the Image struct back into a global pool for reuse, reducing allocations.
@@ -1334,6 +1340,7 @@ func (i *Image) Recycle() {
 	i.subImageGCLastTick = 0
 	i.atime.Store(0)
 	clear(i.usageCallbacks)
+	i.usageCallbackCount.Store(0)
 	i.recyclable = false
 
 	theImagePool.Put(i)
@@ -1600,6 +1607,7 @@ func (i *Image) addUsageCallback(callback func(image *Image)) int64 {
 	i.usageCallbacks[token] = usageCallback{
 		fn: callback,
 	}
+	i.usageCallbackCount.Store(int32(len(i.usageCallbacks)))
 	return token
 }
 
@@ -1617,6 +1625,7 @@ func (i *Image) removeUsageCallback(token int64) {
 	i.usageCallbacksM.Lock()
 	defer i.usageCallbacksM.Unlock()
 	delete(i.usageCallbacks, token)
+	i.usageCallbackCount.Store(int32(len(i.usageCallbacks)))
 }
 
 var theTmpUsageCallbackSlicePool = pool.Pool[*[]usageCallback]{
@@ -1629,6 +1638,10 @@ var theTmpUsageCallbackSlicePool = pool.Pool[*[]usageCallback]{
 func (i *Image) invokeUsageCallbacks() {
 	if i.isSubImage() {
 		i.original.invokeUsageCallbacks()
+		return
+	}
+
+	if i.usageCallbackCount.Load() == 0 {
 		return
 	}
 

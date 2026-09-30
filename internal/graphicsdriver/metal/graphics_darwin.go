@@ -52,6 +52,9 @@ type Graphics struct {
 	cb  mtl.CommandBuffer
 	rce mtl.RenderCommandEncoder
 
+	// rceState is the state set on rce. It is zero whenever rce is.
+	rceState rceState
+
 	// frame is the current frame number.
 	// frame is incremented when the screen is presented.
 	frame int64
@@ -504,7 +507,20 @@ func (g *Graphics) flushRenderCommandEncoderIfNeeded() {
 	}
 	g.rce.EndEncoding()
 	g.rce = mtl.RenderCommandEncoder{}
+	g.rceState = rceState{}
 	g.lastDst = nil
+}
+
+// rceState is the state set on a render command encoder, so that draw sets only what changed.
+// A new encoder has no textures bound, which the zero textures match.
+type rceState struct {
+	viewportWidth  int
+	viewportHeight int
+	vertexBuffer   mtl.Buffer
+	textures       [graphics.ShaderSrcImageCount]mtl.Texture
+	pipeline       mtl.RenderPipelineState
+	scissor        image.Rectangle
+	scissorSet     bool
 }
 
 func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs [graphics.ShaderSrcImageCount]*Image, indexOffset int, shader *Shader, uniforms []uint32, blend graphicsdriver.Blend) error {
@@ -552,16 +568,22 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		g.rce = g.cb.RenderCommandEncoderWithDescriptor(rpd)
 	}
 
-	w, h := dst.internalSize()
-	g.rce.SetViewport(mtl.Viewport{
-		OriginX: 0,
-		OriginY: 0,
-		Width:   float64(w),
-		Height:  float64(h),
-		ZNear:   -1,
-		ZFar:    1,
-	})
-	g.rce.SetVertexBuffer(g.vb, 0, 0)
+	st := &g.rceState
+	if w, h := dst.internalSize(); st.viewportWidth != w || st.viewportHeight != h {
+		g.rce.SetViewport(mtl.Viewport{
+			OriginX: 0,
+			OriginY: 0,
+			Width:   float64(w),
+			Height:  float64(h),
+			ZNear:   -1,
+			ZFar:    1,
+		})
+		st.viewportWidth, st.viewportHeight = w, h
+	}
+	if st.vertexBuffer != g.vb {
+		g.rce.SetVertexBuffer(g.vb, 0, 0)
+		st.vertexBuffer = g.vb
+	}
 
 	// The internal uniform block comes first, then the user's block. Both are already laid out as
 	// the shader expects. In Metal, the NDC's Y direction (upward) and the framebuffer's Y
@@ -582,28 +604,36 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	}
 
 	for i, src := range srcs {
+		var t mtl.Texture
 		if src != nil {
-			g.rce.SetFragmentTexture(src.texture, i)
-		} else {
-			g.rce.SetFragmentTexture(mtl.Texture{}, i)
+			t = src.texture
+		}
+		if st.textures[i] != t {
+			g.rce.SetFragmentTexture(t, i)
+			st.textures[i] = t
 		}
 	}
 
-	s, err := shader.RenderPipelineState(dst.colorPixelFormat(), blend, dst.screen)
+	rps, err := shader.RenderPipelineState(dst.colorPixelFormat(), blend, dst.screen)
 	if err != nil {
 		return err
 	}
-	rps := s
+	if st.pipeline != rps {
+		g.rce.SetRenderPipelineState(rps)
+		st.pipeline = rps
+	}
 
 	for _, dstRegion := range dstRegions {
-		g.rce.SetScissorRect(mtl.ScissorRect{
-			X:      dstRegion.Region.Min.X,
-			Y:      dstRegion.Region.Min.Y,
-			Width:  dstRegion.Region.Dx(),
-			Height: dstRegion.Region.Dy(),
-		})
-
-		g.rce.SetRenderPipelineState(rps)
+		if !st.scissorSet || st.scissor != dstRegion.Region {
+			g.rce.SetScissorRect(mtl.ScissorRect{
+				X:      dstRegion.Region.Min.X,
+				Y:      dstRegion.Region.Min.Y,
+				Width:  dstRegion.Region.Dx(),
+				Height: dstRegion.Region.Dy(),
+			})
+			st.scissor = dstRegion.Region
+			st.scissorSet = true
+		}
 		g.rce.DrawIndexedPrimitives(mtl.PrimitiveTypeTriangle, dstRegion.IndexCount, mtl.IndexTypeUInt32, g.ib, indexOffset*int(unsafe.Sizeof(uint32(0))))
 
 		indexOffset += dstRegion.IndexCount

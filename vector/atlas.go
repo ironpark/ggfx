@@ -29,7 +29,10 @@ type atlasRegion struct {
 }
 
 type atlas struct {
-	pathRenderingBounds         []image.Rectangle
+	pathRenderingBounds []image.Rectangle
+	// contained reports whether a path lies in its rendering bounds, which is when the path is
+	// not clipped by the destination or its bounds.
+	contained                   []bool
 	atlasRegions                []atlasRegion
 	pathIndexToAtlasRegionIndex map[int]int
 	atlasSizes                  []image.Point
@@ -59,8 +62,11 @@ func (a *atlas) setPaths(dstBounds image.Rectangle, paths []*Path, bounds []imag
 	}
 
 	a.pathRenderingBounds = slices.Grow(a.pathRenderingBounds, len(paths))[:len(paths)]
+	a.contained = slices.Grow(a.contained[:0], len(paths))[:len(paths)]
 	for i, p := range paths {
-		b := p.Bounds().Intersect(bounds[i]).Intersect(dstBounds)
+		pb := p.Bounds()
+		b := pb.Intersect(bounds[i]).Intersect(dstBounds)
+		a.contained[i] = !b.Empty() && b == pb
 		// Round up the size to 16px in order to encourage reusing sub image cache.
 		a.pathRenderingBounds[i] = image.Rectangle{
 			Min: b.Min,
@@ -168,35 +174,50 @@ func (a *atlas) setPaths(dstBounds image.Rectangle, paths []*Path, bounds []imag
 	}
 }
 
+// stencilBufferImageAt returns the stencil buffer of path i as a sub-image of its atlas image, or
+// nil if the path has no region. antialiasIndex selects one of the two halves for antialiasing.
 func (a *atlas) stencilBufferImageAt(i int, antialias bool, antialiasIndex int) *ggfx.Image {
-	idx, ok := a.pathIndexToAtlasRegionIndex[i]
+	img, b, ok := a.stencilBufferRegionAt(i, antialias, antialiasIndex)
 	if !ok {
 		return nil
 	}
+	return img.SubImage(b).(*ggfx.Image)
+}
+
+// stencilBufferRegionAt returns the atlas image of path i and the stencil buffer's bounds on it.
+// ok is false if the path has no region.
+func (a *atlas) stencilBufferRegionAt(i int, antialias bool, antialiasIndex int) (img *ggfx.Image, bounds image.Rectangle, ok bool) {
+	idx, ok := a.pathIndexToAtlasRegionIndex[i]
+	if !ok {
+		return nil, image.Rectangle{}, false
+	}
 	ar := a.atlasRegions[idx]
 	if ar.imageBounds.Empty() {
-		return nil
+		return nil, image.Rectangle{}, false
 	}
 
-	atlas := a.atlasImages[ar.imageIndex]
 	b := ar.imageBounds
 	if antialias {
 		switch antialiasIndex {
 		case 0:
-			b = image.Rectangle{
-				Min: b.Min,
-				Max: image.Pt(b.Min.X+b.Dx()/2, b.Max.Y),
-			}
+			b.Max.X = b.Min.X + b.Dx()/2
 		case 1:
-			b = image.Rectangle{
-				Min: image.Pt(b.Min.X+b.Dx()/2, b.Min.Y),
-				Max: b.Max,
-			}
+			b.Min.X += b.Dx() / 2
 		default:
 			panic("not reached")
 		}
 	}
-	return atlas.SubImage(b).(*ggfx.Image)
+	return a.atlasImages[ar.imageIndex], b, true
+}
+
+// atlasImageIndexAt returns the index of the atlas image of path i.
+func (a *atlas) atlasImageIndexAt(i int) int {
+	return a.atlasRegions[a.pathIndexToAtlasRegionIndex[i]].imageIndex
+}
+
+// isContained reports whether path i lies in its rendering bounds.
+func (a *atlas) isContained(i int) bool {
+	return a.contained[i]
 }
 
 func (a *atlas) pathRenderingPositionAt(i int) image.Point {

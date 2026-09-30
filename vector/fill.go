@@ -287,9 +287,6 @@ type fillPathsState struct {
 	colors []ggfx.ColorScale
 	bounds []image.Rectangle
 
-	vertices []ggfx.Vertex
-	indices  []uint32
-
 	antialias bool
 	blend     ggfx.Blend
 	fillRule  FillRule
@@ -338,11 +335,11 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 		panic("vector: the number of paths and colors must be the same")
 	}
 
-	vs := f.vertices[:0]
-	is := f.indices[:0]
+	vs := theVertices[:0]
+	is := theIndices[:0]
 	defer func() {
-		f.vertices = vs
-		f.indices = is
+		theVertices = vs
+		theIndices = is
 	}()
 
 	theAtlas.setPaths(dst.Bounds(), f.paths, f.bounds, f.antialias)
@@ -352,308 +349,272 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 		offsetAndColors = offsetAndColorsAA
 	}
 
-	// First, render the polygons roughly.
-	for i, path := range f.paths {
-		if path == nil {
-			continue
+	fillShader, err := ensureStencilBufferShaders()
+	if err != nil {
+		panic(fmt.Sprintf("vector: failed to create stencil buffer shader: %v", err))
+	}
+	bezierShader, err := ensureStencilBufferBezierShader()
+	if err != nil {
+		panic(fmt.Sprintf("vector: failed to create stencil buffer bezier shader: %v", err))
+	}
+
+	// First, render the polygons roughly, and second, the bezier curves, to the stencil buffers.
+	// The blending is additive, so the order of the triangles does not matter.
+	//
+	// A contained path's points are in its stencil buffer, and a sample offset moves them less than
+	// half a pixel, so its triangles cover no pixel center of another stencil buffer. The bezier
+	// triangles' control points may be farther out, but the bezier shader adds zero outside the
+	// curve, which is in the path's bounds. So the contained paths on an atlas image are rendered to
+	// the whole atlas image in one call, as if each were clipped by its stencil buffer. The other
+	// paths are clipped by their stencil buffers' bounds one by one.
+	stencilOp := &ggfx.DrawTrianglesShaderOptions{}
+	stencilOp.Blend = ggfx.BlendLighter
+	for _, bezier := range []bool{false, true} {
+		shader := fillShader
+		if bezier {
+			shader = bezierShader
 		}
 
-		for _, oac := range offsetAndColors {
-			vs = vs[:0]
-			is = is[:0]
-
-			stencilBufferImage := theAtlas.stencilBufferImageAt(i, f.antialias, oac.imageIndex)
-			if stencilBufferImage == nil {
-				continue
-			}
-			pp := theAtlas.pathRenderingPositionAt(i)
-			dstOffsetX := float32(-pp.X + stencilBufferImage.Bounds().Min.X - max(0, dst.Bounds().Min.X-pp.X))
-			dstOffsetY := float32(-pp.Y + stencilBufferImage.Bounds().Min.Y - max(0, dst.Bounds().Min.Y-pp.Y))
-
-			for i := range path.subPaths {
-				subPath := &path.subPaths[i]
-				if !subPath.isValid() {
+		for imageIndex, atlasImage := range theAtlas.atlasImages {
+			vs, is = vs[:0], is[:0]
+			for i, path := range f.paths {
+				if path == nil || !f.batchable(i) || theAtlas.atlasImageIndexAt(i) != imageIndex {
 					continue
 				}
-
-				// Add an origin point. Any position works in theory.
-				// Use the sub-path's start point. Using one of the sub-path's points can reduce triangles.
-				// Also, this point should be close to the other points and then triangle overlaps are reduced.
-				// TODO: Use a better position like the center of the sub-path.
-				originIdx := uint32(len(vs))
-				cur := subPath.start
-				vs = append(vs, ggfx.Vertex{
-					DstX:   cur.x + oac.offsetX + dstOffsetX,
-					DstY:   cur.y + oac.offsetY + dstOffsetY,
-					ColorR: oac.colorR,
-					ColorG: oac.colorG,
-					ColorB: oac.colorB,
-					ColorA: oac.colorA,
-				})
-
-				for _, op := range subPath.ops {
-					switch op.typ {
-					case opTypeLineTo:
-						idx := uint32(len(vs))
-						vs = append(vs,
-							ggfx.Vertex{
-								DstX:   cur.x + oac.offsetX + dstOffsetX,
-								DstY:   cur.y + oac.offsetY + dstOffsetY,
-								ColorR: oac.colorR,
-								ColorG: oac.colorG,
-								ColorB: oac.colorB,
-								ColorA: oac.colorA,
-							},
-							ggfx.Vertex{
-								DstX:   op.p1.x + oac.offsetX + dstOffsetX,
-								DstY:   op.p1.y + oac.offsetY + dstOffsetY,
-								ColorR: oac.colorR,
-								ColorG: oac.colorG,
-								ColorB: oac.colorB,
-								ColorA: oac.colorA,
-							})
-						is = append(is, idx, originIdx, idx+1)
-						cur = op.p1
-					case opTypeQuadTo:
-						idx := uint32(len(vs))
-						vs = append(vs,
-							ggfx.Vertex{
-								DstX:   cur.x + oac.offsetX + dstOffsetX,
-								DstY:   cur.y + oac.offsetY + dstOffsetY,
-								ColorR: oac.colorR,
-								ColorG: oac.colorG,
-								ColorB: oac.colorB,
-								ColorA: oac.colorA,
-							},
-							ggfx.Vertex{
-								DstX:   op.p2.x + oac.offsetX + dstOffsetX,
-								DstY:   op.p2.y + oac.offsetY + dstOffsetY,
-								ColorR: oac.colorR,
-								ColorG: oac.colorG,
-								ColorB: oac.colorB,
-								ColorA: oac.colorA,
-							})
-						is = append(is, idx, originIdx, idx+1)
-						cur = op.p2
+				for _, oac := range offsetAndColors {
+					_, b, ok := theAtlas.stencilBufferRegionAt(i, f.antialias, oac.imageIndex)
+					if !ok {
+						continue
 					}
-				}
-				// If the sub-path is not closed, add a supplementary line.
-				if !subPath.closed {
-					idx := uint32(len(vs))
-					vs = append(vs,
-						ggfx.Vertex{
-							DstX:   cur.x + oac.offsetX + dstOffsetX,
-							DstY:   cur.y + oac.offsetY + dstOffsetY,
-							ColorR: oac.colorR,
-							ColorG: oac.colorG,
-							ColorB: oac.colorB,
-							ColorA: oac.colorA,
-						},
-						ggfx.Vertex{
-							DstX:   subPath.start.x + oac.offsetX + dstOffsetX,
-							DstY:   subPath.start.y + oac.offsetY + dstOffsetY,
-							ColorR: oac.colorR,
-							ColorG: oac.colorG,
-							ColorB: oac.colorB,
-							ColorA: oac.colorA,
-						})
-					is = append(is, idx, originIdx, idx+1)
+					dx, dy := stencilOffset(dst, i, b)
+					vs, is = appendStencilTriangles(vs, is, path, oac, dx, dy, bezier)
 				}
 			}
-			op := &ggfx.DrawTrianglesShaderOptions{}
-			op.Blend = ggfx.BlendLighter
-			shader, err := ensureStencilBufferShaders()
-			if err != nil {
-				panic(fmt.Sprintf("vector: failed to create stencil buffer shader: %v", err))
+			f.drawTrianglesShader(atlasImage, vs, is, shader, stencilOp)
+		}
+
+		for i, path := range f.paths {
+			if path == nil || f.batchable(i) {
+				continue
 			}
-			stencilBufferImage.DrawTrianglesShader(vs, is, shader, op)
+			for _, oac := range offsetAndColors {
+				stencilBufferImage := theAtlas.stencilBufferImageAt(i, f.antialias, oac.imageIndex)
+				if stencilBufferImage == nil {
+					continue
+				}
+				dx, dy := stencilOffset(dst, i, stencilBufferImage.Bounds())
+				vs, is = appendStencilTriangles(vs[:0], is[:0], path, oac, dx, dy, bezier)
+				f.drawTrianglesShader(stencilBufferImage, vs, is, shader, stencilOp)
+			}
 		}
 	}
 
-	// Second, render the bezier curves.
-	for i, path := range f.paths {
-		if path == nil {
-			continue
+	// Render the stencil buffers with the specified colors.
+	var coverShader *ggfx.Shader
+	switch f.fillRule {
+	case FillRuleNonZero:
+		coverShader, err = ensureStencilBufferNonZeroShader(f.antialias)
+		if err != nil {
+			panic(fmt.Sprintf("vector: failed to create stencil buffer non-zero shader: %v", err))
 		}
-
-		for _, oac := range offsetAndColors {
-			vs = vs[:0]
-			is = is[:0]
-
-			stencilBufferImage := theAtlas.stencilBufferImageAt(i, f.antialias, oac.imageIndex)
-			if stencilBufferImage == nil {
-				continue
-			}
-			pp := theAtlas.pathRenderingPositionAt(i)
-			dstOffsetX := float32(-pp.X + stencilBufferImage.Bounds().Min.X - max(0, dst.Bounds().Min.X-pp.X))
-			dstOffsetY := float32(-pp.Y + stencilBufferImage.Bounds().Min.Y - max(0, dst.Bounds().Min.Y-pp.Y))
-			for i := range path.subPaths {
-				subPath := &path.subPaths[i]
-				if !subPath.isValid() {
-					continue
-				}
-
-				cur := subPath.start
-				for _, op := range subPath.ops {
-					switch op.typ {
-					case opTypeLineTo:
-						cur = op.p1
-					case opTypeQuadTo:
-						idx := uint32(len(vs))
-						vs = append(vs,
-							ggfx.Vertex{
-								DstX:    cur.x + oac.offsetX + dstOffsetX,
-								DstY:    cur.y + oac.offsetY + dstOffsetY,
-								ColorR:  oac.colorR,
-								ColorG:  oac.colorG,
-								ColorB:  oac.colorB,
-								ColorA:  oac.colorA,
-								Custom0: 0, // u for Loop-Blinn algorithm
-								Custom1: 0, // v for Loop-Blinn algorithm
-							},
-							ggfx.Vertex{
-								DstX:    op.p1.x + oac.offsetX + dstOffsetX,
-								DstY:    op.p1.y + oac.offsetY + dstOffsetY,
-								ColorR:  oac.colorR,
-								ColorG:  oac.colorG,
-								ColorB:  oac.colorB,
-								ColorA:  oac.colorA,
-								Custom0: 0.5,
-								Custom1: 0,
-							},
-							ggfx.Vertex{
-								DstX:    op.p2.x + oac.offsetX + dstOffsetX,
-								DstY:    op.p2.y + oac.offsetY + dstOffsetY,
-								ColorR:  oac.colorR,
-								ColorG:  oac.colorG,
-								ColorB:  oac.colorB,
-								ColorA:  oac.colorA,
-								Custom0: 1,
-								Custom1: 1,
-							})
-						is = append(is, idx, idx+1, idx+2)
-						cur = op.p2
-					}
-				}
-			}
-			op := &ggfx.DrawTrianglesShaderOptions{}
-			op.Blend = ggfx.BlendLighter
-			shader, err := ensureStencilBufferBezierShader()
-			if err != nil {
-				panic(fmt.Sprintf("vector: failed to create stencil buffer bezier shader: %v", err))
-			}
-			stencilBufferImage.DrawTrianglesShader(vs, is, shader, op)
+	case FillRuleEvenOdd:
+		coverShader, err = ensureStencilBufferEvenOddShader(f.antialias)
+		if err != nil {
+			panic(fmt.Sprintf("vector: failed to create stencil buffer even-odd shader: %v", err))
 		}
 	}
+	coverOp := &ggfx.DrawTrianglesShaderOptions{}
+	coverOp.Blend = f.blend
 
-	// Render the stencil buffer with the specified color.
+	// The paths drawn to dst itself are drawn in one call while they share an atlas image. The cover
+	// shaders read the stencil buffers at absolute positions, so the whole atlas image works as the
+	// source. A path drawn to a sub-image of dst ends the batch, which keeps the paths in order.
+	vs, is = vs[:0], is[:0]
 	for i, path := range f.paths {
 		if path == nil {
 			continue
 		}
-
-		stencilImage := theAtlas.stencilBufferImageAt(i, f.antialias, 0)
-		if stencilImage == nil {
+		atlasImage, srcRegion, ok := theAtlas.stencilBufferRegionAt(i, f.antialias, 0)
+		if !ok {
 			continue
 		}
-		srcRegion := stencilImage.Bounds()
-
 		var offsetX, offsetY float32
 		if f.antialias {
-			stencilImage1 := theAtlas.stencilBufferImageAt(i, f.antialias, 1)
-			offsetX = float32(stencilImage1.Bounds().Min.X - stencilImage.Bounds().Min.X)
-			offsetY = float32(stencilImage1.Bounds().Min.Y - stencilImage.Bounds().Min.Y)
+			_, srcRegion1, _ := theAtlas.stencilBufferRegionAt(i, f.antialias, 1)
+			offsetX = float32(srcRegion1.Min.X - srcRegion.Min.X)
+			offsetY = float32(srcRegion1.Min.Y - srcRegion.Min.Y)
 		}
 
-		pp := theAtlas.pathRenderingPositionAt(i)
+		if f.bounds[i] == dst.Bounds() && !disableBatchingForTesting {
+			if coverOp.Images[0] != atlasImage {
+				f.drawTrianglesShader(dst, vs, is, coverShader, coverOp)
+				vs, is = vs[:0], is[:0]
+				coverOp.Images[0] = atlasImage
+			}
+			vs, is = f.appendCoverQuad(vs, is, dst, i, srcRegion, offsetX, offsetY)
+			continue
+		}
 
-		vs = vs[:0]
-		is = is[:0]
-		dstOffsetX := max(0, dst.Bounds().Min.X-pp.X)
-		dstOffsetY := max(0, dst.Bounds().Min.Y-pp.Y)
-		var clrR, clrG, clrB, clrA float32
-		clrR = f.colors[i].R()
-		clrG = f.colors[i].G()
-		clrB = f.colors[i].B()
-		clrA = f.colors[i].A()
-		vs = append(vs,
-			ggfx.Vertex{
-				DstX:    float32(pp.X + dstOffsetX),
-				DstY:    float32(pp.Y + dstOffsetY),
-				SrcX:    float32(srcRegion.Min.X),
-				SrcY:    float32(srcRegion.Min.Y),
-				ColorR:  clrR,
-				ColorG:  clrG,
-				ColorB:  clrB,
-				ColorA:  clrA,
-				Custom0: offsetX,
-				Custom1: offsetY,
-			},
-			ggfx.Vertex{
-				DstX:    float32(pp.X + srcRegion.Dx() + dstOffsetX),
-				DstY:    float32(pp.Y + dstOffsetY),
-				SrcX:    float32(srcRegion.Max.X),
-				SrcY:    float32(srcRegion.Min.Y),
-				ColorR:  clrR,
-				ColorG:  clrG,
-				ColorB:  clrB,
-				ColorA:  clrA,
-				Custom0: offsetX,
-				Custom1: offsetY,
-			},
-			ggfx.Vertex{
-				DstX:    float32(pp.X + dstOffsetX),
-				DstY:    float32(pp.Y + srcRegion.Dy() + dstOffsetY),
-				SrcX:    float32(srcRegion.Min.X),
-				SrcY:    float32(srcRegion.Max.Y),
-				ColorR:  clrR,
-				ColorG:  clrG,
-				ColorB:  clrB,
-				ColorA:  clrA,
-				Custom0: offsetX,
-				Custom1: offsetY,
-			},
-			ggfx.Vertex{
-				DstX:    float32(pp.X + srcRegion.Dx() + dstOffsetX),
-				DstY:    float32(pp.Y + srcRegion.Dy() + dstOffsetY),
-				SrcX:    float32(srcRegion.Max.X),
-				SrcY:    float32(srcRegion.Max.Y),
-				ColorR:  clrR,
-				ColorG:  clrG,
-				ColorB:  clrB,
-				ColorA:  clrA,
-				Custom0: offsetX,
-				Custom1: offsetY,
-			})
-		is = append(is, 0, 1, 2, 1, 2, 3)
+		f.drawTrianglesShader(dst, vs, is, coverShader, coverOp)
+		coverOp.Images[0] = nil
 
 		op := &ggfx.DrawTrianglesShaderOptions{}
 		op.Blend = f.blend
-		op.Images[0] = stencilImage
-		var shader *ggfx.Shader
-		switch f.fillRule {
-		case FillRuleNonZero:
-			var err error
-			shader, err = ensureStencilBufferNonZeroShader(f.antialias)
-			if err != nil {
-				panic(fmt.Sprintf("vector: failed to create stencil buffer non-zero shader: %v", err))
-			}
-		case FillRuleEvenOdd:
-			var err error
-			shader, err = ensureStencilBufferEvenOddShader(f.antialias)
-			if err != nil {
-				panic(fmt.Sprintf("vector: failed to create stencil buffer even-odd shader: %v", err))
-			}
-		}
+		op.Images[0] = atlasImage.SubImage(srcRegion).(*ggfx.Image)
+		vs, is = f.appendCoverQuad(vs[:0], is[:0], dst, i, srcRegion, offsetX, offsetY)
 		dst2 := dst
-		var recycle bool
 		if dst.Bounds() != f.bounds[i] {
 			dst2 = dst.RecyclableSubImage(f.bounds[i])
-			recycle = true
 		}
-		dst2.DrawTrianglesShader(vs, is, shader, op)
-		if recycle {
+		f.drawTrianglesShader(dst2, vs, is, coverShader, op)
+		if dst2 != dst {
 			dst2.Recycle()
 		}
+		vs, is = vs[:0], is[:0]
 	}
+	f.drawTrianglesShader(dst, vs, is, coverShader, coverOp)
+}
+
+// theVertices and theIndices are the buffers fillPaths reuses. A batch holds the triangles of all the
+// paths, so the buffers are shared by all the states rather than grown again for each state taken
+// from the pool. They are protected by theFillPathM.
+var (
+	theVertices []ggfx.Vertex
+	theIndices  []uint32
+)
+
+// disableBatchingForTesting makes fillPaths draw every path one by one, as it does a clipped path.
+var disableBatchingForTesting bool
+
+// theDrawCallCountForTesting counts the draw calls fillPaths makes. It is protected by theFillPathM.
+var theDrawCallCountForTesting int
+
+// batchable reports whether path i can be rendered to the whole atlas image with other paths.
+func (f *fillPathsState) batchable(i int) bool {
+	return theAtlas.isContained(i) && !disableBatchingForTesting
+}
+
+// drawTrianglesShader draws the triangles to dst, if any.
+func (f *fillPathsState) drawTrianglesShader(dst *ggfx.Image, vs []ggfx.Vertex, is []uint32, shader *ggfx.Shader, op *ggfx.DrawTrianglesShaderOptions) {
+	if len(is) == 0 {
+		return
+	}
+	theDrawCallCountForTesting++
+	dst.DrawTrianglesShader(vs, is, shader, op)
+}
+
+// stencilOffset returns the translation from the destination's coordinates of path i to its stencil
+// buffer, whose bounds on the atlas image are b.
+func stencilOffset(dst *ggfx.Image, i int, b image.Rectangle) (float32, float32) {
+	pp := theAtlas.pathRenderingPositionAt(i)
+	dx := float32(-pp.X + b.Min.X - max(0, dst.Bounds().Min.X-pp.X))
+	dy := float32(-pp.Y + b.Min.Y - max(0, dst.Bounds().Min.Y-pp.Y))
+	return dx, dy
+}
+
+// appendStencilTriangles appends the triangles of path for the sample oac, translated by (dx, dy).
+// If bezier is false, they are the triangles that fill the polygons of path roughly. If bezier is
+// true, they are the triangles of the bezier curves for the Loop-Blinn algorithm.
+func appendStencilTriangles(vs []ggfx.Vertex, is []uint32, path *Path, oac offsetAndColor, dx, dy float32, bezier bool) ([]ggfx.Vertex, []uint32) {
+	vertex := func(p point) ggfx.Vertex {
+		return ggfx.Vertex{
+			DstX:   p.x + oac.offsetX + dx,
+			DstY:   p.y + oac.offsetY + dy,
+			ColorR: oac.colorR,
+			ColorG: oac.colorG,
+			ColorB: oac.colorB,
+			ColorA: oac.colorA,
+		}
+	}
+
+	for i := range path.subPaths {
+		subPath := &path.subPaths[i]
+		if !subPath.isValid() {
+			continue
+		}
+
+		cur := subPath.start
+		if bezier {
+			for _, op := range subPath.ops {
+				switch op.typ {
+				case opTypeLineTo:
+					cur = op.p1
+				case opTypeQuadTo:
+					idx := uint32(len(vs))
+					v0, v1, v2 := vertex(cur), vertex(op.p1), vertex(op.p2)
+					// u and v for the Loop-Blinn algorithm.
+					v1.Custom0 = 0.5
+					v2.Custom0, v2.Custom1 = 1, 1
+					vs = append(vs, v0, v1, v2)
+					is = append(is, idx, idx+1, idx+2)
+					cur = op.p2
+				}
+			}
+			continue
+		}
+
+		// Add an origin point. Any position works in theory.
+		// Use the sub-path's start point. Using one of the sub-path's points can reduce triangles.
+		// Also, this point should be close to the other points and then triangle overlaps are reduced.
+		// TODO: Use a better position like the center of the sub-path.
+		originIdx := uint32(len(vs))
+		vs = append(vs, vertex(cur))
+
+		for _, op := range subPath.ops {
+			var next point
+			switch op.typ {
+			case opTypeLineTo:
+				next = op.p1
+			case opTypeQuadTo:
+				next = op.p2
+			}
+			idx := uint32(len(vs))
+			vs = append(vs, vertex(cur), vertex(next))
+			is = append(is, idx, originIdx, idx+1)
+			cur = next
+		}
+		// If the sub-path is not closed, add a supplementary line.
+		if !subPath.closed {
+			idx := uint32(len(vs))
+			vs = append(vs, vertex(cur), vertex(subPath.start))
+			is = append(is, idx, originIdx, idx+1)
+		}
+	}
+	return vs, is
+}
+
+// appendCoverQuad appends the quad that renders the stencil buffer of path i, at srcRegion on its
+// atlas image, to dst with the path's color. (offsetX, offsetY) is the offset to the second stencil
+// buffer for antialiasing.
+func (f *fillPathsState) appendCoverQuad(vs []ggfx.Vertex, is []uint32, dst *ggfx.Image, i int, srcRegion image.Rectangle, offsetX, offsetY float32) ([]ggfx.Vertex, []uint32) {
+	pp := theAtlas.pathRenderingPositionAt(i)
+	dstOffsetX := max(0, dst.Bounds().Min.X-pp.X)
+	dstOffsetY := max(0, dst.Bounds().Min.Y-pp.Y)
+	x0 := float32(pp.X + dstOffsetX)
+	y0 := float32(pp.Y + dstOffsetY)
+	x1 := float32(pp.X + srcRegion.Dx() + dstOffsetX)
+	y1 := float32(pp.Y + srcRegion.Dy() + dstOffsetY)
+	clr := f.colors[i]
+	vertex := func(dx, dy float32, sx, sy int) ggfx.Vertex {
+		return ggfx.Vertex{
+			DstX:    dx,
+			DstY:    dy,
+			SrcX:    float32(sx),
+			SrcY:    float32(sy),
+			ColorR:  clr.R(),
+			ColorG:  clr.G(),
+			ColorB:  clr.B(),
+			ColorA:  clr.A(),
+			Custom0: offsetX,
+			Custom1: offsetY,
+		}
+	}
+	idx := uint32(len(vs))
+	vs = append(vs,
+		vertex(x0, y0, srcRegion.Min.X, srcRegion.Min.Y),
+		vertex(x1, y0, srcRegion.Max.X, srcRegion.Min.Y),
+		vertex(x0, y1, srcRegion.Min.X, srcRegion.Max.Y),
+		vertex(x1, y1, srcRegion.Max.X, srcRegion.Max.Y))
+	is = append(is, idx, idx+1, idx+2, idx+1, idx+2, idx+3)
+	return vs, is
 }
