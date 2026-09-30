@@ -193,6 +193,9 @@ func (u *glfwBackend) adjustWindowPosition(x, y int, monitor *Monitor) (int, int
 	return x, y, nil
 }
 
+// withAutoreleasePool runs f; only macOS has autorelease pools.
+func withAutoreleasePool(f func()) { f() }
+
 func initialMonitorByOS() (*Monitor, error) {
 	if !ensureX11() {
 		// Assume we're on pure Wayland then.

@@ -1692,7 +1692,7 @@ func (u *glfwBackend) setWindowMousePassthrough(enabled bool) error {
 }
 
 func (u *glfwBackend) RunOnMainThread(f func()) {
-	u.mainThread.Call(f)
+	u.mainThread.Call(func() { withAutoreleasePool(f) })
 }
 
 func dipToNativePixels(x float64, scale float64) float64 {

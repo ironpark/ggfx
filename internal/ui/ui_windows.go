@@ -160,6 +160,9 @@ func (u *glfwBackend) adjustWindowPosition(x, y int, monitor *Monitor) (int, int
 	return x, y, nil
 }
 
+// withAutoreleasePool runs f; only macOS has autorelease pools.
+func withAutoreleasePool(f func()) { f() }
+
 func initialMonitorByOS() (*Monitor, error) {
 	if microsoftgdk.IsXbox() {
 		return theMonitors.primaryMonitor(), nil

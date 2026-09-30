@@ -332,6 +332,15 @@ func currentMouseLocation() (x, y int) {
 	return x, y
 }
 
+// withAutoreleasePool runs f, a function handed to RunOnMainThread, inside a
+// pool of its own. The main thread's loop has none, so without it every
+// object f autoreleases stays alive for the life of the process.
+func withAutoreleasePool(f func()) {
+	pool := cocoa.NSAutoreleasePool_new()
+	defer pool.Release()
+	f()
+}
+
 func initialMonitorByOS() (*Monitor, error) {
 	x, y := currentMouseLocation()
 

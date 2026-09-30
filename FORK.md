@@ -209,6 +209,11 @@ window and runs the tests in its first frame. The legacy `Game`/`RunGame` API
 is gone from the public surface, along with the root-level functions that
 addressed the game's primary window; `*Window` carries them per window.
 
+On macOS, `RunOnMainThread` runs each function inside an autorelease pool
+of its own. The main thread's loop has no pool around the functions it is
+handed, so without one every object they autoreleased lived as long as the
+process.
+
 ## Draw call merging
 
 The command queue merges consecutive draws that share destination, sources,
