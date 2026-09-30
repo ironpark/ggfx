@@ -336,3 +336,11 @@ func (u *UserInterface) KeyName(key Key) string {
 	}
 	return b.KeyName(key)
 }
+
+// wakeLoop makes the loop run an iteration. It does nothing before the loop runs, whose first
+// iteration dispatches the queued events anyway.
+func (u *UserInterface) wakeLoop() {
+	if b := u.runningBackend(); b != nil {
+		b.ScheduleFrame()
+	}
+}

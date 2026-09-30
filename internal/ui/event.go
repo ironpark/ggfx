@@ -106,6 +106,9 @@ type Event interface {
 // StartEvent is the first event. The app creates its windows here.
 type StartEvent struct{}
 
+// WakeEvent is delivered once for every call to Wake. It is for no window.
+type WakeEvent struct{}
+
 // FrameEvent asks the app to draw Screen, which is in physical pixels. Scale converts
 // device-independent pixels to physical pixels.
 type FrameEvent struct {
@@ -282,6 +285,7 @@ func (GamepadStandardButtonEvent) isEvent() {}
 func (GamepadStandardAxisEvent) isEvent()   {}
 
 func (StartEvent) isEvent()       {}
+func (WakeEvent) isEvent()        {}
 func (FrameEvent) isEvent()       {}
 func (ResizeEvent) isEvent()      {}
 func (FocusEvent) isEvent()       {}
@@ -293,6 +297,13 @@ func (MouseButtonEvent) isEvent() {}
 func (ScrollEvent) isEvent()      {}
 func (TouchEvent) isEvent()       {}
 func (DropEvent) isEvent()        {}
+
+// Wake queues a WakeEvent and wakes the loop, which dispatches events on every iteration
+// whether or not a window draws. It can be called from any thread.
+func (u *UserInterface) Wake() {
+	u.pushEvent(WakeEvent{})
+	u.wakeLoop()
+}
 
 // pushEvent queues an event for the app. It can be called from any thread.
 func (u *UserInterface) pushEvent(ev Event) {

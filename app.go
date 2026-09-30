@@ -87,6 +87,8 @@ func eventFromUI(ev ui.Event) Event {
 	switch ev := ev.(type) {
 	case ui.StartEvent:
 		return StartEvent{}
+	case ui.WakeEvent:
+		return WakeEvent{}
 	case ui.FrameEvent:
 		w := windowFromUI(ev.Window)
 		return FrameEvent{Window: w, Screen: w.screen, Scale: ev.Scale}
@@ -196,6 +198,10 @@ type Event interface {
 
 // StartEvent is the first event. The handler creates its windows here.
 type StartEvent struct{}
+
+// WakeEvent is delivered once for every call to [Wake]. It is for no window, and arrives
+// whether or not any window draws.
+type WakeEvent struct{}
 
 // FrameEvent asks the handler to draw Screen. Screen is in physical pixels; Scale converts
 // device-independent pixels to physical pixels. Screen is valid during the event only.
@@ -340,6 +346,7 @@ type DropEvent struct {
 }
 
 func (StartEvent) isEvent()       {}
+func (WakeEvent) isEvent()        {}
 func (FrameEvent) isEvent()       {}
 func (ResizeEvent) isEvent()      {}
 func (FocusEvent) isEvent()       {}

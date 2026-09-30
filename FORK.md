@@ -59,6 +59,12 @@ window can show it.
 An occluded window still skips the frame, which is what keeps the loop off the
 GPU when nothing can be seen.
 
+## Wake
+
+`Wake` queues a `WakeEvent`, which is for no window and is dispatched whether or not any window
+draws, so that work handed over from another goroutine reaches the handler while every window is
+hidden or covered.
+
 ## What was removed and why
 
 ggui targets desktop and the browser and uses a small part of the engine: images and

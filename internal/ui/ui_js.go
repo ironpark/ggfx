@@ -176,6 +176,11 @@ func (u *UserInterface) ScheduleFrame() {
 	u.renderingScheduled = true
 }
 
+// wakeLoop makes the next animation frame run an iteration.
+func (u *UserInterface) wakeLoop() {
+	u.ScheduleFrame()
+}
+
 func (u *UserInterface) CursorMode() CursorMode {
 	if !canvas.Truthy() {
 		return CursorModeHidden
