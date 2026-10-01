@@ -86,14 +86,6 @@ func TestShaderUniformBlock(t *testing.T) {
 	}
 	dst.DrawTrianglesShader(vs, []uint32{0, 1, 2, 1, 2, 3}, s, &ggfx.DrawTrianglesShaderOptions{UniformBlock: u})
 	check("DrawTrianglesShader", dst)
-
-	// The stencil buffer path draws the triangles again with the same options.
-	dst = ggfx.NewImage(w, h)
-	dst.DrawTrianglesShader(vs, []uint16{0, 1, 2, 1, 2, 3}, s, &ggfx.DrawTrianglesShaderOptions{
-		UniformBlock: u,
-		FillRule:     ggfx.FillRuleNonZero,
-	})
-	check("DrawTrianglesShader with FillRule", dst)
 }
 
 // TestShaderUniformBlockIsCopied checks that a draw copies the block, so that changing it after

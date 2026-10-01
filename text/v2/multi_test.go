@@ -85,8 +85,8 @@ func TestMultiFaceAdvance(t *testing.T) {
 		"a\x80b\x80c",
 	} {
 		t.Run(fmt.Sprintf("str=%q", str), func(t *testing.T) {
-			got := text.Advance(str, m)
-			want := text.Advance(str, f)
+			got := text.AdvanceAt(str, len(str), m)
+			want := text.AdvanceAt(str, len(str), f)
 			if got != want {
 				t.Errorf("got: %f, want: %f", got, want)
 			}

@@ -48,7 +48,6 @@ type goTextOutputCacheKey struct {
 	direction  Direction
 	size       float64
 	language   xlanguage.Tag
-	script     xlanguage.Script
 	variations string
 	features   string
 }

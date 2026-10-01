@@ -22,7 +22,6 @@ import (
 	"image/draw"
 	_ "image/png"
 	"math"
-	"math/rand/v2"
 	"reflect"
 	"runtime"
 	"sync"
@@ -316,32 +315,6 @@ func TestImageWritePixelsNil(t *testing.T) {
 	img := ggfx.NewImage(16, 16)
 	img.Fill(color.White)
 	img.WritePixels(nil)
-}
-
-func TestImageDispose(t *testing.T) {
-	img := ggfx.NewImage(16, 16)
-	img.Fill(color.White)
-	img.Dispose()
-
-	// The color is transparent (color.RGBA{}).
-	// Note that the value's type must be color.RGBA.
-	got := img.At(0, 0)
-	var want color.RGBA
-	if got != want {
-		t.Errorf("img.At(0, 0) got: %v, want: %v", got, want)
-	}
-}
-
-func TestImageReadPixelsDispose(t *testing.T) {
-	img := ggfx.NewImage(16, 16)
-	img.Dispose()
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("ReadPixels on a disposed image must panic")
-		}
-	}()
-	img.ReadPixels(make([]byte, 4*16*16))
 }
 
 func TestImageDeallocate(t *testing.T) {
@@ -1795,38 +1768,6 @@ func TestImageDrawTrianglesWithSubImage(t *testing.T) {
 	}
 }
 
-// Issue #823
-func TestImageAtAfterDisposingSubImage(t *testing.T) {
-	img := ggfx.NewImage(16, 16)
-	img.Set(0, 0, color.White)
-	img.SubImage(image.Rect(0, 0, 16, 16))
-	runtime.GC()
-
-	want := color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
-	want64 := color.RGBA64{R: 0xffff, G: 0xffff, B: 0xffff, A: 0xffff}
-	got := img.At(0, 0)
-	if got != want {
-		t.Errorf("At(0,0) got: %v, want: %v", got, want)
-	}
-	got = img.RGBA64At(0, 0)
-	if got != want64 {
-		t.Errorf("RGBA64At(0,0) got: %v, want: %v", got, want)
-	}
-
-	img.Set(0, 1, color.White)
-	sub := img.SubImage(image.Rect(0, 0, 16, 16)).(*ggfx.Image)
-	sub.Dispose()
-
-	got = img.At(0, 1)
-	if got != want {
-		t.Errorf("At(0,1) got: %v, want: %v", got, want64)
-	}
-	got = img.RGBA64At(0, 1)
-	if got != want64 {
-		t.Errorf("RGBA64At(0,1) got: %v, want: %v", got, want64)
-	}
-}
-
 func TestImageAtAfterDeallocateSubImage(t *testing.T) {
 	img := ggfx.NewImage(16, 16)
 	img.Set(0, 0, color.White)
@@ -2256,40 +2197,12 @@ func TestImageDrawOver(t *testing.T) {
 	}
 }
 
-func TestImageDrawDisposedImage(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("DrawImage must panic but not")
-		}
-	}()
-
-	dst := ggfx.NewImage(16, 16)
-	src := ggfx.NewImage(16, 16)
-	src.Dispose()
-	dst.DrawImage(src, nil)
-}
-
 func TestImageDrawDeallocatedImage(t *testing.T) {
 	dst := ggfx.NewImage(16, 16)
 	src := ggfx.NewImage(16, 16)
 	src.Deallocate()
 	// DrawImage must not panic.
 	dst.DrawImage(src, nil)
-}
-
-func TestImageDrawTrianglesDisposedImage(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("DrawTriangles must panic but not")
-		}
-	}()
-
-	dst := ggfx.NewImage(16, 16)
-	src := ggfx.NewImage(16, 16)
-	src.Dispose()
-	vs := make([]ggfx.Vertex, 4)
-	is := []uint16{0, 1, 2, 1, 2, 3}
-	dst.DrawTriangles(vs, is, src, nil)
 }
 
 func TestImageDrawTrianglesDeallocateImage(t *testing.T) {
@@ -2570,353 +2483,6 @@ func TestImageSubImageFill(t *testing.T) {
 				t.Errorf("dst.At(%d, %d): got: %v, want: %v", i, j, got, want)
 			}
 		}
-	}
-}
-
-func TestImageEvenOdd(t *testing.T) {
-	whiteImage := ggfx.NewImage(3, 3)
-	whiteImage.Fill(color.White)
-	emptySubImage := whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ggfx.Image)
-
-	vs0 := []ggfx.Vertex{
-		{
-			DstX: 1, DstY: 1, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-		},
-		{
-			DstX: 15, DstY: 1, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-		},
-		{
-			DstX: 1, DstY: 15, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-		},
-		{
-			DstX: 15, DstY: 15, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-		},
-	}
-	is0 := []uint16{0, 1, 2, 1, 2, 3}
-
-	vs1 := []ggfx.Vertex{
-		{
-			DstX: 2, DstY: 2, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-		},
-		{
-			DstX: 14, DstY: 2, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-		},
-		{
-			DstX: 2, DstY: 14, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-		},
-		{
-			DstX: 14, DstY: 14, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-		},
-	}
-	is1 := []uint16{4, 5, 6, 5, 6, 7}
-
-	vs2 := []ggfx.Vertex{
-		{
-			DstX: 3, DstY: 3, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-		},
-		{
-			DstX: 13, DstY: 3, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-		},
-		{
-			DstX: 3, DstY: 13, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-		},
-		{
-			DstX: 13, DstY: 13, SrcX: 1, SrcY: 1,
-			ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-		},
-	}
-	is2 := []uint16{8, 9, 10, 9, 10, 11}
-
-	// Draw all the vertices once. The even-odd rule is applied for all the vertices once.
-	dst := ggfx.NewImage(16, 16)
-	op := &ggfx.DrawTrianglesOptions{
-		FillRule: ggfx.FillRuleEvenOdd,
-	}
-	dst.DrawTriangles(append(append(vs0, vs1...), vs2...), append(append(is0, is1...), is2...), emptySubImage, op)
-	for j := range 16 {
-		for i := range 16 {
-			got := dst.At(i, j)
-			var want color.RGBA
-			switch {
-			case 3 <= i && i < 13 && 3 <= j && j < 13:
-				want = color.RGBA{B: 0xff, A: 0xff}
-			case 2 <= i && i < 14 && 2 <= j && j < 14:
-				want = color.RGBA{}
-			case 1 <= i && i < 15 && 1 <= j && j < 15:
-				want = color.RGBA{R: 0xff, A: 0xff}
-			default:
-				want = color.RGBA{}
-			}
-			if got != want {
-				t.Errorf("dst.At(%d, %d): got: %v, want: %v", i, j, got, want)
-			}
-		}
-	}
-
-	// Do the same thing but with a little shift. This confirms that the underlying stencil buffer is cleared correctly.
-	for i := range vs0 {
-		vs0[i].DstX++
-		vs0[i].DstY++
-	}
-	for i := range vs1 {
-		vs1[i].DstX++
-		vs1[i].DstY++
-	}
-	for i := range vs2 {
-		vs2[i].DstX++
-		vs2[i].DstY++
-	}
-	dst.Clear()
-	dst.DrawTriangles(append(append(vs0, vs1...), vs2...), append(append(is0, is1...), is2...), emptySubImage, op)
-	for j := range 16 {
-		for i := range 16 {
-			got := dst.At(i, j)
-			var want color.RGBA
-			switch {
-			case 4 <= i && i < 14 && 4 <= j && j < 14:
-				want = color.RGBA{B: 0xff, A: 0xff}
-			case 3 <= i && i < 15 && 3 <= j && j < 15:
-				want = color.RGBA{}
-			case 2 <= i && i < 16 && 2 <= j && j < 16:
-				want = color.RGBA{R: 0xff, A: 0xff}
-			default:
-				want = color.RGBA{}
-			}
-			if got != want {
-				t.Errorf("dst.At(%d, %d): got: %v, want: %v", i, j, got, want)
-			}
-		}
-	}
-
-	// Do the same thing but with split DrawTriangles calls. This confirms that the even-odd rule is applied for one call.
-	for i := range vs0 {
-		vs0[i].DstX--
-		vs0[i].DstY--
-	}
-	for i := range vs1 {
-		vs1[i].DstX--
-		vs1[i].DstY--
-	}
-	for i := range vs2 {
-		vs2[i].DstX--
-		vs2[i].DstY--
-	}
-	dst.Clear()
-	// Use the first indices set.
-	dst.DrawTriangles(vs0, is0, emptySubImage, op)
-	dst.DrawTriangles(vs1, is0, emptySubImage, op)
-	dst.DrawTriangles(vs2, is0, emptySubImage, op)
-	for j := range 16 {
-		for i := range 16 {
-			got := dst.At(i, j)
-			var want color.RGBA
-			switch {
-			case 3 <= i && i < 13 && 3 <= j && j < 13:
-				want = color.RGBA{B: 0xff, A: 0xff}
-			case 2 <= i && i < 14 && 2 <= j && j < 14:
-				want = color.RGBA{G: 0xff, A: 0xff}
-			case 1 <= i && i < 15 && 1 <= j && j < 15:
-				want = color.RGBA{R: 0xff, A: 0xff}
-			default:
-				want = color.RGBA{}
-			}
-			if got != want {
-				t.Errorf("dst.At(%d, %d): got: %v, want: %v", i, j, got, want)
-			}
-		}
-	}
-}
-
-func TestImageFillRule(t *testing.T) {
-	for _, fillRule := range []ggfx.FillRule{ggfx.FillRuleFillAll, ggfx.FillRuleNonZero, ggfx.FillRuleEvenOdd} {
-		var name string
-		switch fillRule {
-		case ggfx.FillRuleFillAll:
-			name = "FillAll"
-		case ggfx.FillRuleNonZero:
-			name = "NonZero"
-		case ggfx.FillRuleEvenOdd:
-			name = "EvenOdd"
-		}
-		t.Run(name, func(t *testing.T) {
-			whiteImage := ggfx.NewImage(3, 3)
-			whiteImage.Fill(color.White)
-			emptySubImage := whiteImage.SubImage(image.Rect(1, 1, 2, 2)).(*ggfx.Image)
-
-			// The outside rectangle (clockwise)
-			vs0 := []ggfx.Vertex{
-				{
-					DstX: 1, DstY: 1, SrcX: 1, SrcY: 1,
-					ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-				},
-				{
-					DstX: 15, DstY: 1, SrcX: 1, SrcY: 1,
-					ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-				},
-				{
-					DstX: 15, DstY: 15, SrcX: 1, SrcY: 1,
-					ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-				},
-				{
-					DstX: 1, DstY: 15, SrcX: 1, SrcY: 1,
-					ColorR: 1, ColorG: 0, ColorB: 0, ColorA: 1,
-				},
-			}
-			is0 := []uint16{0, 1, 2, 2, 3, 0}
-
-			// An inside rectangle (clockwise)
-			vs1 := []ggfx.Vertex{
-				{
-					DstX: 2, DstY: 2, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-				},
-				{
-					DstX: 7, DstY: 2, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-				},
-				{
-					DstX: 7, DstY: 7, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-				},
-				{
-					DstX: 2, DstY: 7, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 1, ColorB: 0, ColorA: 1,
-				},
-			}
-			is1 := []uint16{4, 5, 6, 6, 7, 4}
-
-			// An inside rectangle (counter-clockwise)
-			vs2 := []ggfx.Vertex{
-				{
-					DstX: 9, DstY: 9, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-				},
-				{
-					DstX: 14, DstY: 9, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-				},
-				{
-					DstX: 14, DstY: 14, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-				},
-				{
-					DstX: 9, DstY: 14, SrcX: 1, SrcY: 1,
-					ColorR: 0, ColorG: 0, ColorB: 1, ColorA: 1,
-				},
-			}
-			is2 := []uint16{8, 11, 10, 10, 9, 8}
-
-			// Draw all the vertices once. The even-odd rule is applied for all the vertices once.
-			dst := ggfx.NewImage(16, 16)
-			op := &ggfx.DrawTrianglesOptions{
-				FillRule: fillRule,
-			}
-			dst.DrawTriangles(append(append(vs0, vs1...), vs2...), append(append(is0, is1...), is2...), emptySubImage, op)
-			for j := range 16 {
-				for i := range 16 {
-					got := dst.At(i, j)
-					var want color.RGBA
-					switch {
-					case 2 <= i && i < 7 && 2 <= j && j < 7:
-						if fillRule != ggfx.FillRuleEvenOdd {
-							want = color.RGBA{G: 0xff, A: 0xff}
-						}
-					case 9 <= i && i < 14 && 9 <= j && j < 14:
-						if fillRule == ggfx.FillRuleFillAll {
-							want = color.RGBA{B: 0xff, A: 0xff}
-						}
-					case 1 <= i && i < 15 && 1 <= j && j < 15:
-						want = color.RGBA{R: 0xff, A: 0xff}
-					}
-					if got != want {
-						t.Errorf("dst.At(%d, %d): got: %v, want: %v", i, j, got, want)
-					}
-				}
-			}
-
-			// Do the same thing but with a little shift. This confirms that the underlying stencil buffer is cleared correctly.
-			for i := range vs0 {
-				vs0[i].DstX++
-				vs0[i].DstY++
-			}
-			for i := range vs1 {
-				vs1[i].DstX++
-				vs1[i].DstY++
-			}
-			for i := range vs2 {
-				vs2[i].DstX++
-				vs2[i].DstY++
-			}
-			dst.Clear()
-			dst.DrawTriangles(append(append(vs0, vs1...), vs2...), append(append(is0, is1...), is2...), emptySubImage, op)
-			for j := range 16 {
-				for i := range 16 {
-					got := dst.At(i, j)
-					var want color.RGBA
-					switch {
-					case 3 <= i && i < 8 && 3 <= j && j < 8:
-						if fillRule != ggfx.FillRuleEvenOdd {
-							want = color.RGBA{G: 0xff, A: 0xff}
-						}
-					case 10 <= i && i < 15 && 10 <= j && j < 15:
-						if fillRule == ggfx.FillRuleFillAll {
-							want = color.RGBA{B: 0xff, A: 0xff}
-						}
-					case 2 <= i && i < 16 && 2 <= j && j < 16:
-						want = color.RGBA{R: 0xff, A: 0xff}
-					}
-					if got != want {
-						t.Errorf("dst.At(%d, %d): got: %v, want: %v", i, j, got, want)
-					}
-				}
-			}
-
-			// Do the same thing but with split DrawTriangles calls. This confirms that fill rules are applied for one call.
-			for i := range vs0 {
-				vs0[i].DstX--
-				vs0[i].DstY--
-			}
-			for i := range vs1 {
-				vs1[i].DstX--
-				vs1[i].DstY--
-			}
-			for i := range vs2 {
-				vs2[i].DstX--
-				vs2[i].DstY--
-			}
-			dst.Clear()
-			dst.DrawTriangles(vs0, []uint16{0, 1, 2, 2, 3, 0}, emptySubImage, op)
-			dst.DrawTriangles(vs1, []uint16{0, 1, 2, 2, 3, 0}, emptySubImage, op)
-			dst.DrawTriangles(vs2, []uint16{0, 3, 2, 2, 1, 0}, emptySubImage, op)
-			for j := range 16 {
-				for i := range 16 {
-					got := dst.At(i, j)
-					var want color.RGBA
-					switch {
-					case 2 <= i && i < 7 && 2 <= j && j < 7:
-						want = color.RGBA{G: 0xff, A: 0xff}
-					case 9 <= i && i < 14 && 9 <= j && j < 14:
-						want = color.RGBA{B: 0xff, A: 0xff}
-					case 1 <= i && i < 15 && 1 <= j && j < 15:
-						want = color.RGBA{R: 0xff, A: 0xff}
-					}
-					if got != want {
-						t.Errorf("dst.At(%d, %d): got: %v, want: %v", i, j, got, want)
-					}
-				}
-			}
-		})
 	}
 }
 
@@ -3629,50 +3195,6 @@ func TestImageSetOverSet(t *testing.T) {
 	}
 }
 
-// Issue #2204
-func TestImageTooManyConstantBuffersInDirectX(t *testing.T) {
-	src := ggfx.NewImage(3, 3)
-	src.Fill(color.White)
-	src = src.SubImage(image.Rect(1, 1, 2, 2)).(*ggfx.Image)
-
-	vs := []ggfx.Vertex{
-		{
-			DstX: 0, DstY: 0, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1,
-		},
-		{
-			DstX: 16, DstY: 0, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1,
-		},
-		{
-			DstX: 0, DstY: 16, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1,
-		},
-		{
-			DstX: 16, DstY: 16, SrcX: 1, SrcY: 1,
-			ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1,
-		},
-	}
-	is := []uint16{0, 1, 2, 1, 2, 3}
-
-	dst0 := ggfx.NewImage(16, 16)
-	dst1 := ggfx.NewImage(16, 16)
-	op := &ggfx.DrawTrianglesOptions{
-		FillRule: ggfx.FillRuleEvenOdd,
-	}
-	for range 100 {
-		dst0.DrawTriangles(vs, is, src, op)
-		dst1.DrawTriangles(vs, is, src, op)
-	}
-
-	if got, want := dst0.At(0, 0), (color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}); got != want {
-		t.Errorf("got: %v, want: %v", got, want)
-	}
-	if got, want := dst1.At(0, 0), (color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}); got != want {
-		t.Errorf("got: %v, want: %v", got, want)
-	}
-}
-
 func TestImageBlendOperation(t *testing.T) {
 	const w, h = 16, 1
 	dst := ggfx.NewImage(w, h)
@@ -4081,166 +3603,6 @@ func TestImageBlendFactor(t *testing.T) {
 	}
 }
 
-func TestImageAntiAlias(t *testing.T) {
-	// This value depends on internal/ui.bigOffscreenScale. Sync this.
-	const bigOffscreenScale = 2
-
-	const w, h = 272, 208
-
-	dst0 := ggfx.NewImage(w, h)
-	dst1 := ggfx.NewImage(w, h)
-	tmp := ggfx.NewImage(w*bigOffscreenScale, h*bigOffscreenScale)
-	src := ggfx.NewImage(3, 3)
-	src.Fill(color.RGBA{R: 0x24, G: 0x3f, B: 0x6a, A: 0x88})
-
-	for _, blend := range []ggfx.Blend{
-		{}, // Default
-		ggfx.BlendClear,
-		ggfx.BlendCopy,
-		ggfx.BlendSourceOver,
-		ggfx.BlendDestinationOver,
-		ggfx.BlendXor,
-		ggfx.BlendLighter,
-	} {
-		rnd := rand.New(rand.NewPCG(0, 0))
-		max := func(x, y, z byte) byte {
-			if x >= y && x >= z {
-				return x
-			}
-			if y >= x && y >= z {
-				return y
-			}
-			return z
-		}
-
-		dstPix := make([]byte, 4*w*h)
-		for i := range w * h {
-			n := rnd.Int()
-			r, g, b := byte(n), byte(n>>8), byte(n>>16)
-			a := max(r, g, b)
-			dstPix[4*i] = r
-			dstPix[4*i+1] = g
-			dstPix[4*i+2] = b
-			dstPix[4*i+3] = a
-		}
-		dst0.WritePixels(dstPix)
-		dst1.WritePixels(dstPix)
-
-		tmp.Clear()
-
-		// Create an actual result.
-		op := &ggfx.DrawTrianglesOptions{}
-		op.Blend = blend
-		op.AntiAlias = true
-		vs0 := []ggfx.Vertex{
-			{
-				DstX:   w / 4,
-				DstY:   h / 4,
-				SrcX:   1,
-				SrcY:   1,
-				ColorR: 1,
-				ColorG: 1,
-				ColorB: 1,
-				ColorA: 1,
-			},
-			{
-				DstX:   2 * w / 4,
-				DstY:   h / 4,
-				SrcX:   2,
-				SrcY:   1,
-				ColorR: 1,
-				ColorG: 1,
-				ColorB: 1,
-				ColorA: 1,
-			},
-			{
-				DstX:   w / 4,
-				DstY:   2 * h / 4,
-				SrcX:   1,
-				SrcY:   2,
-				ColorR: 1,
-				ColorG: 1,
-				ColorB: 1,
-				ColorA: 1,
-			},
-		}
-		is := []uint16{0, 1, 2}
-		dst0.DrawTriangles(vs0, is, src, op)
-
-		vs1 := []ggfx.Vertex{
-			{
-				DstX:   2 * w / 4,
-				DstY:   3 * h / 4,
-				SrcX:   1,
-				SrcY:   2,
-				ColorR: 1,
-				ColorG: 1,
-				ColorB: 1,
-				ColorA: 1,
-			},
-			{
-				DstX:   3 * w / 4,
-				DstY:   2 * h / 4,
-				SrcX:   2,
-				SrcY:   1,
-				ColorR: 1,
-				ColorG: 1,
-				ColorB: 1,
-				ColorA: 1,
-			},
-			{
-				DstX:   3 * w / 4,
-				DstY:   3 * h / 4,
-				SrcX:   2,
-				SrcY:   2,
-				ColorR: 1,
-				ColorG: 1,
-				ColorB: 1,
-				ColorA: 1,
-			},
-		}
-		dst0.DrawTriangles(vs1, is, src, op)
-
-		// Create an expected result.
-		// Copy an enlarged destination image to the offscreen.
-		opCopy := &ggfx.DrawImageOptions{}
-		opCopy.GeoM.Scale(bigOffscreenScale, bigOffscreenScale)
-		opCopy.Blend = ggfx.BlendCopy
-		tmp.DrawImage(dst1, opCopy)
-
-		// Render the vertices onto the offscreen.
-		for i := range vs0 {
-			vs0[i].DstX *= 2
-			vs0[i].DstY *= 2
-		}
-		for i := range vs1 {
-			vs1[i].DstX *= 2
-			vs1[i].DstY *= 2
-		}
-		op = &ggfx.DrawTrianglesOptions{}
-		op.Blend = blend
-		tmp.DrawTriangles(vs0, is, src, op)
-		tmp.DrawTriangles(vs1, is, src, op)
-
-		// Render a shrunk offscreen image onto the destination.
-		opShrink := &ggfx.DrawImageOptions{}
-		opShrink.GeoM.Scale(1.0/bigOffscreenScale, 1.0/bigOffscreenScale)
-		opShrink.Filter = ggfx.FilterLinear
-		opShrink.Blend = ggfx.BlendCopy
-		dst1.DrawImage(tmp, opShrink)
-
-		for j := range h {
-			for i := range w {
-				got := dst0.At(i, j).(color.RGBA)
-				want := dst1.At(i, j).(color.RGBA)
-				if !sameColors(got, want, 2) {
-					t.Errorf("At(%d, %d), blend: %v, got: %v, want: %v", i, j, blend, got, want)
-				}
-			}
-		}
-	}
-}
-
 // Issue #2428
 func TestImageSetAndSubImage(t *testing.T) {
 	const w, h = 16, 16
@@ -4294,10 +3656,10 @@ func TestImageDrawTrianglesShaderWithGreaterIndexThanVerticesCount(t *testing.T)
 	dst.DrawTrianglesShader(vs, is, shader, nil)
 }
 
-func TestImageDrawTriangles32WithGreaterIndexThanVerticesCount(t *testing.T) {
+func TestImageDrawTrianglesUint32WithGreaterIndexThanVerticesCount(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Errorf("DrawTriangles32 must panic but not")
+			t.Errorf("DrawTriangles with uint32 indices must panic but not")
 		}
 	}()
 
@@ -4310,10 +3672,10 @@ func TestImageDrawTriangles32WithGreaterIndexThanVerticesCount(t *testing.T) {
 	dst.DrawTriangles(vs, is, src, nil)
 }
 
-func TestImageDrawTrianglesShader32WithGreaterIndexThanVerticesCount(t *testing.T) {
+func TestImageDrawTrianglesShaderUint32WithGreaterIndexThanVerticesCount(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
-			t.Errorf("DrawTrianglesShader32 must panic but not")
+			t.Errorf("DrawTrianglesShader with uint32 indices must panic but not")
 		}
 	}()
 
@@ -4355,25 +3717,6 @@ fn fragment(v: Vertex) -> vec4f {
 	dst.DrawRectShader(1, 1, s, op1)
 	if x, y := op1.GeoM.Apply(0, 0); x != 0 || y != 0 {
 		t.Errorf("got: (%0.2f, %0.2f), want: (0, 0)", x, y)
-	}
-}
-
-func TestImageWritePixelAndDispose(t *testing.T) {
-	const (
-		w = 16
-		h = 16
-	)
-	img := ggfx.NewImage(w, h)
-	pix := make([]byte, 4*w*h)
-	for i := range pix {
-		pix[i] = 0xff
-	}
-	img.WritePixels(pix)
-	img.Dispose()
-
-	// Confirm that any pixel information is invalidated after Dispose is called.
-	if got, want := img.At(0, 0), (color.RGBA{}); got != want {
-		t.Errorf("got: %v, want: %v", got, want)
 	}
 }
 
@@ -4473,7 +3816,7 @@ func TestImageInvalidPremultipliedAlphaColor(t *testing.T) {
 	}
 }
 
-func TestImageDrawTriangles32(t *testing.T) {
+func TestImageDrawTrianglesUint32(t *testing.T) {
 	const w, h = 16, 16
 	src := ggfx.NewImage(w, h)
 	dst := ggfx.NewImage(w, h)
@@ -4550,7 +3893,7 @@ func TestImageDrawTriangles32(t *testing.T) {
 	}
 }
 
-func TestImageDrawTrianglesShader32(t *testing.T) {
+func TestImageDrawTrianglesShaderUint32(t *testing.T) {
 	const w, h = 16, 16
 	dst := ggfx.NewImage(w, h)
 
@@ -4817,111 +4160,4 @@ func TestSubImageDrawImageInOppositeDirections(t *testing.T) {
 		}
 	})
 	wg.Wait()
-}
-
-// A disposed shader or a disposed source image must panic even when the destination is disposed.
-func TestImageDrawShaderWithDisposedArgumentOnDisposedDestination(t *testing.T) {
-	const w, h = 16, 16
-
-	src := []byte(`
-fn fragment(v: Vertex) -> vec4f {
-	return src0_at(v.src_pos);
-}
-`)
-
-	shader, err := ggfx.NewShader(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	disposedShader, err := ggfx.NewShader(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	disposedShader.Dispose()
-
-	disposedImage := ggfx.NewImage(w, h)
-	disposedImage.Dispose()
-
-	vs := []ggfx.Vertex{
-		{DstX: 0, DstY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-		{DstX: w, DstY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-		{DstX: 0, DstY: h, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-	}
-	is := []uint32{0, 1, 2}
-
-	drawTrianglesShaderWithDisposedShader := func(options *ggfx.DrawTrianglesShaderOptions) func(*ggfx.Image) {
-		return func(dst *ggfx.Image) {
-			dst.DrawTrianglesShader(vs, is, disposedShader, options)
-		}
-	}
-	drawTrianglesShaderWithDisposedImage := func(options *ggfx.DrawTrianglesShaderOptions) func(*ggfx.Image) {
-		return func(dst *ggfx.Image) {
-			options.Images[0] = disposedImage
-			dst.DrawTrianglesShader(vs, is, shader, options)
-		}
-	}
-
-	for _, tc := range []struct {
-		name string
-		draw func(dst *ggfx.Image)
-	}{
-		{
-			name: "DrawTrianglesShader32DisposedShader",
-			draw: drawTrianglesShaderWithDisposedShader(nil),
-		},
-		{
-			name: "DrawTrianglesShader32DisposedShaderFillRule",
-			draw: drawTrianglesShaderWithDisposedShader(&ggfx.DrawTrianglesShaderOptions{
-				FillRule: ggfx.FillRuleNonZero,
-			}),
-		},
-		{
-			name: "DrawTrianglesShader32DisposedShaderAntiAlias",
-			draw: drawTrianglesShaderWithDisposedShader(&ggfx.DrawTrianglesShaderOptions{
-				AntiAlias: true,
-			}),
-		},
-		{
-			name: "DrawTrianglesShader32DisposedImage",
-			draw: drawTrianglesShaderWithDisposedImage(&ggfx.DrawTrianglesShaderOptions{}),
-		},
-		{
-			name: "DrawTrianglesShader32DisposedImageFillRule",
-			draw: drawTrianglesShaderWithDisposedImage(&ggfx.DrawTrianglesShaderOptions{
-				FillRule: ggfx.FillRuleNonZero,
-			}),
-		},
-		{
-			name: "DrawTrianglesShader32DisposedImageAntiAlias",
-			draw: drawTrianglesShaderWithDisposedImage(&ggfx.DrawTrianglesShaderOptions{
-				AntiAlias: true,
-			}),
-		},
-		{
-			name: "DrawRectShaderDisposedShader",
-			draw: func(dst *ggfx.Image) {
-				dst.DrawRectShader(w, h, disposedShader, nil)
-			},
-		},
-		{
-			name: "DrawRectShaderDisposedImage",
-			draw: func(dst *ggfx.Image) {
-				op := &ggfx.DrawRectShaderOptions{}
-				op.Images[0] = disposedImage
-				dst.DrawRectShader(w, h, shader, op)
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dst := ggfx.NewImage(w, h)
-			dst.Dispose()
-			defer func() {
-				if r := recover(); r == nil {
-					t.Errorf("a disposed argument must panic even when the destination is disposed, but it did not")
-				}
-			}()
-			tc.draw(dst)
-		})
-	}
 }

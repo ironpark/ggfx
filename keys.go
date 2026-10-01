@@ -153,45 +153,6 @@ const (
 	KeyShift          Key = Key(ui.KeyShift)
 	KeyMeta           Key = Key(ui.KeyMeta)
 	KeyMax            Key = KeyMeta
-
-	// Keys for backward compatibility.
-	// Deprecated: as of v2.1.
-	Key0            Key = Key(ui.KeyDigit0)
-	Key1            Key = Key(ui.KeyDigit1)
-	Key2            Key = Key(ui.KeyDigit2)
-	Key3            Key = Key(ui.KeyDigit3)
-	Key4            Key = Key(ui.KeyDigit4)
-	Key5            Key = Key(ui.KeyDigit5)
-	Key6            Key = Key(ui.KeyDigit6)
-	Key7            Key = Key(ui.KeyDigit7)
-	Key8            Key = Key(ui.KeyDigit8)
-	Key9            Key = Key(ui.KeyDigit9)
-	KeyApostrophe   Key = Key(ui.KeyQuote)
-	KeyDown         Key = Key(ui.KeyArrowDown)
-	KeyGraveAccent  Key = Key(ui.KeyBackquote)
-	KeyKP0          Key = Key(ui.KeyNumpad0)
-	KeyKP1          Key = Key(ui.KeyNumpad1)
-	KeyKP2          Key = Key(ui.KeyNumpad2)
-	KeyKP3          Key = Key(ui.KeyNumpad3)
-	KeyKP4          Key = Key(ui.KeyNumpad4)
-	KeyKP5          Key = Key(ui.KeyNumpad5)
-	KeyKP6          Key = Key(ui.KeyNumpad6)
-	KeyKP7          Key = Key(ui.KeyNumpad7)
-	KeyKP8          Key = Key(ui.KeyNumpad8)
-	KeyKP9          Key = Key(ui.KeyNumpad9)
-	KeyKPAdd        Key = Key(ui.KeyNumpadAdd)
-	KeyKPDecimal    Key = Key(ui.KeyNumpadDecimal)
-	KeyKPDivide     Key = Key(ui.KeyNumpadDivide)
-	KeyKPEnter      Key = Key(ui.KeyNumpadEnter)
-	KeyKPEqual      Key = Key(ui.KeyNumpadEqual)
-	KeyKPMultiply   Key = Key(ui.KeyNumpadMultiply)
-	KeyKPSubtract   Key = Key(ui.KeyNumpadSubtract)
-	KeyLeft         Key = Key(ui.KeyArrowLeft)
-	KeyLeftBracket  Key = Key(ui.KeyBracketLeft)
-	KeyMenu         Key = Key(ui.KeyContextMenu)
-	KeyRight        Key = Key(ui.KeyArrowRight)
-	KeyRightBracket Key = Key(ui.KeyBracketRight)
-	KeyUp           Key = Key(ui.KeyArrowUp)
 )
 
 // String returns a string representing the key.
@@ -449,26 +410,6 @@ func (k Key) String() string {
 
 func keyNameToKeyCode(name string) (Key, bool) {
 	switch strings.ToLower(name) {
-	case "0":
-		return Key0, true
-	case "1":
-		return Key1, true
-	case "2":
-		return Key2, true
-	case "3":
-		return Key3, true
-	case "4":
-		return Key4, true
-	case "5":
-		return Key5, true
-	case "6":
-		return Key6, true
-	case "7":
-		return Key7, true
-	case "8":
-		return Key8, true
-	case "9":
-		return Key9, true
 	case "a":
 		return KeyA, true
 	case "b":
@@ -527,8 +468,6 @@ func keyNameToKeyCode(name string) (Key, bool) {
 		return KeyAltLeft, true
 	case "altright":
 		return KeyAltRight, true
-	case "apostrophe":
-		return KeyApostrophe, true
 	case "arrowdown":
 		return KeyArrowDown, true
 	case "arrowleft":
@@ -581,8 +520,6 @@ func keyNameToKeyCode(name string) (Key, bool) {
 		return KeyDigit8, true
 	case "digit9":
 		return KeyDigit9, true
-	case "down":
-		return KeyDown, true
 	case "end":
 		return KeyEnd, true
 	case "enter":
@@ -639,54 +576,12 @@ func keyNameToKeyCode(name string) (Key, bool) {
 		return KeyF23, true
 	case "f24":
 		return KeyF24, true
-	case "graveaccent":
-		return KeyGraveAccent, true
 	case "home":
 		return KeyHome, true
 	case "insert":
 		return KeyInsert, true
 	case "intlbackslash":
 		return KeyIntlBackslash, true
-	case "kp0":
-		return KeyKP0, true
-	case "kp1":
-		return KeyKP1, true
-	case "kp2":
-		return KeyKP2, true
-	case "kp3":
-		return KeyKP3, true
-	case "kp4":
-		return KeyKP4, true
-	case "kp5":
-		return KeyKP5, true
-	case "kp6":
-		return KeyKP6, true
-	case "kp7":
-		return KeyKP7, true
-	case "kp8":
-		return KeyKP8, true
-	case "kp9":
-		return KeyKP9, true
-	case "kpadd":
-		return KeyKPAdd, true
-	case "kpdecimal":
-		return KeyKPDecimal, true
-	case "kpdivide":
-		return KeyKPDivide, true
-	case "kpenter":
-		return KeyKPEnter, true
-	case "kpequal":
-		return KeyKPEqual, true
-	case "kpmultiply":
-		return KeyKPMultiply, true
-	case "kpsubtract":
-		return KeyKPSubtract, true
-	case "left":
-		return KeyLeft, true
-	case "leftbracket":
-		return KeyLeftBracket, true
-	case "menu":
-		return KeyMenu, true
 	case "meta":
 		return KeyMeta, true
 	case "metaleft":
@@ -743,10 +638,6 @@ func keyNameToKeyCode(name string) (Key, bool) {
 		return KeyPrintScreen, true
 	case "quote":
 		return KeyQuote, true
-	case "right":
-		return KeyRight, true
-	case "rightbracket":
-		return KeyRightBracket, true
 	case "scrolllock":
 		return KeyScrollLock, true
 	case "semicolon":
@@ -763,8 +654,6 @@ func keyNameToKeyCode(name string) (Key, bool) {
 		return KeySpace, true
 	case "tab":
 		return KeyTab, true
-	case "up":
-		return KeyUp, true
 	}
 	return 0, false
 }

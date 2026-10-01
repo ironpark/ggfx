@@ -322,20 +322,6 @@ type glyphImager interface {
 	glyphColored(index int) bool
 }
 
-// Advance returns the advanced distance from the origin position when rendering the given text with the given face.
-//
-// Advance doesn't treat multiple lines.
-//
-// Advance is concurrent-safe.
-//
-// Deprecated: as of v2.10. Use [AdvanceAt] instead. Calling Advance on a
-// prefix of a line produces incorrect results, because shaping a substring
-// in isolation can differ from shaping the full line (ligatures, contextual
-// forms, cursive joining, kerning across the boundary).
-func Advance(text string, face Face) float64 {
-	return face.advanceAt(text, len(text))
-}
-
 // AdvanceAt returns the visual distance from the line's origin to the caret
 // at indexInBytes, computed from the in-context shape of text. It is intended
 // for caret and selection positioning within a line.

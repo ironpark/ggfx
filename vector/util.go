@@ -130,13 +130,6 @@ func FillRect(dst *ggfx.Image, x, y, width, height float32, clr color.Color, ant
 	dst.DrawImage(whiteSubImage, op)
 }
 
-// DrawFilledRect fills a rectangle with the specified width and color.
-//
-// Deprecated: as of v2.9. Use [FillRect] instead.
-func DrawFilledRect(dst *ggfx.Image, x, y, width, height float32, clr color.Color, antialias bool) {
-	FillRect(dst, x, y, width, height, clr, antialias)
-}
-
 // StrokeRect strokes a rectangle with the specified width and color.
 func StrokeRect(dst *ggfx.Image, x, y, width, height float32, strokeWidth float32, clr color.Color, antialias bool) {
 	if antialias {
@@ -257,13 +250,6 @@ func FillCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antialias b
 		dst.DrawTriangles(vs, is, whiteSubImage, op)
 		return vs, is
 	})
-}
-
-// DrawFilledCircle fills a circle with the specified center position (cx, cy), the radius (r) and color.
-//
-// Deprecated: as of v2.9. Use [FillCircle] instead.
-func DrawFilledCircle(dst *ggfx.Image, cx, cy, r float32, clr color.Color, antialias bool) {
-	FillCircle(dst, cx, cy, r, clr, antialias)
 }
 
 // StrokeCircle strokes a circle with the specified center position (cx, cy), the radius (r), width and color.

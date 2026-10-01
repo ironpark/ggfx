@@ -885,13 +885,6 @@ func TestAdvanceAt(t *testing.T) {
 				t.Errorf("AdvanceAt(_, 0, _) = %v, want 0", got)
 			}
 
-			fullAt := text.AdvanceAt(tc.text, len(tc.text), tc.face)
-			//nolint:staticcheck // Advance is deprecated; this verifies parity.
-			fullAdv := text.Advance(tc.text, tc.face)
-			if math.Abs(fullAt-fullAdv) > eps {
-				t.Errorf("AdvanceAt(_, len, _) = %v, want Advance() = %v", fullAt, fullAdv)
-			}
-
 			// AdvanceAt is monotonic non-decreasing along the byte sequence.
 			// The vertical sign convention is normalized to magnitude by
 			// GoTextFace.advanceAt.
@@ -947,13 +940,8 @@ func TestAdvanceAtBidi(t *testing.T) {
 		t.Errorf("AdvanceAt(0) = %v, want 0", got)
 	}
 
-	// End-of-text equals total visual line width (Advance parity).
+	// End-of-text is the total visual line width.
 	fullAt := at(len(s))
-	//nolint:staticcheck // Advance is deprecated; this verifies parity.
-	fullAdv := text.Advance(s, face)
-	if math.Abs(fullAt-fullAdv) > eps {
-		t.Errorf("AdvanceAt(len) = %v, want Advance() = %v", fullAt, fullAdv)
-	}
 
 	// Leading LTR run "abc" grows monotonically.
 	a0, a1, a2 := at(0), at(1), at(2)
@@ -1002,11 +990,6 @@ func TestAdvanceAtBidi(t *testing.T) {
 	s2 := "abc" + "אבג"
 	at2 := func(i int) float64 { return text.AdvanceAt(s2, i, face) }
 	full2 := at2(len(s2))
-	//nolint:staticcheck // Advance is deprecated; this verifies parity.
-	full2Adv := text.Advance(s2, face)
-	if math.Abs(full2-full2Adv) > eps {
-		t.Errorf("AdvanceAt(len) at LTR-ending-in-RTL = %v, want Advance() = %v", full2, full2Adv)
-	}
 	// Leading edge of ג sits inside the line (right side of the visually
 	// leftmost RTL glyph); the end-of-text X must lie strictly past it.
 	if leadGimel := at2(7); !(full2 > leadGimel+eps) {
@@ -1093,36 +1076,6 @@ func TestAdvanceAtRTLLineUnderChunker(t *testing.T) {
 	}
 }
 
-// TestAdvanceAtRTLFaceMultiSentence exercises the chunker on an RTL
-// face. Multi-sentence Arabic resolves to all level-1 chunks; with
-// paragraphLevel=1, the chunker emits multiple sentence-cut chunks
-// (split at U+06D4 ARABIC FULL STOP) and AdvanceAt composes their
-// visual widths via L2. The end-of-line caret must agree with
-// Advance() to confirm the multi-chunk composition matches the
-// whole-line shape.
-func TestAdvanceAtRTLFaceMultiSentence(t *testing.T) {
-	const eps = 1.0 / (1 << 6)
-
-	source, err := text.NewGoTextFaceSource(bytes.NewReader(testresources.MPlus1pRegular_ttf))
-	if err != nil {
-		t.Fatal(err)
-	}
-	face := &text.GoTextFace{
-		Source:    source,
-		Size:      24,
-		Direction: text.DirectionRightToLeft,
-	}
-
-	const s = "اب۔ كد۔"
-
-	full := text.AdvanceAt(s, len(s), face)
-	//nolint:staticcheck // Advance is deprecated; this verifies parity.
-	whole := text.Advance(s, face)
-	if math.Abs(full-whole) > eps {
-		t.Errorf("AdvanceAt(_, len, RTLFace) = %v, want Advance() = %v", full, whole)
-	}
-}
-
 func TestAdvanceAtMultiFace(t *testing.T) {
 	const eps = 1.0 / (1 << 6)
 
@@ -1146,12 +1099,6 @@ func TestAdvanceAtMultiFace(t *testing.T) {
 			t.Errorf("MultiFace: AdvanceAt(_, %d, _) = %v < previous %v", i, got, prev)
 		}
 		prev = got
-	}
-	fullAt := text.AdvanceAt(str, len(str), m)
-	//nolint:staticcheck // Advance is deprecated; this verifies parity.
-	fullAdv := text.Advance(str, m)
-	if math.Abs(fullAt-fullAdv) > eps {
-		t.Errorf("MultiFace: AdvanceAt(_, len, _) = %v, want Advance() = %v", fullAt, fullAdv)
 	}
 }
 

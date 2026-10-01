@@ -107,6 +107,20 @@ monitor and window APIs. Everything outside that was dropped.
   `builtinShader` has one shader per filter and address rather than two, and
   `DrawTriangles` no longer scales every vertex colour by a matrix-derived
   factor that was always 1.
+- The rest of the deprecated API: `Image.Size`, `Dispose` (use `Deallocate`)
+  and `ReplacePixels`; `DrawTriangles32` and `DrawTrianglesShader32`; the
+  `FillRule` and `AntiAlias` draw options with `stencilbuffer.go`, which
+  emulated them (use `vector.FillPath`); `MaxIndicesCount`, `MaxIndicesNum`
+  and `MaxVerticesCount`; the pre-v2.1 key names like `KeyUp` and `KeyKP0`;
+  `vector.DrawFilledRect`, `DrawFilledCircle` and the
+  `Path.AppendVerticesAndIndicesFor*` methods with the flattening they used
+  alone; `text.Advance` (use `AdvanceAt`) and `GoTextFace.Script`, which the
+  `Language` decides.
+- `exp/textinput`'s deprecated `Field`. `Composer` is the only text-input API.
+  Its focus tracking went with it, and so did what the backends kept for a
+  focused `Field` alone: macOS's line view over the field's text, and the
+  browser's whole-value path, which sent the textarea when no session was
+  active. A platform state with no active session is now dropped.
 - Console and mobile platforms: Nintendo Switch, PlayStation 5, Xbox GDK,
   Android and iOS sources. The browser (`js`/`wasm`) target is kept. `internal/microsoftgdk`
   survives as a stub whose `IsXbox` is always false so the glfw and DirectX
@@ -187,8 +201,7 @@ windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 `DrawTriangles` and `DrawTrianglesShader` take `[]uint16` or `[]uint32`
 indices through a type parameter, which needs Go 1.27's generic methods.
 uint32 indices are passed on without the conversion `DrawTriangles` does
-for uint16. `DrawTriangles32` and `DrawTrianglesShader32` remain as
-deprecated wrappers. A `nil` index slice needs the type spelled out, as in
+for uint16. A `nil` index slice needs the type spelled out, as in
 `DrawTriangles[uint16]`.
 
 `Shader.NewUniforms` returns a `Uniforms` block that the draw options take

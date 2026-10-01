@@ -62,12 +62,6 @@ type GoTextFace struct {
 	// Language is a hint for a language (BCP 47).
 	Language language.Tag
 
-	// Script is a hint for a script code hint of (ISO 15924).
-	// If this is empty, the script is guessed from the specified language.
-	//
-	// Deprecated: as of v2.9. Use Language instead.
-	Script language.Script
-
 	variations []font.Variation
 	features   []shaping.FontFeature
 
@@ -236,7 +230,6 @@ func (g *GoTextFace) outputCacheKey(text string) goTextOutputCacheKey {
 		direction:  g.Direction,
 		size:       g.Size,
 		language:   g.Language,
-		script:     g.Script,
 		variations: g.variationsString,
 		features:   g.featuresString,
 	}
@@ -254,14 +247,8 @@ func (g *GoTextFace) diDirection() di.Direction {
 }
 
 func (g *GoTextFace) gScript() glanguage.Script {
-	var str string
-	if g.Script != (language.Script{}) {
-		str = g.Script.String()
-	} else {
-		s, _ := g.Language.Script()
-		str = s.String()
-	}
-	s, err := glanguage.ParseScript(str)
+	ls, _ := g.Language.Script()
+	s, err := glanguage.ParseScript(ls.String())
 	if err != nil {
 		panic(err)
 	}

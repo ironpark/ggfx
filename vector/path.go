@@ -203,10 +203,6 @@ func (s *subPath) endDir(index int) vec2 {
 type Path struct {
 	subPaths []subPath
 
-	// flatPaths is a cached actual rendering positions.
-	// flatPaths is used only for deprecated functions. Do not use this for new functions.
-	flatPaths []flatPath
-
 	// opsBuf is a buffer of operations, which AddStroke uses to normalize the source sub-paths.
 	opsBuf []op
 }
@@ -215,7 +211,6 @@ type Path struct {
 // Reset doesn't release the allocated memory so that the memory can be reused.
 func (p *Path) Reset() {
 	p.resetSubPaths()
-	p.resetFlatPaths()
 }
 
 func (p *Path) resetSubPaths() {
@@ -233,8 +228,6 @@ func (p *Path) addSubPaths(n int) {
 // MoveTo starts a new sub-path with the given position (x, y), without adding any line segments.
 // If the last sub-path is still empty, MoveTo updates its start position instead of adding a new one.
 func (p *Path) MoveTo(x, y float32) {
-	p.resetFlatPaths()
-
 	// Always update the start position.
 	if len(p.subPaths) == 0 || len(p.subPaths[len(p.subPaths)-1].ops) > 0 {
 		p.addSubPaths(1)
@@ -248,8 +241,6 @@ func (p *Path) MoveTo(x, y float32) {
 // If p doesn't have any sub-paths, LineTo sets (x, y) as the start position of a new sub-path.
 // If the last sub-path is closed, LineTo creates a new sub-path whose start position is the same as the closed sub-path's.
 func (p *Path) LineTo(x, y float32) {
-	p.resetFlatPaths()
-
 	if len(p.subPaths) == 0 {
 		p.addSubPaths(1)
 		p.subPaths[len(p.subPaths)-1].setStart(point{x: x, y: y})
@@ -271,8 +262,6 @@ func (p *Path) LineTo(x, y float32) {
 // QuadTo adds a quadratic Bézier curve to the path.
 // (x1, y1) is the control point, and (x2, y2) is the destination.
 func (p *Path) QuadTo(x1, y1, x2, y2 float32) {
-	p.resetFlatPaths()
-
 	if len(p.subPaths) == 0 {
 		p.addSubPaths(1)
 		p.subPaths[len(p.subPaths)-1].setStart(point{x: x1, y: y1})
@@ -395,8 +384,6 @@ func arePointsInRange(p0, p1 point, allowanceMin, allowanceMax float32) bool {
 // and marks the current sub-path closed.
 // Following operations for this path will start with a new sub-path.
 func (p *Path) Close() {
-	p.resetFlatPaths()
-
 	if len(p.subPaths) == 0 {
 		return
 	}
@@ -654,8 +641,6 @@ type AddPathOptions struct {
 
 // AddPath adds the given path src to this path p as a sub-path.
 func (p *Path) AddPath(src *Path, options *AddPathOptions) {
-	p.resetFlatPaths()
-
 	if options == nil {
 		options = &AddPathOptions{}
 	}

@@ -112,14 +112,6 @@ func (i *Image) updateAccessTime() {
 	i.atime.Store(Tick())
 }
 
-// Size returns the size of the image.
-//
-// Deprecated: as of v2.5. Use Bounds().Dx() and Bounds().Dy() or Bounds().Size() instead.
-func (i *Image) Size() (width, height int) {
-	s := i.Bounds().Size()
-	return s.X, s.Y
-}
-
 func (i *Image) isDisposed() bool {
 	return i.image == nil
 }
@@ -388,49 +380,6 @@ const (
 	AddressRepeat Address = Address(builtinshader.AddressRepeat)
 )
 
-// FillRule is the rule whether an overlapped region is rendered with DrawTriangles(Shader).
-//
-// Deprecated: as of v2.9.
-type FillRule int
-
-const (
-	// FillRuleFillAll indicates all the triangles are rendered regardless of overlaps.
-	//
-	// Deprecated: as of v2.9.
-	FillRuleFillAll FillRule = iota
-
-	// FillRuleNonZero means that triangles are rendered based on the non-zero rule.
-	// If and only if the number of overlaps is not 0, the region is rendered.
-	//
-	// Deprecated: as of v2.9.
-	FillRuleNonZero
-
-	// FillRuleEvenOdd means that triangles are rendered based on the even-odd rule.
-	// If and only if the number of overlaps is odd, the region is rendered.
-	//
-	// Deprecated: as of v2.9.
-	FillRuleEvenOdd
-)
-
-const (
-	// FillAll indicates all the triangles are rendered regardless of overlaps.
-	//
-	// Deprecated: as of v2.8. Use FillRuleFillAll instead.
-	FillAll = FillRuleFillAll
-
-	// NonZero means that triangles are rendered based on the non-zero rule.
-	// If and only if the number of overlaps is not 0, the region is rendered.
-	//
-	// Deprecated: as of v2.8. Use FillRuleNonZero instead.
-	NonZero = FillRuleNonZero
-
-	// EvenOdd means that triangles are rendered based on the even-odd rule.
-	// If and only if the number of overlaps is odd, the region is rendered.
-	//
-	// Deprecated: as of v2.8. Use FillRuleEvenOdd instead.
-	EvenOdd = FillRuleEvenOdd
-)
-
 // ColorScaleMode is the mode of color scales in vertices.
 type ColorScaleMode int
 
@@ -464,28 +413,6 @@ type DrawTrianglesOptions struct {
 	// The default (zero) value is AddressUnsafe.
 	Address Address
 
-	// FillRule indicates the rule how an overlapped region is rendered.
-	//
-	// The rules FillRuleNonZero and FillRuleEvenOdd are useful when you want to render a complex polygon.
-	// A complex polygon is a non-convex polygon like a concave polygon, a polygon with holes, or a self-intersecting polygon.
-	// See examples/vector for actual usages.
-	//
-	// The default (zero) value is FillRuleFillAll.
-	//
-	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
-	FillRule FillRule
-
-	// AntiAlias indicates whether the rendering uses anti-alias or not.
-	// AntiAlias is useful especially when you pass vertices from the vector package.
-	//
-	// AntiAlias increases internal draw calls and might affect performance.
-	// Use the build tag `ebitenginedebug` to check the number of draw calls if you care.
-	//
-	// The default (zero) value is false.
-	//
-	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
-	AntiAlias bool
-
 	// DisableMipmaps disables mipmaps.
 	// When Filter is FilterLinear and GeoM shrinks the image, mipmaps are used by default.
 	// Mipmap is useful to render a shrunk image with high quality.
@@ -496,21 +423,6 @@ type DrawTrianglesOptions struct {
 	// The default (zero) value is false.
 	DisableMipmaps bool
 }
-
-// MaxIndicesCount is the maximum number of indices for DrawTriangles and DrawTrianglesShader.
-//
-// Deprecated: as of v2.6. This constant is no longer used.
-const MaxIndicesCount = (1 << 16) / 3 * 3
-
-// MaxIndicesNum is the maximum number of indices for DrawTriangles and DrawTrianglesShader.
-//
-// Deprecated: as of v2.4. This constant is no longer used.
-const MaxIndicesNum = MaxIndicesCount
-
-// MaxVerticesCount is the maximum number of vertices for DrawTriangles and DrawTrianglesShader.
-//
-// Deprecated: as of v2.7. Use MaxVertexCount instead.
-const MaxVerticesCount = graphicscommand.MaxVertexCount
 
 // MaxVertexCount is the maximum number of vertices for DrawTriangles and DrawTrianglesShader.
 const MaxVertexCount = graphicscommand.MaxVertexCount
@@ -549,13 +461,6 @@ func (i *Image) DrawTriangles[I Index](vertices []Vertex, indices []I, img *Imag
 	i.drawTriangles(vertices, i.indices32(indices), img, options)
 }
 
-// DrawTriangles32 draws triangles with the specified vertices and their uint32 indices.
-//
-// Deprecated: use [Image.DrawTriangles], which accepts uint32 indices.
-func (i *Image) DrawTriangles32(vertices []Vertex, indices []uint32, img *Image, options *DrawTrianglesOptions) {
-	i.drawTriangles(vertices, indices, img, options)
-}
-
 // indices32 returns indices as uint32 values. uint32 indices are returned as they are; uint16
 // indices are converted in i's temporary index buffer.
 func (i *Image) indices32[I Index](indices []I) []uint32 {
@@ -581,11 +486,6 @@ func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, o
 	}
 
 	if len(indices) == 0 {
-		return
-	}
-
-	if options != nil && (options.FillRule != FillRuleFillAll || options.AntiAlias) && !i.Bounds().Empty() {
-		drawTrianglesWithStencilBuffer(i, vertices, indices, img, options)
 		return
 	}
 
@@ -692,28 +592,6 @@ type DrawTrianglesShaderOptions struct {
 
 	// Images is a set of the source images. The images may have different sizes.
 	Images [4]*Image
-
-	// FillRule indicates the rule how an overlapped region is rendered.
-	//
-	// The rules FillRuleNonZero and FillRuleEvenOdd are useful when you want to render a complex polygon.
-	// A complex polygon is a non-convex polygon like a concave polygon, a polygon with holes, or a self-intersecting polygon.
-	// See examples/vector for actual usages.
-	//
-	// The default (zero) value is FillRuleFillAll.
-	//
-	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
-	FillRule FillRule
-
-	// AntiAlias indicates whether the rendering uses anti-alias or not.
-	// AntiAlias is useful especially when you pass vertices from the vector package.
-	//
-	// AntiAlias increases internal draw calls and might affect performance.
-	// Use the build tag `ebitenginedebug` to check the number of draw calls if you care.
-	//
-	// The default (zero) value is false.
-	//
-	// Deprecated: as of v2.9. Use [github.com/ironpark/ggfx/vector.FillPath] instead.
-	AntiAlias bool
 }
 
 // Check the number of images.
@@ -751,13 +629,6 @@ func (i *Image) DrawTrianglesShader[I Index](vertices []Vertex, indices []I, sha
 	i.drawTrianglesShader(vertices, i.indices32(indices), shader, options)
 }
 
-// DrawTrianglesShader32 draws triangles with the specified vertices and their uint32 indices with the specified shader.
-//
-// Deprecated: use [Image.DrawTrianglesShader], which accepts uint32 indices.
-func (i *Image) DrawTrianglesShader32(vertices []Vertex, indices []uint32, shader *Shader, options *DrawTrianglesShaderOptions) {
-	i.drawTrianglesShader(vertices, indices, shader, options)
-}
-
 func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader *Shader, options *DrawTrianglesShaderOptions) {
 	i.copyCheck()
 
@@ -782,11 +653,6 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 	}
 
 	if len(indices) == 0 {
-		return
-	}
-
-	if options != nil && (options.FillRule != FillRuleFillAll || options.AntiAlias) && !i.Bounds().Empty() {
-		drawTrianglesShaderWithStencilBuffer(i, vertices, indices, shader, options)
 		return
 	}
 
@@ -1261,36 +1127,6 @@ func (i *Image) Set(x, y int, clr color.Color) {
 	i.image.WritePixels([]byte{byte(cr >> 8), byte(cg >> 8), byte(cb >> 8), byte(ca >> 8)}, image.Rect(dx, dy, dx+1, dy+1))
 }
 
-// Dispose disposes the image data.
-// After disposing, most of the image functions do nothing and returns meaningless values.
-//
-// Calling Dispose is not mandatory. GC automatically collects internal resources that no objects refer to.
-// However, calling Dispose explicitly is helpful if memory usage matters.
-//
-// If the image is a sub-image, Dispose does nothing.
-//
-// If the image is disposed, Dispose does nothing.
-//
-// Deprecated: as of v2.7. Use Deallocate instead.
-func (i *Image) Dispose() {
-	i.copyCheck()
-
-	if i.isDisposed() {
-		return
-	}
-	if i.isSubImage() {
-		return
-	}
-	i.invokeUsageCallbacks()
-	i.image.Deallocate()
-	i.image = nil
-	i.subImageCacheM.Lock()
-	i.subImageCache = nil
-	i.subImageCacheM.Unlock()
-	i.usageCallbacks = nil
-	i.usageCallbackCount.Store(0)
-}
-
 // Deallocate clears the image and deallocates the internal state of the image.
 // Even after Deallocate is called, the image is still available.
 // In this case, the image's internal state is allocated again.
@@ -1372,13 +1208,6 @@ func (i *Image) WritePixels(pixels []byte) {
 	// * In internal/mipmap, pixels are copied when necessary.
 	// * In internal/atlas, pixels are copied to make its paddings.
 	i.image.WritePixels(pixels, i.adjustedBounds())
-}
-
-// ReplacePixels replaces the pixels of the image.
-//
-// Deprecated: as of v2.4. Use WritePixels instead.
-func (i *Image) ReplacePixels(pixels []byte) {
-	i.WritePixels(pixels)
 }
 
 // MaxImageSize returns the device-dependent maximum width and height of an image in pixels.
