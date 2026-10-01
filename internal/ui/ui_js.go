@@ -607,6 +607,18 @@ func (u *UserInterface) isTextInputFocused() bool {
 	return u.textInputFocusedFunc()
 }
 
+// isClipboardChord reports whether e is Ctrl or ⌘ with C, X or V.
+func isClipboardChord(e js.Value) bool {
+	if !e.Get("ctrlKey").Bool() && !e.Get("metaKey").Bool() {
+		return false
+	}
+	switch e.Get("code").String() {
+	case "KeyC", "KeyX", "KeyV":
+		return true
+	}
+	return false
+}
+
 func (u *UserInterface) setCanvasEventHandlers(v js.Value) {
 	if resizeObserver := js.Global().Get("ResizeObserver"); resizeObserver.Truthy() {
 		observer := resizeObserver.New(js.FuncOf(func(this js.Value, args []js.Value) any {
@@ -622,7 +634,12 @@ func (u *UserInterface) setCanvasEventHandlers(v js.Value) {
 		v.Call("focus")
 
 		e := args[0]
-		e.Call("preventDefault")
+		// The clipboard chords keep their default, which is what makes the
+		// browser fire the copy, cut and paste events a page reads and
+		// writes the system clipboard through.
+		if !isClipboardChord(e) {
+			e.Call("preventDefault")
+		}
 		if err := u.updateInputFromEvent(e); err != nil {
 			u.setError(err)
 			return nil
