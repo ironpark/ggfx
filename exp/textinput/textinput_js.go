@@ -359,7 +359,7 @@ func (t *textInputImpl) dismissVirtualKeyboardIfNeeded() {
 	}
 
 	// An active session outlives the event channel, which a commit closes from a DOM
-	// event. The deprecated Field keeps the channel open, registering no session.
+	// event.
 	if t.events.isOpen() || t.events.getActiveSession() != nil {
 		t.closedTicks = 0
 		return
@@ -412,11 +412,8 @@ func (t *textInputImpl) trySend(kind commitKind) {
 
 	s := t.events.getActiveSession()
 	if s == nil {
-		// No session means the deprecated Field is inputting; it uses the legacy
-		// whole-value path.
-		// TODO: Remove trySendLegacy and this branch once Field is gone; a
-		// Composer session is always active otherwise.
-		t.trySendLegacy(kind)
+		// The echo of a seeding whose session is not yet registered, or the
+		// teardown noise of a dismissal.
 		return
 	}
 
@@ -427,30 +424,6 @@ func (t *textInputImpl) trySend(kind commitKind) {
 	selStart := t.textareaElement.Get("selectionStart").Int()
 	selEnd := t.textareaElement.Get("selectionEnd").Int()
 	t.sender.trySend(s, value, selStart, selEnd, isVirtualKeyboard(), kind)
-}
-
-func (t *textInputImpl) trySendLegacy(kind commitKind) {
-	textareaValue := t.textareaElement.Get("value").String()
-	// textareaValue can be an empty value, but this should be sent especially for a compositing text (#3324).
-
-	start := t.textareaElement.Get("selectionStart").Int()
-	end := t.textareaElement.Get("selectionEnd").Int()
-	startInBytes := convertUTF16CountToByteCount(textareaValue, start)
-	endInBytes := convertUTF16CountToByteCount(textareaValue, end)
-
-	t.events.send(textInputState{
-		Text:                             textareaValue,
-		CompositionSelectionStartInBytes: startInBytes,
-		CompositionSelectionEndInBytes:   endInBytes,
-		ReplacementStartInBytes:          noReplacement,
-		ReplacementEndInBytes:            noReplacement,
-		CommitKind:                       kind,
-	})
-
-	if kind.committed() {
-		t.events.end()
-		t.textareaElement.Set("value", "")
-	}
 }
 
 func isVirtualKeyboard() bool {
