@@ -74,9 +74,12 @@ func (w *Window) inputChar(codepoint rune, mods ModifierKey, plain bool) {
 	}
 }
 
-func (w *Window) inputScroll(xoffset, yoffset float64) {
+func (w *Window) inputScroll(xoffset, yoffset float64, mods ModifierKey) {
+	if !w.lockKeyMods {
+		mods &^= ModCapsLock | ModNumLock
+	}
 	if w.callbacks.scroll != nil {
-		w.callbacks.scroll(w, xoffset, yoffset)
+		w.callbacks.scroll(w, xoffset, yoffset, mods)
 	}
 }
 

@@ -96,6 +96,8 @@ func eventFromUI(ev ui.Event) Event {
 		return ResizeEvent{Window: windowFromUI(ev.Window), Width: ev.Width, Height: ev.Height, Scale: ev.Scale}
 	case ui.FocusEvent:
 		return FocusEvent{Window: windowFromUI(ev.Window), Focused: ev.Focused}
+	case ui.WindowStateEvent:
+		return WindowStateEvent{Window: windowFromUI(ev.Window), State: WindowState(ev.State)}
 	case ui.CloseEvent:
 		return CloseEvent{Window: windowFromUI(ev.Window), keepOpen: ev.KeepOpen}
 	case ui.KeyEvent:
@@ -109,9 +111,9 @@ func eventFromUI(ev ui.Event) Event {
 	case ui.MouseMoveEvent:
 		return MouseMoveEvent{Window: windowFromUI(ev.Window), X: ev.X, Y: ev.Y}
 	case ui.MouseButtonEvent:
-		return MouseButtonEvent{Window: windowFromUI(ev.Window), Button: MouseButton(ev.Button), Pressed: ev.Pressed, X: ev.X, Y: ev.Y}
+		return MouseButtonEvent{Window: windowFromUI(ev.Window), Button: MouseButton(ev.Button), Pressed: ev.Pressed, X: ev.X, Y: ev.Y, Modifiers: KeyModifiers(ev.Modifiers)}
 	case ui.ScrollEvent:
-		return ScrollEvent{Window: windowFromUI(ev.Window), X: ev.X, Y: ev.Y}
+		return ScrollEvent{Window: windowFromUI(ev.Window), X: ev.X, Y: ev.Y, Modifiers: KeyModifiers(ev.Modifiers)}
 	case ui.TouchEvent:
 		return TouchEvent{Window: windowFromUI(ev.Window), ID: TouchID(ev.ID), Phase: TouchPhase(ev.Phase), X: ev.X, Y: ev.Y}
 	case ui.DropEvent:
@@ -226,6 +228,28 @@ type FocusEvent struct {
 	Focused bool
 }
 
+// WindowState is whether a window is minimized, maximized or fullscreen. A window that is two of
+// them, such as a minimized maximized window, is the first of fullscreen, minimized and
+// maximized.
+type WindowState int
+
+const (
+	WindowStateNormal     WindowState = WindowState(ui.WindowStateNormal)
+	WindowStateMinimized  WindowState = WindowState(ui.WindowStateMinimized)
+	WindowStateMaximized  WindowState = WindowState(ui.WindowStateMaximized)
+	WindowStateFullscreen WindowState = WindowState(ui.WindowStateFullscreen)
+)
+
+// WindowStateEvent reports that the window was minimized, maximized, made fullscreen or restored,
+// whether the app, the user or the platform did it. A window that starts in a state other than
+// WindowStateNormal reports it after its first ResizeEvent. The browser reports fullscreen alone.
+type WindowStateEvent struct {
+	Window *Window
+	State  WindowState
+}
+
+func (WindowStateEvent) isEvent() {}
+
 // CloseEvent reports that the user asked to close the window. The window closes after the event
 // is handled unless KeepOpen is called.
 type CloseEvent struct {
@@ -263,7 +287,7 @@ type TextEvent struct {
 	HasReplacement                   bool
 }
 
-// CompositionEvent reports IME marked text on macOS and Windows. Start and End
+// CompositionEvent reports IME marked text on macOS, Windows and X11. Start and End
 // are UTF-8 byte offsets within Text. Done ends the composition and Text is empty;
 // committed characters arrive separately as TextEvent.
 type CompositionEvent struct {
@@ -305,20 +329,25 @@ type MouseMoveEvent struct {
 }
 
 // MouseButtonEvent reports a button press or release at the cursor position, in device-independent
-// pixels.
+// pixels. Modifiers are the modifier keys held at the press, including one pressed while another
+// window had the focus.
 type MouseButtonEvent struct {
-	Window  *Window
-	Button  MouseButton
-	Pressed bool
-	X       float64
-	Y       float64
+	Window    *Window
+	Button    MouseButton
+	Pressed   bool
+	X         float64
+	Y         float64
+	Modifiers KeyModifiers
 }
 
-// ScrollEvent reports a wheel or trackpad scroll.
+// ScrollEvent reports a wheel or trackpad scroll, in lines: a mouse wheel's notch is one on the
+// desktop. A browser's scroll in pixels counts 20 device-independent pixels a line, and one in
+// pages counts the canvas's height. Modifiers are the modifier keys held as the scroll happened.
 type ScrollEvent struct {
-	Window *Window
-	X      float64
-	Y      float64
+	Window    *Window
+	X         float64
+	Y         float64
+	Modifiers KeyModifiers
 }
 
 // TouchPhase is what happened to a touch.

@@ -22,7 +22,7 @@ import (
 	"golang.org/x/image/math/fixed"
 
 	"github.com/ironpark/ggfx"
-	"github.com/ironpark/ggfx/text/v2/internal/oksvg"
+	"github.com/ironpark/ggfx/internal/oksvg"
 )
 
 // svgGlyphData is an OpenType SVG glyph description: the SVG document and its

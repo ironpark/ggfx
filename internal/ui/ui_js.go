@@ -97,6 +97,8 @@ type userInterfaceImpl struct {
 	cursorShape         CursorShape
 	lastCaptureExitTime time.Time
 	hiDPIEnabled        bool
+	// reportedFullscreen is whether the app was last told the canvas is fullscreen.
+	reportedFullscreen bool
 
 	context        *eventContext
 	surface        graphicsdriver.Surface
@@ -563,6 +565,15 @@ func (u *UserInterface) onResize() {
 	if aw := u.appWindow(); aw != nil {
 		ow, oh := u.outsideSize()
 		u.pushEvent(ResizeEvent{Window: aw, Width: ow, Height: oh, Scale: theMonitor.DeviceScaleFactor()})
+		// Entering and leaving fullscreen resize the page.
+		if f := u.IsFullscreen(); f != u.reportedFullscreen {
+			u.reportedFullscreen = f
+			s := WindowStateNormal
+			if f {
+				s = WindowStateFullscreen
+			}
+			u.pushEvent(WindowStateEvent{Window: aw, State: s})
+		}
 	}
 
 	// updateImpl can block. Use goroutine.

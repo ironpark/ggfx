@@ -636,6 +636,9 @@ func (u *UserInterface) updateFrame() error {
 				// The size is gathered now; only a change after this makes it stale.
 				w.sizeChanged.Store(false)
 			}
+			if e == nil {
+				e = w.reportState()
+			}
 			if errors.Is(e, errWindowClosed) {
 				if w.primary {
 					err = RegularTermination

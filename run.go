@@ -177,13 +177,6 @@ func Tick() int64 {
 //
 // If RunOnMainThread is called on the main thread, RunOnMainThread blocks forever.
 //
-// Wake makes the handler receive a [WakeEvent] soon, even while every window is hidden, occluded
-// or minimized and draws no frames. It is how work handed over from another goroutine reaches
-// the handler without waiting for a window to draw. Wake can be called from any goroutine.
-func Wake() {
-	ui.Get().Wake()
-}
-
 // RunOnMainThread might not run the function, e.g. before [Run] starts or after it ends.
 //
 // RunOnMainThread is useful to access platform-specific APIs in a safe way.
@@ -191,4 +184,11 @@ func Wake() {
 // RunOnMainThread panics if the platform doesn't support it.
 func RunOnMainThread(f func()) {
 	ui.Get().RunOnMainThread(f)
+}
+
+// Wake makes the handler receive a [WakeEvent] soon, even while every window is hidden, occluded
+// or minimized and draws no frames. It is how work handed over from another goroutine reaches
+// the handler without waiting for a window to draw. Wake can be called from any goroutine.
+func Wake() {
+	ui.Get().Wake()
 }

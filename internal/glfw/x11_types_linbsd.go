@@ -493,6 +493,12 @@ type _XIMStyles struct {
 	SupportedStyles uintptr // *XIMStyle
 }
 
+// _XPoint is the XPoint struct.
+type _XPoint struct {
+	_    structs.HostLayout
+	X, Y int16
+}
+
 // _XIMCallback is the XIMCallback struct. Callback holds an XIMProc function
 // pointer rather than a Go pointer, so a value of this type can be handed to
 // Xlib and kept by it.

@@ -116,6 +116,9 @@ type glfwBackend struct {
 	reportedHeight int
 	reportedScale  float64
 
+	// reportedState is the state the app was last told of in a WindowStateEvent.
+	reportedState WindowState
+
 	// framebufferWidth and framebufferHeight are the framebuffer size reportSize last saw.
 	framebufferWidth  int
 	framebufferHeight int
@@ -923,6 +926,41 @@ func (u *glfwBackend) reportSize() error {
 		u.context.requestFrame()
 	}
 	return nil
+}
+
+// reportState queues a WindowStateEvent when the window's state differs from the one last
+// reported. The loop calls it on every iteration, as it does reportSize, and so do the iconify
+// and maximize callbacks: a platform can report the end of minimizing there with nothing waking
+// the loop after it.
+//
+// reportState must be called from the main thread.
+func (u *glfwBackend) reportState() error {
+	s, err := u.windowState()
+	if err != nil || s == u.reportedState {
+		return err
+	}
+	u.reportedState = s
+	if aw := u.appWindow(); aw != nil {
+		u.pushEvent(WindowStateEvent{Window: aw, State: s})
+	}
+	return nil
+}
+
+// windowState must be called from the main thread.
+func (u *glfwBackend) windowState() (WindowState, error) {
+	f, err := u.isFullscreen()
+	if err != nil || f {
+		return WindowStateFullscreen, err
+	}
+	i, err := u.window.GetAttrib(glfw.Iconified)
+	if err != nil || i == glfw.True {
+		return WindowStateMinimized, err
+	}
+	m, err := u.isWindowMaximized()
+	if err != nil || m {
+		return WindowStateMaximized, err
+	}
+	return WindowStateNormal, nil
 }
 
 // report queues a ResizeEvent unless the size and scale are the ones last reported, and

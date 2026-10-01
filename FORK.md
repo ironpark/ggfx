@@ -72,6 +72,29 @@ window a little later. A size that changes while events are dispatched makes the
 for that iteration's frame stale, so the frame waits for the next iteration instead of being drawn
 at the old size and using up the request.
 
+A `WindowStateEvent` reports a window minimized, maximized, made fullscreen or restored, whoever
+did it. Each loop iteration compares the state with the one last reported, as it does the size,
+and so do GLFW's iconify and maximize callbacks: a platform reports the end of minimizing there,
+and nothing may wake the loop after it. The browser reports fullscreen alone.
+
+`MouseButtonEvent` and `ScrollEvent` carry the modifier keys held at the event, which GLFW passes
+to the button callback and which the scroll callback now gets too (from the `NSEvent`,
+`GetKeyState` or the X button state). An app that tracked the modifiers from key events missed a
+modifier pressed while another window had the focus. `ScrollEvent` is in lines on every platform:
+the browser's deltas, which upstream passed through in whatever unit `deltaMode` named, count 20
+pixels or the canvas's height a line.
+
+## X11 composes on the event path
+
+An X11 window reports its on-the-spot preedit as `CompositionEvent`, as macOS and Windows
+report their marked text, and its committed text arrives as `TextEvent` through the character
+callback as before. `SetTextInputEnabled` gives the input context the window's key presses or
+takes them back (`XSetICFocus`/`XUnsetICFocus`, resetting the composition), and
+`SetTextInputRect` sets its spot location under the caret. While text input is enabled, a key
+press the input method filters waits for it to decline the key, which `exp/textinput` used to
+switch on for its sessions alone. `exp/textinput`'s X11 backend still works, and its handlers
+take precedence where they are set.
+
 `Wake` queues a `WakeEvent`, which is for no window and is dispatched whether or not any window
 draws, so that work handed over from another goroutine reaches the handler while every window is
 hidden or covered.
@@ -191,7 +214,9 @@ Do not merge upstream wholesale. Cherry-pick fixes to the layers that are
 kept close to upstream: `internal/graphicsdriver` (except the shader files),
 `internal/graphicscommand`, `internal/atlas`, `internal/restorable`,
 `text/v2`, `vector` (except the stencil shaders and the batched fill in
-`fill.go` and `atlas.go`). The Metal driver's per-draw calls also diverge;
+`fill.go` and `atlas.go`). The oksvg fork moved from `text/v2/internal/oksvg` to
+`internal/oksvg`, so that the `svg` package can draw SVG documents with it; a commit to it
+needs its paths rewritten. The Metal driver's per-draw calls also diverge;
 see "Draw call cost" below. The shader stack, the
 windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
 `input.go`) diverge and are not expected to merge.
@@ -264,8 +289,9 @@ both ways render the same pixels.
 - More than one canvas on WebGL (`docs/window.md`). Metal and macOS OpenGL
   ran several windows; DirectX 11/12 and OpenGL on Linux and Windows accept
   several surfaces but were cross-compiled only.
-- IME composition on the event path outside macOS and Windows. X11 and the
-  browser still use `exp/textinput` for composition.
+- IME composition on the event path in the browser, which still uses
+  `exp/textinput` for it. Once it has one, `exp/textinput` can go: the
+  Composer and its sessions are UI-level and live in ggui.
 - Only macOS Metal and OpenGL ran the test suite after the shader change;
   DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
   to need shader model 5.0 without register spaces, but no D3D compiler or
@@ -285,9 +311,8 @@ both ways render the same pixels.
   context but presents through each window's, so a driver without one is not
   reachable; `WindowOptions.Hidden` is the way to render without showing
   anything.
-- X11 text input through `exp/textinput` lost its `AppendInputChars` seed, which
-  had stopped reporting anything under `Run` anyway. It needs to take committed
-  text from `TextEvent` instead, which is the same gap as IME composition there.
+- X11's input method was only checked by injecting the preedit into the window:
+  no ibus or fcitx ran against it.
 - The `!android && !ios && !js && !nintendosdk && !playstation5` build
   constraint is still spelled out across `internal/ui`, where `!js` would do.
 - The deprecated v2.1 key aliases (`KeyDown`, `Key0`, ...) that `genkeys.go`

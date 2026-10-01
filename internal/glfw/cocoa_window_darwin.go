@@ -589,7 +589,7 @@ func registerGLFWClasses() error {
 					}
 
 					if deltaX != 0 || deltaY != 0 {
-						window.inputScroll(deltaX, deltaY)
+						window.inputScroll(deltaX, deltaY, translateFlags(uintptr(event.Send(sel_modifierFlags))))
 					}
 				},
 			},

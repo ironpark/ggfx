@@ -80,10 +80,11 @@ func (w *Window) SetTextInputActiveCallback(cbfun TextInputActiveCallback) (Text
 	return old, nil
 }
 
-// textInputActive reports whether the application is taking text input.
+// textInputActive reports whether the application is taking text input: what
+// the callback says, or else whether text input is enabled for the window.
 func (w *Window) textInputActive() bool {
 	if w.platform.textInputActiveCallback == nil {
-		return false
+		return w.native.textEnabled
 	}
 	return w.platform.textInputActiveCallback(w)
 }
@@ -437,13 +438,65 @@ func backwardWord(text []rune, caret int) int {
 	return i
 }
 
-// inputPreedit reports the buffered composition.
+// inputPreedit reports the buffered composition, to the preedit callback and
+// as the window's composition, which an empty one ends.
 func (w *Window) inputPreedit() {
-	if w.platform.preeditCallback == nil {
+	text := string(w.platform.preeditText)
+	start, end := preeditSelection(w.platform.preeditText, w.platform.preeditFeedback, w.platform.preeditCaret)
+	if w.platform.preeditCallback != nil {
+		w.platform.preeditCallback(w, text, start, end)
+	}
+	if text == "" {
+		if w.native.composing {
+			w.inputComposition("", 0, 0, true)
+		}
 		return
 	}
-	start, end := preeditSelection(w.platform.preeditText, w.platform.preeditFeedback, w.platform.preeditCaret)
-	w.platform.preeditCallback(w, string(w.platform.preeditText), start, end)
+	w.inputComposition(text, start, end, false)
+}
+
+// platformSetTextInputEnabled gives the input method the window's key presses
+// while text input is enabled, and takes them back, with the composition it
+// holds, while it is not.
+func (w *Window) platformSetTextInputEnabled(enabled bool) {
+	if w.platform.ic == 0 {
+		return
+	}
+	if enabled {
+		if w.platformWindowFocused() {
+			xSetICFocus(w.platform.ic)
+		}
+		return
+	}
+	_ = w.ResetInputContext()
+	if w.native.composing {
+		w.inputComposition("", 0, 0, true)
+	}
+	xUnsetICFocus(w.platform.ic)
+}
+
+// The spot location handed to the input context. The nested list refers to the
+// name and the value, so both live at package level; they are used on the
+// main thread only.
+var (
+	spotLocationName  = []byte("spotLocation\x00")
+	spotLocationValue _XPoint
+)
+
+// platformSetTextInputRect puts the input method's composition or candidate
+// window under the caret: the spot location is the left end of its baseline.
+func (w *Window) platformSetTextInputRect() {
+	if w.platform.ic == 0 {
+		return
+	}
+	r := w.native.textRect
+	spotLocationValue = _XPoint{X: int16(r[0]), Y: int16(r[1] + r[3])}
+	list := xVaCreateNestedListPoint(0, &spotLocationName[0], &spotLocationValue, 0)
+	if list == 0 {
+		return
+	}
+	xSetICValues(w.platform.ic, "preeditAttributes", list, 0)
+	xFree(list)
 }
 
 // inheritedFeedback returns the feedback for n characters replacing length

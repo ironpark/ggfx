@@ -77,16 +77,9 @@ input time, error, the list of windows, and the loop.
 
 Per-window state (`*window`): the platform handle (`*glfw.Window`, or the
 canvas), its `Surface`, the DIP size and position bookkeeping, fullscreen
-restore data, cursor shape and mode, the input recorder, and a `frameDriver`
-that decides what a frame for this window does.
-
-Two frame drivers exist:
-
-- `context` is the legacy driver: offscreen image, letterboxing, ticks
-  and `Update`, draw skipping. It is created for the primary window of
-  `Run(game)`.
-- `eventContext` is the GUI driver: it hands the screen image to the app as
-  a `FrameEvent` and does nothing else. No offscreen, no scaling, no ticks.
+restore data, cursor shape and mode, the input recorder, and an
+`eventContext` that runs its frames: it hands the screen image to the app as
+a `FrameEvent` and does nothing else. No offscreen, no scaling, no ticks.
 
 ### Loop
 
@@ -96,9 +89,8 @@ One iteration of the loop, on the main thread:
    `WaitEvents` otherwise. `ScheduleFrame`/`RequestFrame` post an empty event
    so a wait wakes up.
 2. Drain recorded input into the app goroutine as events.
-3. For every window with a frame pending (or, for `context`, always):
-   compute its outside size and pixel size, run its frame driver between
-   `atlas.BeginFrame`/`EndFrame`.
+3. For every window with a frame pending: compute its pixel size and run its
+   frame between `atlas.BeginFrame`/`EndFrame`.
 4. `atlas.FlushCommands(present)` once, which presents every drawn surface.
 5. Pace: the vsync-ignored detection and unfocused sleep from the legacy loop
    apply once per iteration, not per window.
@@ -117,8 +109,8 @@ type HandlerFunc func(Event) error
 
 // Run starts the loop and blocks until it ends. The handler receives
 // StartEvent first and creates its windows there. Returning Termination
-// ends the loop; so does closing the last window. RunOptions is
-// RunGameOptions; the window-related options apply to every window.
+// ends the loop; so does closing the last window. The window-related
+// RunOptions apply to every window.
 func Run(h Handler, options *RunOptions) error
 
 // The zero value is a decorated, visible, fixed-size 640x480 window
@@ -131,7 +123,7 @@ type WindowOptions struct {
     MinWidth, MinHeight, MaxWidth, MaxHeight int
 }
 
-// NewWindow fails when Transparent is set without RunOptions.ScreenTransparent.
+// A transparent window is a property of its surface; DirectX refuses one.
 func NewWindow(o *WindowOptions) (*Window, error) // only while Run runs
 
 type Window struct{ ... }
@@ -170,13 +162,14 @@ Events. Every event but `StartEvent` has a `Window *Window` field.
 | `ResizeEvent` | `Width, Height float64` (DIP), `Scale` | right after creation, and whenever the size or scale changes |
 | `FrameEvent` | `Screen *Image` (pixels), `Scale float64` | after `RequestFrame`, after a resize, when the window is first shown |
 | `FocusEvent` | `Focused bool` | |
+| `WindowStateEvent` | `State WindowState` | minimized, maximized, fullscreen or restored, by the app, the user or the platform; the browser reports fullscreen alone |
 | `CloseEvent` | | the user asked to close; the window closes after the event unless `KeepOpen()` was called |
 | `KeyEvent` | `Key`, `Pressed`, `Repeat bool`, `Modifiers KeyModifiers` | OS key repeat; modifiers captured at the event, before later releases |
 | `TextEvent` | `Text string`, `HasReplacement`, `ReplacementStart, ReplacementEnd int` | committed text; optional UTF-8 byte replacement offsets relative to the supplied context's caret |
-| `CompositionEvent` | `Text string`, `Start, End int`, `Done bool` | macOS/Windows marked text; selection is UTF-8 bytes within Text; Done ends the composition with empty Text |
+| `CompositionEvent` | `Text string`, `Start, End int`, `Done bool` | macOS, Windows and X11 marked text; selection is UTF-8 bytes within Text; Done ends the composition with empty Text |
 | `MouseMoveEvent` | `X, Y float64` (DIP) | |
-| `MouseButtonEvent` | `Button`, `Pressed`, `X, Y` | |
-| `ScrollEvent` | `X, Y float64` | |
+| `MouseButtonEvent` | `Button`, `Pressed`, `X, Y`, `Modifiers KeyModifiers` | modifiers held at the press, even one pressed while another window had the focus |
+| `ScrollEvent` | `X, Y float64`, `Modifiers KeyModifiers` | in lines: a desktop wheel notch is one; the browser counts 20 DIP or the canvas's height a line |
 | `TouchEvent` | `ID TouchID`, `Phase`, `X, Y` | browser only for now |
 | `DropEvent` | `Files fs.FS` | |
 | `DragEvent` | `Phase DragPhase`, `X, Y float64`, `Files fs.FS` | macOS/Windows file drag entered, moved, exited or ended; Files can be nil |
@@ -260,8 +253,8 @@ backend. It is not wired yet.
   state keeps it from the events.
   `Tick()` still advances once per loop iteration, and the before-update
   hooks run then, so `exp/textinput` keeps working when polled every frame.
-- No composition events on X11 or the browser yet. Their `exp/textinput`
-  backends remain available; macOS and Windows have per-window CompositionEvent.
+- No composition events in the browser yet. Its `exp/textinput` backend
+  remains available; macOS, Windows and X11 have per-window CompositionEvent.
 - One canvas on WebGL. DirectX runs several windows, but that was
   cross-compiled only.
 - `Monitor()` on the root package still means the primary window's monitor;

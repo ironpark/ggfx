@@ -944,6 +944,10 @@ func handleSelectionRequest(event *_XEvent) {
 }
 
 // getSelectionString returns the string held by the specified selection.
+// selectionTimeout is how many seconds getSelectionString waits for each answer of a
+// selection's owner.
+const selectionTimeout = 2.0
+
 func getSelectionString(selection _Atom) (string, error) {
 	selectionString := &_glfw.platformWindow.clipboardString
 	if selection == _glfw.platformWindow.PRIMARY {
@@ -966,6 +970,9 @@ func getSelectionString(selection _Atom) (string, error) {
 	var found bool
 	for _, target := range []_Atom{_glfw.platformWindow.UTF8_STRING, _XA_STRING} {
 		var notification, dummy _XEvent
+		// An owner that never answers would otherwise keep the main thread
+		// waiting for good.
+		timeout := selectionTimeout
 
 		xConvertSelection(_glfw.platformWindow.display,
 			selection,
@@ -978,7 +985,9 @@ func getSelectionString(selection _Atom) (string, error) {
 			_glfw.platformWindow.helperWindowHandle,
 			_SelectionNotify,
 			&notification) {
-			waitForX11Event(nil)
+			if !waitForX11Event(&timeout) {
+				return "", fmt.Errorf("glfw: x11: the owner of the selection did not answer: %w", PlatformError)
+			}
 		}
 
 		if notification.xselection().Property == _None {
@@ -1014,11 +1023,15 @@ func getSelectionString(selection _Atom) (string, error) {
 			var received bool
 
 			for {
-				for !xCheckIfEvent(_glfw.platformWindow.display,
+				answered := true
+				for answered && !xCheckIfEvent(_glfw.platformWindow.display,
 					&dummy,
 					isSelPropNewValueNotifyCallback,
 					0) {
-					waitForX11Event(nil)
+					answered = waitForX11Event(&timeout)
+				}
+				if !answered {
+					break
 				}
 
 				if data != 0 {
@@ -1346,13 +1359,13 @@ func processEvent(event *_XEvent) error {
 
 		// Modern X provides scroll events as mouse button presses
 		case _Button4:
-			window.inputScroll(0, 1)
+			window.inputScroll(0, 1, mods)
 		case _Button5:
-			window.inputScroll(0, -1)
+			window.inputScroll(0, -1, mods)
 		case _Button6:
-			window.inputScroll(1, 0)
+			window.inputScroll(1, 0, mods)
 		case _Button7:
-			window.inputScroll(-1, 0)
+			window.inputScroll(-1, 0, mods)
 
 		default:
 			// Additional buttons after 7 are treated as regular buttons
@@ -1692,7 +1705,9 @@ func processEvent(event *_XEvent) error {
 			}
 		}
 
-		if window.platform.ic != 0 {
+		// The input method takes the key presses only while text input is
+		// enabled; see platformSetTextInputEnabled.
+		if window.platform.ic != 0 && window.native.textEnabled {
 			xSetICFocus(window.platform.ic)
 		}
 

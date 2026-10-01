@@ -132,6 +132,24 @@ type FocusEvent struct {
 	Focused bool
 }
 
+// WindowState is whether a window is minimized, maximized or fullscreen.
+type WindowState int
+
+const (
+	WindowStateNormal WindowState = iota
+	WindowStateMinimized
+	WindowStateMaximized
+	WindowStateFullscreen
+)
+
+// WindowStateEvent reports that the window's state changed.
+type WindowStateEvent struct {
+	Window AppWindow
+	State  WindowState
+}
+
+func (WindowStateEvent) isEvent() {}
+
 // CloseEvent reports that the user asked to close the window. The window closes after the event
 // is handled unless KeepOpen is called.
 type CloseEvent struct {
@@ -191,18 +209,20 @@ type MouseMoveEvent struct {
 
 // MouseButtonEvent reports a button press or release at the cursor position.
 type MouseButtonEvent struct {
-	Window  AppWindow
-	Button  MouseButton
-	Pressed bool
-	X       float64
-	Y       float64
+	Window    AppWindow
+	Button    MouseButton
+	Pressed   bool
+	X         float64
+	Y         float64
+	Modifiers KeyModifiers
 }
 
-// ScrollEvent reports a wheel or trackpad scroll.
+// ScrollEvent reports a wheel or trackpad scroll, in lines.
 type ScrollEvent struct {
-	Window AppWindow
-	X      float64
-	Y      float64
+	Window    AppWindow
+	X         float64
+	Y         float64
+	Modifiers KeyModifiers
 }
 
 // TouchPhase is what happened to a touch.

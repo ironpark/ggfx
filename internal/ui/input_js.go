@@ -86,6 +86,34 @@ func eventToKeys(e js.Value) (key0, key1 Key) {
 	return -1, -1
 }
 
+// eventModifiers reports the modifier keys a keyboard, mouse or wheel event was
+// made with.
+func eventModifiers(e js.Value) KeyModifiers {
+	return KeyModifiers{Shift: e.Get("shiftKey").Bool(), Control: e.Get("ctrlKey").Bool(), Alt: e.Get("altKey").Bool(), Meta: e.Get("metaKey").Bool()}
+}
+
+// wheelLinePixels is how many CSS pixels a browser's wheel delta in pixels
+// counts as a line, which is what a desktop wheel's notch reports. A notch is
+// 100 pixels in Chrome, so it scrolls five lines.
+const wheelLinePixels = 20
+
+// wheelLine reports the size of a line in the unit of a wheel event's deltas,
+// which is pixels, lines or pages after its deltaMode. Firefox reports a mouse
+// wheel in lines and the rest of the browsers in pixels.
+func wheelLine(e js.Value) float64 {
+	switch e.Get("deltaMode").Int() {
+	case 1: // DOM_DELTA_LINE
+		return 1
+	case 2: // DOM_DELTA_PAGE; the canvas fills the page.
+		if h := window.Get("innerHeight").Float(); h > 0 {
+			return wheelLinePixels / h
+		}
+		return 1
+	default: // DOM_DELTA_PIXEL
+		return wheelLinePixels
+	}
+}
+
 func (u *UserInterface) updateInputFromEvent(e js.Value) error {
 	u.pushInputEvent(e)
 	return nil
@@ -93,7 +121,7 @@ func (u *UserInterface) updateInputFromEvent(e js.Value) error {
 
 // pushInputEvent queues the app event for a DOM input event. Positions are in
 // device-independent pixels; the canvas fills the page, so they are the client
-// coordinates. Wheel deltas are pixels, as the browser reports them, with the
+// coordinates. Wheel deltas are lines, as the desktop reports them, with the
 // sign of Wheel(): positive scrolls up.
 func (u *UserInterface) pushInputEvent(e js.Value) {
 	if u.app == nil {
@@ -111,9 +139,7 @@ func (u *UserInterface) pushInputEvent(e js.Value) {
 		key0, key1 := eventToKeys(e)
 		for _, k := range [...]Key{key0, key1} {
 			if k >= 0 {
-				u.pushEvent(KeyEvent{Window: aw, Key: k, Pressed: pressed, Repeat: repeat, Modifiers: KeyModifiers{
-					Shift: e.Get("shiftKey").Bool(), Control: e.Get("ctrlKey").Bool(), Alt: e.Get("altKey").Bool(), Meta: e.Get("metaKey").Bool(),
-				}})
+				u.pushEvent(KeyEvent{Window: aw, Key: k, Pressed: pressed, Repeat: repeat, Modifiers: eventModifiers(e)})
 			}
 		}
 		if pressed {
@@ -127,12 +153,13 @@ func (u *UserInterface) pushInputEvent(e js.Value) {
 			return
 		}
 		x, y := clientPositionInDIP(e)
-		u.pushEvent(MouseButtonEvent{Window: aw, Button: b, Pressed: t.Equal(stringMousedown), X: x, Y: y})
+		u.pushEvent(MouseButtonEvent{Window: aw, Button: b, Pressed: t.Equal(stringMousedown), X: x, Y: y, Modifiers: eventModifiers(e)})
 	case t.Equal(stringMousemove):
 		x, y := clientPositionInDIP(e)
 		u.pushEvent(MouseMoveEvent{Window: aw, X: x, Y: y})
 	case t.Equal(stringWheel):
-		u.pushEvent(ScrollEvent{Window: aw, X: -e.Get("deltaX").Float(), Y: -e.Get("deltaY").Float()})
+		line := wheelLine(e)
+		u.pushEvent(ScrollEvent{Window: aw, X: -e.Get("deltaX").Float() / line, Y: -e.Get("deltaY").Float() / line, Modifiers: eventModifiers(e)})
 	case t.Equal(stringTouchstart), t.Equal(stringTouchmove), t.Equal(stringTouchend):
 		phase := TouchPhaseMoved
 		switch {

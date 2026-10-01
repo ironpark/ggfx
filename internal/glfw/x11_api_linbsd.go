@@ -170,6 +170,14 @@ var (
 	// because the returned list refers to them.
 	xVaCreateNestedList func(dummy int32, n1 *byte, v1 *_XIMCallback, n2 *byte, v2 *_XIMCallback, n3 *byte, v3 *_XIMCallback, n4 *byte, v4 *_XIMCallback, term uintptr) uintptr
 
+	// xVaCreateNestedListPoint is XVaCreateNestedList with the shape of one
+	// point, the spot location.
+	xVaCreateNestedListPoint func(dummy int32, n1 *byte, v1 *_XPoint, term uintptr) uintptr
+
+	// Variadic in C; bound with the shape of one nested list
+	// (XNPreeditAttributes, list, NULL).
+	xSetICValues func(ic uintptr, k1 string, v1 uintptr, term uintptr) uintptr
+
 	// setlocale from libc, resolved via RTLD_DEFAULT so that the libc soname
 	// (glibc vs musl) does not matter. setlocaleQuery is the same function
 	// with a pointer-typed locale argument, for passing NULL to query the
@@ -308,6 +316,8 @@ func initLibX11() error {
 	purego.RegisterLibFunc(&xUnmapWindow, lib, "XUnmapWindow")
 	purego.RegisterLibFunc(&xUnsetICFocus, lib, "XUnsetICFocus")
 	purego.RegisterLibFunc(&xVaCreateNestedList, lib, "XVaCreateNestedList")
+	purego.RegisterLibFunc(&xVaCreateNestedListPoint, lib, "XVaCreateNestedList")
+	purego.RegisterLibFunc(&xSetICValues, lib, "XSetICValues")
 	purego.RegisterLibFunc(&xWarpPointer, lib, "XWarpPointer")
 	purego.RegisterLibFunc(&xkbFreeKeyboard, lib, "XkbFreeKeyboard")
 	purego.RegisterLibFunc(&xkbFreeNames, lib, "XkbFreeNames")

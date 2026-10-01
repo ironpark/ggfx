@@ -984,13 +984,13 @@ func windowProc(hWnd windows.HWND, uMsg uint32, wParam _WPARAM, lParam _LPARAM) 
 		return 0
 
 	case _WM_MOUSEWHEEL:
-		window.inputScroll(0, float64(int16(_HIWORD(uint32(wParam))))/_WHEEL_DELTA)
+		window.inputScroll(0, float64(int16(_HIWORD(uint32(wParam))))/_WHEEL_DELTA, getKeyMods())
 		return 0
 
 	case _WM_MOUSEHWHEEL:
 		// This message is only sent on Windows Vista and later
 		// NOTE: The X-axis is inverted for consistency with macOS and X11
-		window.inputScroll(float64(-(int16(_HIWORD(uint32(wParam))))/_WHEEL_DELTA), 0)
+		window.inputScroll(float64(-(int16(_HIWORD(uint32(wParam))))/_WHEEL_DELTA), 0, getKeyMods())
 		return 0
 
 	case _WM_ENTERSIZEMOVE, _WM_ENTERMENULOOP:
