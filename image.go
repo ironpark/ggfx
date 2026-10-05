@@ -200,20 +200,34 @@ func (i *Image) adjustPosition(x, y int) (int, int) {
 	return x, y
 }
 
-// adjustPositionF32 converts the position in the *ebiten.Image coordinate to the *ui.Image coordinate.
-func (i *Image) adjustPositionF32(x, y float32) (float32, float32) {
+// negZero is -0, the offset that leaves a position untouched bit for bit (see graphics.ConvertVertices).
+var negZero = float32(math.Copysign(0, -1))
+
+// positionOffsetF32 returns the offset that converts a position in the *ebiten.Image coordinate to
+// the *ui.Image coordinate by addition.
+//
+// The offset is the negated origin, so adding it to x equals x - origin exactly.
+func (i *Image) positionOffsetF32() (float32, float32) {
 	if i.isSubImage() {
 		or := i.original.Bounds()
-		x -= float32(or.Min.X)
-		y -= float32(or.Min.Y)
-		return x, y
+		return -float32(or.Min.X), -float32(or.Min.Y)
 	}
 
 	r := i.Bounds()
-	x -= float32(r.Min.X)
-	y -= float32(r.Min.Y)
-	return x, y
+	return -float32(r.Min.X), -float32(r.Min.Y)
 }
+
+// vertexFloats returns vertices as floats laid out as graphics.ConvertVertices expects.
+func vertexFloats(vertices []Vertex) []float32 {
+	if len(vertices) == 0 {
+		return nil
+	}
+	return unsafe.Slice(&vertices[0].DstX, len(vertices)*graphics.VertexFloatCount)
+}
+
+// Vertex must consist of exactly graphics.VertexFloatCount floats for vertexFloats.
+var _ [unsafe.Sizeof(Vertex{}) - 4*graphics.VertexFloatCount]struct{}
+var _ [4*graphics.VertexFloatCount - unsafe.Sizeof(Vertex{})]struct{}
 
 func (i *Image) adjustedBounds() image.Rectangle {
 	b := i.Bounds()
@@ -469,10 +483,26 @@ func (i *Image) indices32[I Index](indices []I) []uint32 {
 	}
 	i.tmpIndices = scratch.Resize(i.tmpIndices, len(indices))
 	is := i.tmpIndices
+	if is16, ok := any(indices).([]uint16); ok {
+		graphics.WidenIndices(is, is16)
+		return is
+	}
 	for j, idx := range indices {
 		is[j] = uint32(idx)
 	}
 	return is
+}
+
+// checkIndices panics if an index is out of vertexCount vertices.
+func checkIndices(indices []uint32, vertexCount int) {
+	if graphics.MaxIndex(indices) < uint32(vertexCount) {
+		return
+	}
+	for i, idx := range indices {
+		if idx >= uint32(vertexCount) {
+			panic(fmt.Sprintf("ggfx: indices[%d] must be less than len(vertices) (%d) but was %d", i, vertexCount, idx))
+		}
+	}
 }
 
 func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, options *DrawTrianglesOptions) {
@@ -502,11 +532,7 @@ func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, o
 	if len(indices)%3 != 0 {
 		panic("ggfx: len(indices) % 3 must be 0")
 	}
-	for i, idx := range indices {
-		if idx >= uint32(len(vertices)) {
-			panic(fmt.Sprintf("ggfx: indices[%d] must be less than len(vertices) (%d) but was %d", i, len(vertices), idx))
-		}
-	}
+	checkIndices(indices, len(vertices))
 
 	if options == nil {
 		options = &DrawTrianglesOptions{}
@@ -518,40 +544,13 @@ func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, o
 	filter := builtinshader.Filter(options.Filter)
 
 	vs := i.ensureTmpVertices(len(vertices) * graphics.VertexFloatCount)
-	dst := i
+	dx, dy := i.positionOffsetF32()
+	sx, sy := img.positionOffsetF32()
+	var flags graphics.ConvertVerticesFlags
 	if options.ColorScaleMode == ColorScaleModeStraightAlpha {
-		// Avoid using `for i, v := range vertices` as adding `v` creates a copy from `vertices` unnecessarily on each loop (#3103).
-		for i := range vertices {
-			// Create a temporary slice to reduce boundary checks.
-			vs := vs[i*graphics.VertexFloatCount : i*graphics.VertexFloatCount+8]
-			dx, dy := dst.adjustPositionF32(vertices[i].DstX, vertices[i].DstY)
-			vs[0] = dx
-			vs[1] = dy
-			sx, sy := img.adjustPositionF32(vertices[i].SrcX, vertices[i].SrcY)
-			vs[2] = sx
-			vs[3] = sy
-			vs[4] = vertices[i].ColorR * vertices[i].ColorA
-			vs[5] = vertices[i].ColorG * vertices[i].ColorA
-			vs[6] = vertices[i].ColorB * vertices[i].ColorA
-			vs[7] = vertices[i].ColorA
-		}
-	} else {
-		// See comment above (#3103).
-		for i := range vertices {
-			// Create a temporary slice to reduce boundary checks.
-			vs := vs[i*graphics.VertexFloatCount : i*graphics.VertexFloatCount+8]
-			dx, dy := dst.adjustPositionF32(vertices[i].DstX, vertices[i].DstY)
-			vs[0] = dx
-			vs[1] = dy
-			sx, sy := img.adjustPositionF32(vertices[i].SrcX, vertices[i].SrcY)
-			vs[2] = sx
-			vs[3] = sy
-			vs[4] = vertices[i].ColorR
-			vs[5] = vertices[i].ColorG
-			vs[6] = vertices[i].ColorB
-			vs[7] = vertices[i].ColorA
-		}
+		flags |= graphics.ConvertVerticesPremultiplyAlpha
 	}
+	graphics.ConvertVertices(vs, vertexFloats(vertices), dx, dy, sx, sy, flags)
 
 	srcs := [graphics.ShaderSrcImageCount]*ui.Image{img.image}
 
@@ -683,11 +682,7 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 	if len(indices)%3 != 0 {
 		panic("ggfx: len(indices) % 3 must be 0")
 	}
-	for i, idx := range indices {
-		if idx >= uint32(len(vertices)) {
-			panic(fmt.Sprintf("ggfx: indices[%d] must be less than len(vertices) (%d) but was %d", i, len(vertices), idx))
-		}
-	}
+	checkIndices(indices, len(vertices))
 
 	if options == nil {
 		options = &DrawTrianglesShaderOptions{}
@@ -696,30 +691,12 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 	blend := options.Blend.internalBlend()
 
 	vs := i.ensureTmpVertices(len(vertices) * graphics.VertexFloatCount)
-	dst := i
-	src := options.Images[0]
-	// Avoid using `for i, v := range vertices` as adding `v` creates a copy from `vertices` unnecessarily on each loop (#3103).
-	for i := range vertices {
-		// Create a temporary slice to reduce boundary checks.
-		vs := vs[i*graphics.VertexFloatCount : i*graphics.VertexFloatCount+12]
-		dx, dy := dst.adjustPositionF32(vertices[i].DstX, vertices[i].DstY)
-		vs[0] = dx
-		vs[1] = dy
-		sx, sy := vertices[i].SrcX, vertices[i].SrcY
-		if src != nil {
-			sx, sy = src.adjustPositionF32(sx, sy)
-		}
-		vs[2] = sx
-		vs[3] = sy
-		vs[4] = vertices[i].ColorR
-		vs[5] = vertices[i].ColorG
-		vs[6] = vertices[i].ColorB
-		vs[7] = vertices[i].ColorA
-		vs[8] = vertices[i].Custom0
-		vs[9] = vertices[i].Custom1
-		vs[10] = vertices[i].Custom2
-		vs[11] = vertices[i].Custom3
+	dx, dy := i.positionOffsetF32()
+	sx, sy := negZero, negZero
+	if src := options.Images[0]; src != nil {
+		sx, sy = src.positionOffsetF32()
 	}
+	graphics.ConvertVertices(vs, vertexFloats(vertices), dx, dy, sx, sy, graphics.ConvertVerticesCopyCustom)
 
 	var imgs [graphics.ShaderSrcImageCount]*ui.Image
 	for i, img := range options.Images {

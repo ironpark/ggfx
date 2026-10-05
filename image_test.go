@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -726,6 +727,87 @@ func benchmarkDrawTriangles[I ggfx.Index](b *testing.B, is []I) {
 	b.ReportAllocs()
 	for range b.N {
 		img0.DrawTriangles(vs, is, img1, op)
+	}
+}
+
+func BenchmarkDrawTrianglesBatch(b *testing.B) {
+	b.Run("uint16", func(b *testing.B) {
+		benchmarkDrawTrianglesBatch[uint16](b, ggfx.ColorScaleModeStraightAlpha, false)
+	})
+	b.Run("uint32", func(b *testing.B) {
+		benchmarkDrawTrianglesBatch[uint32](b, ggfx.ColorScaleModeStraightAlpha, false)
+	})
+	b.Run("premultiplied", func(b *testing.B) {
+		benchmarkDrawTrianglesBatch[uint16](b, ggfx.ColorScaleModePremultipliedAlpha, false)
+	})
+	b.Run("shader", func(b *testing.B) {
+		benchmarkDrawTrianglesBatch[uint16](b, ggfx.ColorScaleModeStraightAlpha, true)
+	})
+}
+
+// benchmarkDrawTrianglesBatch draws a batch of quads at once, as a particle system or a tile map does.
+//
+// Run this with a fixed iteration count such as -benchtime=20000x. The tests run in a single frame,
+// and a graphics driver like Metal keeps the vertex buffers of every flush until the frame ends, so
+// the memory usage grows with the iteration count.
+func benchmarkDrawTrianglesBatch[I ggfx.Index](b *testing.B, mode ggfx.ColorScaleMode, useShader bool) {
+	const w, h = 16, 16
+	const quads = 1024
+
+	dst := ggfx.NewImage(w, h)
+	src := ggfx.NewImage(w, h)
+
+	vs := make([]ggfx.Vertex, 0, 4*quads)
+	is := make([]I, 0, 6*quads)
+	for i := range quads {
+		x, y := float32(i%w), float32(i/w%h)
+		for _, p := range [][2]float32{{0, 0}, {1, 0}, {0, 1}, {1, 1}} {
+			vs = append(vs, ggfx.Vertex{
+				DstX:   x + p[0],
+				DstY:   y + p[1],
+				SrcX:   p[0] * w,
+				SrcY:   p[1] * h,
+				ColorR: 1,
+				ColorG: 0.5,
+				ColorB: 0.25,
+				ColorA: 0.5,
+			})
+		}
+		base := I(4 * i)
+		is = append(is, base, base+1, base+2, base+1, base+2, base+3)
+	}
+
+	var s *ggfx.Shader
+	if useShader {
+		var err error
+		s, err = ggfx.NewShader([]byte(`fn fragment(v: Vertex) -> vec4f {
+	return v.color;
+}
+`))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	op := &ggfx.DrawTrianglesOptions{ColorScaleMode: mode}
+	sop := &ggfx.DrawTrianglesShaderOptions{}
+	sop.Images[0] = src
+	pix := make([]byte, 4*w*h)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(vs)) * int64(unsafe.Sizeof(ggfx.Vertex{})))
+	for i := range b.N {
+		if useShader {
+			dst.DrawTrianglesShader(vs, is, s, sop)
+		} else {
+			dst.DrawTriangles(vs, is, src, op)
+		}
+		// Flush the queued commands now and then so that the command queue does not grow unboundedly.
+		if i%64 == 63 {
+			b.StopTimer()
+			dst.ReadPixels(pix)
+			b.StartTimer()
+		}
 	}
 }
 

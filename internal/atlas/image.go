@@ -473,24 +473,13 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 
 	dx, dy := float32(r.Min.X), float32(r.Min.Y)
 
-	var oxf, oyf float32
+	// Without a source, leave the source positions untouched with -0.
+	oxf, oyf := float32(math.Copysign(0, -1)), float32(math.Copysign(0, -1))
 	if srcs[0] != nil {
 		r := srcs[0].regionWithPadding()
 		oxf, oyf = float32(r.Min.X), float32(r.Min.Y)
-		n := len(vertices)
-		for i := 0; i < n; i += graphics.VertexFloatCount {
-			vertices[i] += dx
-			vertices[i+1] += dy
-			vertices[i+2] += oxf
-			vertices[i+3] += oyf
-		}
-	} else {
-		n := len(vertices)
-		for i := 0; i < n; i += graphics.VertexFloatCount {
-			vertices[i] += dx
-			vertices[i+1] += dy
-		}
 	}
+	graphics.TranslateVertices(vertices, dx, dy, oxf, oyf)
 
 	var imgs [graphics.ShaderSrcImageCount]*graphicscommand.Image
 	for i, src := range srcs {

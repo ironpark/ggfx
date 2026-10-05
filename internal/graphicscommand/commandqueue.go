@@ -80,9 +80,7 @@ func (q *commandQueue) addFinalizer(f func()) {
 func (q *commandQueue) appendIndices(indices []uint32, offset uint32) {
 	n := len(q.indices)
 	q.indices = append(q.indices, indices...)
-	for i := n; i < len(q.indices); i++ {
-		q.indices[i] += offset
-	}
+	graphics.OffsetIndices(q.indices[n:], offset)
 }
 
 // mustUseDifferentVertexBuffer reports whether a different vertex buffer must be used.
