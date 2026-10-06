@@ -94,6 +94,10 @@
 // `ebitenginesinglethread` works only with desktops.
 // `ebitenginesinglethread` is deprecated; use RunOptions.SingleThread instead.
 //
+// `ggfxnowasmsimd` excludes the WebAssembly SIMD (SIMD128) instructions that speed up batches of vertices and
+// indices. A WebAssembly engine without SIMD128 support, such as Safari before 16.4, cannot load a module that
+// includes them at all. This is valid only for WebAssembly.
+//
 // `nintendosdk` is for NintendoSDK (e.g. Nintendo Switch).
 //
 // `nintendosdkprofile` enables a profiler for NintendoSDK.
