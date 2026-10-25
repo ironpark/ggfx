@@ -26,7 +26,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ironpark/ggfx/internal/colormode"
-	"github.com/ironpark/ggfx/internal/gamepad"
 	"github.com/ironpark/ggfx/internal/glfw"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/hook"
@@ -375,21 +374,6 @@ func (u *UserInterface) loopFrames(start func() error) (err error) {
 	}
 }
 
-// cachedNativeWindow returns the window's native handle, asking the platform once. The handle does
-// not change for the life of the window, and asking for it costs a call into Cocoa or Win32.
-func (u *glfwBackend) cachedNativeWindow() (uintptr, error) {
-	if u.nativeWindowCached {
-		return u.nativeWindowHandle, nil
-	}
-	h, err := u.nativeWindow()
-	if err != nil {
-		return 0, err
-	}
-	u.nativeWindowHandle = h
-	u.nativeWindowCached = true
-	return h, nil
-}
-
 // pumpEvents processes the OS event queue once, waiting for an event when no window wants a frame.
 // pumpEvents must be called from the main thread.
 func (u *UserInterface) pumpEvents() error {
@@ -403,11 +387,6 @@ func (u *UserInterface) pumpEvents() error {
 		if w.context.wantsFrame() || !w.bufferOnceSwapped {
 			return glfw.PollEvents()
 		}
-	}
-	// A gamepad's buttons and axes are readable only by polling, so an app that asked for them
-	// cannot sleep until the window system has something to say.
-	if d := u.gamepadWaitTimeout(); d > 0 {
-		return glfw.WaitEventsTimeout(d)
 	}
 	return glfw.WaitEvents()
 }
@@ -683,20 +662,6 @@ func (u *UserInterface) updateFrame() error {
 			return
 		}
 
-		// A loop woken often for another reason must not read the gamepads faster than the
-		// poll interval, which is what makes that interval mean what it says.
-		if u.gamepads != nil && u.gamepads.due(time.Now()) {
-			nativeWindow, e := u.windows[0].cachedNativeWindow()
-			if e != nil {
-				err = e
-				return
-			}
-			if e := gamepad.Update(nativeWindow, nil); e != nil {
-				err = e
-				return
-			}
-			u.gamepadsRead = true
-		}
 	}); err != nil {
 		return err
 	}
@@ -711,10 +676,6 @@ func (u *UserInterface) updateFrame() error {
 	// monitor, keep expiring. The before-update hooks, like the text input's, run for the same
 	// reason.
 	u.incrementTick()
-	if u.gamepadsRead {
-		u.gamepadsRead = false
-		u.emitGamepadEvents()
-	}
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}

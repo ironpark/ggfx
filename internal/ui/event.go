@@ -19,8 +19,6 @@ import (
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
-	"github.com/ironpark/ggfx/internal/gamepad"
-	"github.com/ironpark/ggfx/internal/gamepaddb"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
@@ -98,7 +96,7 @@ type WindowOptions struct {
 	MaxHeight int
 }
 
-// Event is what an App receives. Every event but StartEvent belongs to a window.
+// Event is what an App receives. Every event but StartEvent and WakeEvent belongs to a window.
 type Event interface {
 	isEvent()
 }
@@ -250,61 +248,6 @@ type DropEvent struct {
 	Files  fs.FS
 }
 
-// Gamepad events are not window events: a gamepad belongs to the process, so they carry no
-// Window. They are emitted only when RunOptions.Gamepads is set.
-
-// GamepadConnectEvent reports a gamepad that appeared. Standard reports whether the gamepad has a
-// standard layout, and so whether the standard events are emitted for it.
-type GamepadConnectEvent struct {
-	ID       gamepad.ID
-	Name     string
-	SDLID    string
-	Standard bool
-}
-
-// GamepadDisconnectEvent reports a gamepad that went away.
-type GamepadDisconnectEvent struct {
-	ID gamepad.ID
-}
-
-// GamepadButtonEvent reports one raw button changing. Button indices at and above the real button
-// count are the hats' four directions.
-type GamepadButtonEvent struct {
-	ID      gamepad.ID
-	Button  int
-	Pressed bool
-}
-
-// GamepadAxisEvent reports one raw axis moving, in -1..1.
-type GamepadAxisEvent struct {
-	ID    gamepad.ID
-	Axis  int
-	Value float64
-}
-
-// GamepadStandardButtonEvent reports one standard-layout button changing. Value is 0..1 for an
-// analog button, such as a trigger.
-type GamepadStandardButtonEvent struct {
-	ID      gamepad.ID
-	Button  gamepaddb.StandardButton
-	Pressed bool
-	Value   float64
-}
-
-// GamepadStandardAxisEvent reports one standard-layout axis moving, in -1..1.
-type GamepadStandardAxisEvent struct {
-	ID    gamepad.ID
-	Axis  gamepaddb.StandardAxis
-	Value float64
-}
-
-func (GamepadConnectEvent) isEvent()        {}
-func (GamepadDisconnectEvent) isEvent()     {}
-func (GamepadButtonEvent) isEvent()         {}
-func (GamepadAxisEvent) isEvent()           {}
-func (GamepadStandardButtonEvent) isEvent() {}
-func (GamepadStandardAxisEvent) isEvent()   {}
-
 func (StartEvent) isEvent()       {}
 func (WakeEvent) isEvent()        {}
 func (FrameEvent) isEvent()       {}
@@ -330,16 +273,6 @@ func (u *UserInterface) Wake() {
 func (u *UserInterface) pushEvent(ev Event) {
 	u.eventsMu.Lock()
 	u.events = append(u.events, ev)
-	u.eventsMu.Unlock()
-}
-
-// pushEvents queues several events at once, which costs one lock rather than one per event.
-func (u *UserInterface) pushEvents(evs []Event) {
-	if len(evs) == 0 {
-		return
-	}
-	u.eventsMu.Lock()
-	u.events = append(u.events, evs...)
 	u.eventsMu.Unlock()
 }
 

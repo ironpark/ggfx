@@ -96,14 +96,6 @@ type UserInterface struct {
 	// app is the App driven by RunApp.
 	app App
 
-	// gamepads turns polled gamepad state into events. It is nil unless RunOptions.Gamepads
-	// is set, which is what keeps an idle loop asleep for an app that does not want them.
-	gamepads *gamepadTracker
-
-	// gamepadsRead reports that this iteration read the gamepads, so that the events are
-	// derived on the loop's goroutine right after.
-	gamepadsRead bool
-
 	// runOptions are the process-wide options RunApp was given. Window creation reads the
 	// parts of them that are not per window, like the X11 names.
 	runOptions *RunOptions
@@ -258,19 +250,12 @@ type RunOptions struct {
 	ApplePressAndHoldEnabled bool
 	X11ClassName             string
 	X11InstanceName          string
-
-	// Gamepads makes the loop poll gamepads and deliver them as events. Without it no gamepad
-	// is reported and the loop can sleep until the window system wakes it.
-	Gamepads bool
 }
 
 // startApp records what RunApp was given, before either backend's loop starts.
 func (u *UserInterface) startApp(app App, options *RunOptions) {
 	u.app = app
 	u.runOptions = options
-	if options.Gamepads {
-		u.gamepads = &gamepadTracker{}
-	}
 }
 
 // InitialWindowPosition returns the position to place a window of size (ww, wh) in a monitor of size (mw, mh).

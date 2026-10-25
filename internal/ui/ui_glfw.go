@@ -71,10 +71,6 @@ type glfwBackend struct {
 	// closed reports whether the window was destroyed.
 	closed bool
 
-	// nativeWindowHandle is the window's native handle, cached by cachedNativeWindow.
-	nativeWindowHandle uintptr
-	nativeWindowCached bool
-
 	// primary reports whether this is the window that the process-level settings address.
 	primary bool
 
@@ -1730,6 +1726,10 @@ func (u *glfwBackend) setWindowMousePassthrough(enabled bool) error {
 }
 
 func (u *glfwBackend) RunOnMainThread(f func()) {
+	// The main thread can be blocked in WaitEvents, which serves no call until the OS has an
+	// event. Wake it so that f runs now. The loop goroutine has work to do after the wait returns,
+	// so the main thread picks up f before the loop asks it to wait again.
+	u.ScheduleFrame()
 	u.mainThread.Call(func() { withAutoreleasePool(f) })
 }
 

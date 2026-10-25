@@ -173,12 +173,6 @@ Events. Every event but `StartEvent` has a `Window *Window` field.
 | `TouchEvent` | `ID TouchID`, `Phase`, `X, Y` | browser only for now |
 | `DropEvent` | `Files fs.FS` | |
 | `DragEvent` | `Phase DragPhase`, `X, Y float64`, `Files fs.FS` | macOS/Windows file drag entered, moved, exited or ended; Files can be nil |
-| `GamepadConnectEvent` | `ID`, `Name`, `SDLID string`, `Standard bool` | a gamepad appeared; no `Window` |
-| `GamepadDisconnectEvent` | `ID` | a gamepad went away; no `Window` |
-| `GamepadButtonEvent` | `ID`, `Button`, `Pressed bool` | a raw button changed; hats follow the real buttons |
-| `GamepadAxisEvent` | `ID`, `Axis`, `Value float64` | a raw axis moved |
-| `GamepadStandardButtonEvent` | `ID`, `Button`, `Pressed bool`, `Value float64` | a standard-layout button changed |
-| `GamepadStandardAxisEvent` | `ID`, `Axis`, `Value float64` | a standard-layout axis moved |
 
 Coordinates in input events are DIP relative to the window's client area;
 `FrameEvent.Screen` is in physical pixels and `Scale` converts between them.
@@ -228,22 +222,13 @@ The smoke test passes on OpenGL too. The smoke injection is macOS-only.
 
 ### Gamepads
 
-Gamepads are off unless `RunOptions.Gamepads` is set, because they cost an idle application its
-sleep. Buttons and axes can only be read by polling, so the loop wakes every 1/120 s while a
-gamepad is connected, and once a second to notice one arriving. A loop woken more often for another
-reason does not read them faster than that. Without the option no gamepad is
-polled and the loop sleeps until the window system wakes it.
-
-A gamepad belongs to the process, not to a window, so its events carry no `Window`. Each poll is
-compared with the previous one and only the differences are reported; a gamepad's first poll is its
-resting state and reports nothing beyond the connection. Axis moves below 1/64 are dropped, which
-is what keeps a resting stick from waking the loop forever, and an analog button's pressed flag
-applies the gamepad database's dead zone rather than comparing with zero. A gamepad with a standard layout gets
-both the raw and the standard events.
-
-macOS registers IOKit device callbacks and Linux watches the input directory with inotify, so on
-those platforms the one-second detection wake could be replaced by `PostEmptyEvent` from the
-backend. It is not wired yet.
+ggfx does not read gamepads. They belong to the process rather than to a window and can only be
+polled, so they live in [ggip](https://github.com/ironpark/ggip), and an app that wants them polls
+ggip itself. The loop gives it what it needs: `RunOnMainThread` for the backends that must be read
+on the main thread, `Window.NativeHandle` for DirectInput's window, and `Wake` to hand the events
+it found to the loop, which sleeps until the window system or a `Wake` has something to report.
+ggip's `ggfxinput` module does this, and converts ggfx's keys, mouse buttons and modifiers to
+ggip's.
 
 ## What the event path does not do
 

@@ -196,6 +196,16 @@ monitor and window APIs. Everything outside that was dropped.
   `internal/vmguest`, `internal/vmprotocol`, `internal/graphicsdriver/remote`)
   and the `RunGameOptions.VMGuestEndpoint` option.
 - The Linux framebuffer backend (`internal/fbdev`).
+- Gamepads: `internal/gamepad`, `internal/gamepaddb`, the gamepad tracker in
+  `internal/ui`, `RunOptions.Gamepads`, the `Gamepad*Event` types and the
+  `Gamepad*`, `StandardGamepad*` and `UpdateStandardGamepadLayoutMappings`
+  API. They moved to [ggip](https://github.com/ironpark/ggip), which an app
+  polls itself and wires to the loop through `RunOnMainThread`,
+  `Window.NativeHandle` and `Wake`, as its `ggfxinput` module does; ggfx does
+  not depend on it. The loop no
+  longer wakes on a timer for them, and `cachedNativeWindow`, which only the
+  DirectInput backend asked for, went with them. Upstream commits to the
+  gamepad code are cherry-picked into ggip.
 - The mobile key tables and templates in `genkeys.go`: it no longer generates
   `mobile/ebitenmobileview/keys_android.go` or `keys_ios.go`.
 - Tooling: `internal/vettools`, `internal/processtest`,
@@ -246,6 +256,10 @@ The test suite runs on it too: `internal/testing.MainWithRunLoop` opens one
 window and runs the tests in its first frame. The legacy `Game`/`RunGame` API
 is gone from the public surface, along with the root-level functions that
 addressed the game's primary window; `*Window` carries them per window.
+
+`RunOnMainThread` wakes the loop before it queues the function. The loop sleeps in
+`WaitEvents` on the main thread when no window wants a frame, and the main thread serves no
+call while it waits, so a call from another goroutine used to wait for the next OS event.
 
 On macOS, `RunOnMainThread` runs each function inside an autorelease pool
 of its own. The main thread's loop has no pool around the functions it is
@@ -299,8 +313,6 @@ both ways render the same pixels.
 - Runtime validation of Windows native hooks (OLE drag-over, IMM composition,
   WM_GETOBJECT); they are implemented and cross-built. macOS native hooks have
   a two-window smoke test in `examples/nativehooks`.
-- Waking the loop from the macOS and Linux gamepad connection callbacks, instead
-  of the one-second detection poll (`docs/window.md`).
 - The drivers' vsync-off paths are unreachable since `SetVsyncEnabled` went:
   Metal's `vsyncDisabled` and the display-link branches that read it, and the
   tearing branch of DirectX's `present`. The Metal branches are woven into the

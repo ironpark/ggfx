@@ -23,7 +23,6 @@ import (
 
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/file"
-	"github.com/ironpark/ggfx/internal/gamepad"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 	"github.com/ironpark/ggfx/internal/hook"
@@ -319,13 +318,6 @@ func (u *UserInterface) updateImpl(force bool) error {
 		return nil
 	}
 
-	if u.gamepads != nil && u.gamepads.due(time.Now()) {
-		if err := gamepad.Update(0, nil); err != nil {
-			return err
-		}
-		u.gamepadsRead = true
-	}
-
 	// TODO: If DeviceScaleFactor changes, call updateScreenSize.
 	// Now there is not a good way to detect the change.
 	// See also https://crbug.com/123694.
@@ -334,10 +326,6 @@ func (u *UserInterface) updateImpl(force bool) error {
 		return RegularTermination
 	}
 	u.incrementTick()
-	if u.gamepadsRead {
-		u.gamepadsRead = false
-		u.emitGamepadEvents()
-	}
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}
