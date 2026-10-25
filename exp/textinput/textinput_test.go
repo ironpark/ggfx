@@ -856,3 +856,30 @@ func TestUserEndingAfterCommitInSameTick(t *testing.T) {
 		t.Error("SessionClosedByUser() = false, want true")
 	}
 }
+
+// TestCommitCarriesTheNextComposition verifies that the composition an IME
+// begins in the keystroke that commits, as a Korean IME marks the next
+// consonant as it commits a syllable, is carried into the next session
+// rather than counted as left over from another target, while states queued
+// long before a session starts are not.
+func TestCommitCarriesTheNextComposition(t *testing.T) {
+	var tick int64 = 100
+	ev := newEventsAtTick(&tick)
+
+	ev.Start()
+	ev.Send(commitState("한"))
+	ev.End()
+	ev.Send(textinput.TextInputState{Text: "ㄱ", CompositionSelectionStartInBytes: len("ㄱ"), CompositionSelectionEndInBytes: len("ㄱ")})
+	if !ev.CarriesQueue() {
+		t.Fatal("the consonant marked with the commit is not carried into the next session")
+	}
+
+	tick += textinput.QueueCarryTicks + 1
+	if ev.CarriesQueue() {
+		t.Fatal("states queued past the carry window are carried")
+	}
+	ev.ClearQueue()
+	if ev.CarriesQueue() {
+		t.Fatal("an empty queue is carried")
+	}
+}

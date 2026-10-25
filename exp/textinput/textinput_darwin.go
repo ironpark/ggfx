@@ -20,6 +20,7 @@ import (
 	"image"
 	"math"
 	"structs"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego/cstrings"
@@ -30,9 +31,14 @@ import (
 
 type textInputImpl struct {
 	events *textInputEvents
+
+	// discardNeeded reports whether the IME can still hold a composition
+	// for an abandoned target, to be discarded when the next session starts.
+	discardNeeded atomic.Bool
 }
 
 func (t *textInputImpl) markIMEDiscardNeeded() {
+	t.discardNeeded.Store(true)
 }
 
 func (t *textInputImpl) Start(bounds image.Rectangle, _, _ string) (<-chan textInputState, func()) {
@@ -127,6 +133,7 @@ type nsRange struct {
 }
 
 func (t *textInputImpl) start(bounds image.Rectangle) (<-chan textInputState, func()) {
+	replacing := t.events.isOpen()
 	t.endIfNeeded()
 
 	tc := getTextInputClient()
@@ -135,19 +142,27 @@ func (t *textInputImpl) start(bounds image.Rectangle) (<-chan textInputState, fu
 	contentView.Send(sel_addSubview, tc)
 	window.Send(sel_makeFirstResponder, tc)
 
-	// Discard marked text left over from a previous session. The text input
+	// Discard marked text left over from another target. The text input
 	// client is shared, so otherwise a previously focused field's uncommitted
 	// composition would continue into this session (#3463). This runs at
 	// session start, not teardown, because a new session can begin before the
 	// previous field ends its own.
-	if ctx := tc.Send(sel_inputContext); ctx != 0 {
-		ctx.Send(sel_discardMarkedText)
+	//
+	// The marked text is kept when this session follows a commit and takes
+	// over the states queued since: it is the composition the IME began in
+	// the keystroke that committed. A Korean IME commits a syllable and marks
+	// the next consonant in one keystroke, and discarding that consonant
+	// would leave every following vowel and consonant uncombined.
+	if t.discardNeeded.Swap(false) || replacing || !t.events.carriesQueue() {
+		if ctx := tc.Send(sel_inputContext); ctx != 0 {
+			ctx.Send(sel_discardMarkedText)
+		}
+		// Discarding the OS marked text leaves any Go-side queued states
+		// describing a composition that no longer exists on the OS side.
+		// Clear them so start() does not replay them into the new session as
+		// a live composition.
+		t.events.clearQueue()
 	}
-
-	// Discarding the OS marked text leaves any Go-side queued states describing
-	// a composition that no longer exists on the OS side. Clear them so start()
-	// does not replay them into the new session as a live composition.
-	t.events.clearQueue()
 
 	r := objc.Send[nsRect](contentView, sel_frame)
 	// The Y dirction is upward in the Cocoa coordinate system.

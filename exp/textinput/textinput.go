@@ -421,6 +421,15 @@ func (s *textInputEvents) start() (ch chan textInputState, endFunc func()) {
 	return s.ch, s.end
 }
 
+// carriesQueue reports whether a session starting now takes over queued
+// states, which then describe what the platform still holds for it: the
+// composition an IME began in the keystroke that committed the last session.
+func (s *textInputEvents) carriesQueue() bool {
+	s.m.Lock()
+	defer s.m.Unlock()
+	return len(s.queuedStates) > 0 && queuedStatesBelong(s.lastEndTick, s.queuedTick, s.currentTick())
+}
+
 // isOpen reports whether text inputting is in progress.
 func (s *textInputEvents) isOpen() bool {
 	s.m.Lock()

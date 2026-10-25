@@ -73,6 +73,10 @@ func (s *TextInputEvents) End() {
 	s.end()
 }
 
+func (s *TextInputEvents) CarriesQueue() bool {
+	return s.carriesQueue()
+}
+
 func (s *TextInputEvents) ClearQueue() {
 	s.clearQueue()
 }
