@@ -103,7 +103,7 @@ func eventFromUI(ev ui.Event) Event {
 	case ui.KeyEvent:
 		return KeyEvent{Window: windowFromUI(ev.Window), Key: Key(ev.Key), Pressed: ev.Pressed, Repeat: ev.Repeat, Modifiers: KeyModifiers(ev.Modifiers)}
 	case ui.TextEvent:
-		return TextEvent{Window: windowFromUI(ev.Window), Text: ev.Text, ReplacementStart: ev.ReplacementStart, ReplacementEnd: ev.ReplacementEnd, HasReplacement: ev.HasReplacement}
+		return TextEvent{Window: windowFromUI(ev.Window), Text: ev.Text, ReplacementStart: ev.ReplacementStart, ReplacementEnd: ev.ReplacementEnd, HasReplacement: ev.HasReplacement, Passthrough: ev.Passthrough}
 	case ui.CompositionEvent:
 		return CompositionEvent{Window: windowFromUI(ev.Window), Text: ev.Text, Start: ev.Start, End: ev.End, Done: ev.Done}
 	case ui.DragEvent:
@@ -285,6 +285,11 @@ type TextEvent struct {
 	// to the caret in the context supplied to SetTextInputContext.
 	ReplacementStart, ReplacementEnd int
 	HasReplacement                   bool
+	// Passthrough reports that the IME committed the text and also passed
+	// the key that typed it on, as a KeyEvent, rather than consuming it:
+	// the macOS Korean IME commits the syllable it holds as Enter is
+	// pressed, and Enter is still for the app.
+	Passthrough bool
 }
 
 // CompositionEvent reports IME marked text on macOS, Windows and X11. Start and End

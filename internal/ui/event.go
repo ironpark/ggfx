@@ -180,6 +180,7 @@ type TextEvent struct {
 	Text                             string
 	ReplacementStart, ReplacementEnd int
 	HasReplacement                   bool
+	Passthrough                      bool
 }
 
 type CompositionEvent struct {

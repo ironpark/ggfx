@@ -493,7 +493,7 @@ func registerGLFWClasses() error {
 					// Interpret key events for text input.
 					eventArray := objc.ID(class_NSArray).Send(sel_arrayWithObject, event)
 					if window.native.textEnabled {
-						self.Send(sel_interpretKeyEvents, eventArray)
+						window.interpretKey(func() { self.Send(sel_interpretKeyEvents, eventArray) })
 					} else {
 						// Disabling composition does not disable committed characters.
 						// A field can gain focus in the same event batch as its first key.
@@ -811,8 +811,24 @@ func registerGLFWClasses() error {
 			},
 			{
 				Cmd: sel_attributedSubstringForProposedRange_actualRange,
-				Fn: func(_ objc.ID, _ objc.SEL, _ nsRange, _ uintptr) objc.ID {
-					return 0 // nil
+				Fn: func(self objc.ID, _ objc.SEL, r nsRange, actual *nsRange) objc.ID {
+					window := getGoWindow(self)
+					if window == nil || !window.native.textEnabled {
+						return 0 // nil
+					}
+					// The Korean IME reads back the syllable before the caret
+					// and replaces it as each jamo joins it; without the text
+					// every jamo stays apart.
+					sub, got, ok := window.textInRange(int(r.Location), int(r.Length))
+					if !ok {
+						return 0
+					}
+					if actual != nil {
+						*actual = got
+					}
+					str := cocoa.NSString_alloc().InitWithUTF8String(sub)
+					defer str.ID.Send(sel_release)
+					return objc.ID(class_NSAttributedString).Send(sel_alloc).Send(sel_initWithString, str.ID).Send(sel_autorelease)
 				},
 			},
 			{
@@ -862,8 +878,13 @@ func registerGLFWClasses() error {
 			},
 			{
 				Cmd: sel_doCommandBySelector,
-				Fn: func(_ objc.ID, _ objc.SEL, _ objc.SEL) {
-					// Do nothing.
+				Fn: func(self objc.ID, _ objc.SEL, _ objc.SEL) {
+					// The key goes on as a command, which the KeyEvent
+					// already reported; the text interpreted with it did
+					// not consume it.
+					if w := getGoWindow(self); w != nil {
+						w.native.keyCommand = true
+					}
 				},
 			},
 			// Drawing.

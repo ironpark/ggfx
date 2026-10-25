@@ -9,7 +9,7 @@ import "unicode/utf16"
 
 // Native hooks belong to the window and are accessed only on the main thread.
 type nativeWindowState struct {
-	text                         func(text string, start, end int, replacement bool)
+	text                         func(text string, start, end int, replacement, passthrough bool)
 	before, after                string
 	drag                         func(phase int, x, y float64, paths []string)
 	composition                  func(text string, start, end int, done bool)
@@ -22,6 +22,13 @@ type nativeWindowState struct {
 	selectionStart, selectionEnd int // the marked selection, in the platform's units
 	composing                    bool
 	dragPaths                    []string // the files of the drag in progress
+
+	// While a key event is interpreted, the IME's text and composition
+	// are held in deferred until it is known whether the IME passed the
+	// key on as a command, which keyCommand records.
+	inKey      bool
+	keyCommand bool
+	deferred   []func(passthrough bool)
 }
 
 // newNativeWindowState is the state of a fresh window: text input on, as a
@@ -47,7 +54,7 @@ func (w *Window) SetCompositionCallback(f func(text string, start, end int, done
 func (w *Window) inputComposition(text string, start, end int, done bool) {
 	w.native.composing = !done && text != ""
 	if f := w.native.composition; f != nil {
-		f(text, start, end, done)
+		w.emit(func(bool) { f(text, start, end, done) })
 	}
 }
 
@@ -96,7 +103,33 @@ func utf16ByteOffset(text string, offset int) int {
 func (w *Window) SetTextInputContext(before, after string) {
 	w.native.before, w.native.after = before, after
 }
-func (w *Window) SetTextCallback(f func(string, int, int, bool)) { w.native.text = f }
+func (w *Window) SetTextCallback(f func(string, int, int, bool, bool)) { w.native.text = f }
+
+// emit runs fn now, or once the key event being interpreted is, with
+// whether the IME passed that key on.
+func (w *Window) emit(fn func(passthrough bool)) {
+	if w.native.inKey {
+		w.native.deferred = append(w.native.deferred, fn)
+		return
+	}
+	fn(false)
+}
+
+// interpretKey runs interpret, the platform's interpretation of a key
+// event, and then hands on the text and composition it produced, noting
+// with the text whether the key also went on as a command: an IME that
+// commits and then passes the key on, as the macOS Korean one does with
+// Enter, has not consumed it.
+func (w *Window) interpretKey(interpret func()) {
+	w.native.inKey, w.native.keyCommand = true, false
+	interpret()
+	w.native.inKey = false
+	deferred, pass := w.native.deferred, w.native.keyCommand
+	w.native.deferred = nil
+	for _, fn := range deferred {
+		fn(pass)
+	}
+}
 func utf16Length(s string) int {
 	n := 0
 	for _, r := range s {

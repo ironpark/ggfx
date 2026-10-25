@@ -56,8 +56,8 @@ func (u *glfwBackend) registerNativeCallbacks() error {
 		return nil
 	}
 	u.window.SetTextInputEnabled(true)
-	u.window.SetTextCallback(func(text string, start, end int, replacement bool) {
-		u.pushEvent(TextEvent{Window: aw, Text: text, ReplacementStart: start, ReplacementEnd: end, HasReplacement: replacement})
+	u.window.SetTextCallback(func(text string, start, end int, replacement, passthrough bool) {
+		u.pushEvent(TextEvent{Window: aw, Text: text, ReplacementStart: start, ReplacementEnd: end, HasReplacement: replacement, Passthrough: passthrough})
 		aw.RequestFrame()
 	})
 	u.window.SetCompositionCallback(func(text string, start, end int, done bool) {

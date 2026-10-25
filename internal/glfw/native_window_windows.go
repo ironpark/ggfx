@@ -103,7 +103,7 @@ func (w *Window) handleNativeMessage(msg uint32, wp, lp uintptr) (uintptr, bool)
 			text := immString(ctx, 0x800)
 			w.inputComposition("", 0, 0, true)
 			if w.native.text != nil {
-				w.native.text(text, 0, 0, false)
+				w.native.text(text, 0, 0, false, false)
 			} else {
 				for _, r := range text {
 					w.inputChar(r, getKeyMods(), true)

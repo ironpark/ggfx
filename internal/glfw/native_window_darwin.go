@@ -4,9 +4,11 @@
 package glfw
 
 import (
+	"sync"
+	"unicode/utf16"
+
 	"github.com/ebitengine/purego/objc"
 	"github.com/ironpark/ggfx/internal/cocoa"
-	"sync"
 )
 
 func (w *Window) platformEnableDrag() error { return nil }
@@ -165,7 +167,8 @@ func (w *Window) insertNativeText(text string, replacement nsRange) {
 		end = offset(int(replacement.Location + replacement.Length))
 	}
 	w.platform.view.Send(sel_unmarkText)
-	w.native.text(text, start, end, replace)
+	f := w.native.text
+	w.emit(func(pass bool) { f(text, start, end, replace, pass) })
 	// AppKit can issue a commit and the next marked text in a single key event.
 	// Keep its surrounding-text view current before the app drains the events.
 	if replace {
@@ -175,4 +178,20 @@ func (w *Window) insertNativeText(text string, replacement nsRange) {
 	} else {
 		w.native.before += text
 	}
+}
+
+// textInRange is the part of the text around the caret the IME sees, the
+// context the field gave and the marked text between, that a UTF-16 range
+// covers, clamped to it, and the range it does cover.
+func (w *Window) textInRange(location, length int) (string, nsRange, bool) {
+	marked := ""
+	if w.platform.markedText != 0 {
+		marked = (cocoa.NSString{ID: w.platform.markedText.Send(sel_string)}).String()
+	}
+	units := utf16.Encode([]rune(w.native.before + marked + w.native.after))
+	if location < 0 || location > len(units) {
+		return "", nsRange{}, false
+	}
+	end := min(location+max(length, 0), len(units))
+	return string(utf16.Decode(units[location:end])), nsRange{Location: uintptr(location), Length: uintptr(end - location)}, true
 }
