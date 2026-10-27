@@ -390,6 +390,11 @@ type GoTextFaceSource struct {
 
 	bitmapSizesResult []font.BitmapSize
 	bitmapSizesOnce   sync.Once
+
+	// sbix, for a source read with NewGoTextFaceSourceAt, serves the
+	// 'sbix' table from where the font is, a glyph at a time, in place
+	// of the parser's copy of it. Nil otherwise.
+	sbix *lazySbix
 }
 
 func toFontResource(source io.Reader) (font.Resource, error) {
@@ -1099,6 +1104,12 @@ func (g *GoTextFaceSource) glyphExtents(gid font.GID) (font.GlyphExtents, bool) 
 			}
 		}
 	}
+	// The parser looks in 'sbix' first, at the resolution last set.
+	if g.sbix != nil {
+		if ext, ok := g.sbix.extents(gid, g.lastXPpem, g.lastYPpem); ok {
+			return ext, true
+		}
+	}
 	return g.f.GlyphExtents(gid)
 }
 
@@ -1186,7 +1197,7 @@ func (g *GoTextFaceSource) fetchGlyphData(gid font.GID, variationsString string,
 		size:       keySize,
 	}
 	return g.glyphDataCache.getOrCreate(key, func() (font.GlyphData, bool) {
-		d := g.f.GlyphData(gid)
+		d := g.glyphData(gid)
 		if d == nil {
 			return nil, false
 		}
@@ -1195,6 +1206,27 @@ func (g *GoTextFaceSource) fetchGlyphData(gid font.GID, variationsString string,
 		}
 		return d, true
 	})
+}
+
+// glyphData is gid's data as the parser's GlyphData finds it: a color
+// glyph, a bitmap, an SVG glyph or an outline, the first there is. The
+// bitmap of a source with a lazy 'sbix' table comes from it.
+//
+// The caller must hold g.shapeMu.
+func (g *GoTextFaceSource) glyphData(gid font.GID) font.GlyphData {
+	if g.sbix == nil {
+		return g.f.GlyphData(gid)
+	}
+	if d, ok := g.f.GlyphDataColor(gid); ok {
+		return d
+	}
+	if d, ok := g.sbix.bitmap(gid, g.lastXPpem, g.lastYPpem); ok {
+		if o, ok := g.f.GlyphDataOutline(gid); ok {
+			d.Outline = &o
+		}
+		return d
+	}
+	return g.f.GlyphData(gid)
 }
 
 // realizeRenderData performs the deferred work that buildRenderData
@@ -1377,6 +1409,10 @@ func (g *GoTextFaceSource) chunks(text string, face *GoTextFace) []chunk.Chunk {
 
 func (g *GoTextFaceSource) bitmapSizes() []font.BitmapSize {
 	g.bitmapSizesOnce.Do(func() {
+		if g.sbix != nil {
+			g.bitmapSizesResult = g.sbix.sizes
+			return
+		}
 		g.bitmapSizesResult = g.f.BitmapSizes()
 	})
 	return g.bitmapSizesResult

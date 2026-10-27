@@ -77,3 +77,7 @@ func HasGlyphImageCache(source *GoTextFaceSource, size float64) bool {
 func TouchGlyphImageCache(face *GoTextFace, tick int64) {
 	face.Source.glyphImageCache.cacheForFace(face, tick)
 }
+
+func HasGlyph(f Face, r rune) bool {
+	return f.hasGlyph(r)
+}
