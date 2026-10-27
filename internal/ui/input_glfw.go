@@ -94,9 +94,9 @@ func (u *glfwBackend) registerInputCallbacks() error {
 		return err
 	}
 
-	if _, err := u.window.SetScrollCallback(func(w *glfw.Window, xoff float64, yoff float64, mods glfw.ModifierKey) {
+	if _, err := u.window.SetScrollCallback(func(w *glfw.Window, xoff float64, yoff float64, mods glfw.ModifierKey, phase glfw.ScrollPhase) {
 		if aw != nil {
-			u.pushEvent(ScrollEvent{Window: aw, X: xoff, Y: yoff, Modifiers: glfwModifiers(mods)})
+			u.pushEvent(ScrollEvent{Window: aw, X: xoff, Y: yoff, Modifiers: glfwModifiers(mods), Phase: ScrollPhase(phase)})
 		}
 	}); err != nil {
 		return err

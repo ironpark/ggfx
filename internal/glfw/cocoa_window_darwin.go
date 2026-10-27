@@ -588,8 +588,11 @@ func registerGLFWClasses() error {
 						deltaY *= 0.1
 					}
 
-					if deltaX != 0 || deltaY != 0 {
-						window.inputScroll(deltaX, deltaY, translateFlags(uintptr(event.Send(sel_modifierFlags))))
+					// The event that says the fingers lifted, or the
+					// momentum stopped, moves nothing, and still goes on.
+					phase := scrollPhase(objc.Send[uint](event, sel_phase), objc.Send[uint](event, sel_momentumPhase))
+					if deltaX != 0 || deltaY != 0 || phase == ScrollPhaseEnded || phase == ScrollPhaseMomentumEnded {
+						window.inputScroll(deltaX, deltaY, translateFlags(uintptr(event.Send(sel_modifierFlags))), phase)
 					}
 				},
 			},
@@ -2165,4 +2168,30 @@ func goStringFromCString(ptr uintptr) string {
 		n++
 	}
 	return string(unsafe.Slice(p, n))
+}
+
+// NSEventPhase's bits.
+const (
+	nsEventPhaseBegan     = 1 << 0
+	nsEventPhaseChanged   = 1 << 2
+	nsEventPhaseEnded     = 1 << 3
+	nsEventPhaseCancelled = 1 << 4
+)
+
+// scrollPhase is a scroll event's place in its gesture, from its phase
+// and momentumPhase.
+func scrollPhase(phase, momentum uint) ScrollPhase {
+	switch {
+	case momentum&(nsEventPhaseEnded|nsEventPhaseCancelled) != 0:
+		return ScrollPhaseMomentumEnded
+	case momentum != 0:
+		return ScrollPhaseMomentum
+	case phase&(nsEventPhaseEnded|nsEventPhaseCancelled) != 0:
+		return ScrollPhaseEnded
+	case phase&nsEventPhaseBegan != 0:
+		return ScrollPhaseBegan
+	case phase&nsEventPhaseChanged != 0:
+		return ScrollPhaseChanged
+	}
+	return ScrollPhaseNone
 }

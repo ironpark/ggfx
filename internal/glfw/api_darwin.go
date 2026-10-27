@@ -339,6 +339,8 @@ var (
 	sel_scrollingDeltaX                                                                              = objc.RegisterName("scrollingDeltaX")
 	sel_scrollingDeltaY                                                                              = objc.RegisterName("scrollingDeltaY")
 	sel_hasPreciseScrollingDeltas                                                                    = objc.RegisterName("hasPreciseScrollingDeltas")
+	sel_phase                                                                                        = objc.RegisterName("phase")
+	sel_momentumPhase                                                                                = objc.RegisterName("momentumPhase")
 	sel_buttonNumber                                                                                 = objc.RegisterName("buttonNumber")
 	sel_deltaX                                                                                       = objc.RegisterName("deltaX")
 	sel_deltaY                                                                                       = objc.RegisterName("deltaY")

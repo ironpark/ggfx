@@ -222,7 +222,20 @@ type ScrollEvent struct {
 	X         float64
 	Y         float64
 	Modifiers KeyModifiers
+	Phase     ScrollPhase
 }
+
+// ScrollPhase is where a scroll is in the trackpad gesture that makes it.
+type ScrollPhase int
+
+const (
+	ScrollPhaseNone ScrollPhase = iota
+	ScrollPhaseBegan
+	ScrollPhaseChanged
+	ScrollPhaseEnded
+	ScrollPhaseMomentum
+	ScrollPhaseMomentumEnded
+)
 
 // TouchPhase is what happened to a touch.
 type TouchPhase int

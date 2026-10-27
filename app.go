@@ -113,7 +113,7 @@ func eventFromUI(ev ui.Event) Event {
 	case ui.MouseButtonEvent:
 		return MouseButtonEvent{Window: windowFromUI(ev.Window), Button: MouseButton(ev.Button), Pressed: ev.Pressed, X: ev.X, Y: ev.Y, Modifiers: KeyModifiers(ev.Modifiers)}
 	case ui.ScrollEvent:
-		return ScrollEvent{Window: windowFromUI(ev.Window), X: ev.X, Y: ev.Y, Modifiers: KeyModifiers(ev.Modifiers)}
+		return ScrollEvent{Window: windowFromUI(ev.Window), X: ev.X, Y: ev.Y, Modifiers: KeyModifiers(ev.Modifiers), Phase: ScrollPhase(ev.Phase)}
 	case ui.TouchEvent:
 		return TouchEvent{Window: windowFromUI(ev.Window), ID: TouchID(ev.ID), Phase: TouchPhase(ev.Phase), X: ev.X, Y: ev.Y}
 	case ui.DropEvent:
@@ -283,7 +283,23 @@ type ScrollEvent struct {
 	X         float64
 	Y         float64
 	Modifiers KeyModifiers
+	// Phase is where the scroll is in the trackpad gesture making it, on
+	// a platform that says (macOS): ScrollPhaseEnded is the fingers
+	// lifting, which moves nothing. A wheel's scrolls have ScrollPhaseNone.
+	Phase ScrollPhase
 }
+
+// ScrollPhase is where a scroll is in the trackpad gesture that makes it.
+type ScrollPhase int
+
+const (
+	ScrollPhaseNone          ScrollPhase = ScrollPhase(ui.ScrollPhaseNone)          // a wheel, or no gesture reported
+	ScrollPhaseBegan         ScrollPhase = ScrollPhase(ui.ScrollPhaseBegan)         // the fingers start to move
+	ScrollPhaseChanged       ScrollPhase = ScrollPhase(ui.ScrollPhaseChanged)       // the fingers move on
+	ScrollPhaseEnded         ScrollPhase = ScrollPhase(ui.ScrollPhaseEnded)         // the fingers lift
+	ScrollPhaseMomentum      ScrollPhase = ScrollPhase(ui.ScrollPhaseMomentum)      // momentum after they lift
+	ScrollPhaseMomentumEnded ScrollPhase = ScrollPhase(ui.ScrollPhaseMomentumEnded) // the momentum stops
+)
 
 // TouchPhase is what happened to a touch.
 type TouchPhase int

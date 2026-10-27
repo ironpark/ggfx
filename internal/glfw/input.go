@@ -74,12 +74,26 @@ func (w *Window) inputChar(codepoint rune, mods ModifierKey, plain bool) {
 	}
 }
 
-func (w *Window) inputScroll(xoffset, yoffset float64, mods ModifierKey) {
+// ScrollPhase is where a scroll is in the gesture that makes it, on a
+// trackpad that reports one: the fingers on it, lifted, or the momentum
+// after. A mouse wheel's scrolls have none.
+type ScrollPhase int
+
+const (
+	ScrollPhaseNone          ScrollPhase = iota // a wheel, or a gesture not reported
+	ScrollPhaseBegan                            // the fingers start to move
+	ScrollPhaseChanged                          // the fingers move on
+	ScrollPhaseEnded                            // the fingers lift, or the gesture is cancelled
+	ScrollPhaseMomentum                         // the scroll goes on after the fingers lift
+	ScrollPhaseMomentumEnded                    // the momentum stops
+)
+
+func (w *Window) inputScroll(xoffset, yoffset float64, mods ModifierKey, phase ScrollPhase) {
 	if !w.lockKeyMods {
 		mods &^= ModCapsLock | ModNumLock
 	}
 	if w.callbacks.scroll != nil {
-		w.callbacks.scroll(w, xoffset, yoffset, mods)
+		w.callbacks.scroll(w, xoffset, yoffset, mods, phase)
 	}
 }
 
