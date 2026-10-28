@@ -24,8 +24,8 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 	etesting "github.com/ironpark/ggfx/internal/testing"
-	"github.com/ironpark/ggfx/internal/ui"
 )
 
 var nearestFilterShader *graphicscommand.Shader
@@ -60,7 +60,7 @@ func TestClear(t *testing.T) {
 	dst.DrawTriangles([graphics.ShaderSrcImageCount]*graphicscommand.Image{src}, vs, is, graphicsdriver.BlendClear, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, nearestFilterShader, nil)
 
 	pix := make([]byte, 4*w*h)
-	if err := dst.ReadPixels(ui.Get().GraphicsDriverForTesting(), []graphicsdriver.PixelsArgs{
+	if err := dst.ReadPixels(render.GraphicsDriver(), []graphicsdriver.PixelsArgs{
 		{
 			Pixels: pix,
 			Region: image.Rect(0, 0, w, h),
@@ -112,7 +112,7 @@ func TestShader(t *testing.T) {
 	sr := image.Rect(0, 0, w, h)
 	dst.DrawTriangles([graphics.ShaderSrcImageCount]*graphicscommand.Image{clr}, vs, is, graphicsdriver.BlendClear, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, nearestFilterShader, nil)
 
-	g := ui.Get().GraphicsDriverForTesting()
+	g := render.GraphicsDriver()
 	s := graphicscommand.NewShader(etesting.ShaderProgramFill(0xff, 0, 0, 0xff), "")
 	dst.DrawTriangles([graphics.ShaderSrcImageCount]*graphicscommand.Image{}, vs, is, graphicsdriver.BlendSourceOver, dr, [graphics.ShaderSrcImageCount]image.Rectangle{}, s, nil)
 

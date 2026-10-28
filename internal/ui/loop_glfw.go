@@ -29,6 +29,7 @@ import (
 	"github.com/ironpark/ggfx/internal/glfw"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/hook"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/thread"
 )
 
@@ -113,20 +114,16 @@ func (u *UserInterface) initGraphicsOnMainThread(options *RunOptions) error {
 
 	setApplePressAndHoldEnabled(options.ApplePressAndHoldEnabled)
 
-	g, lib, err := newGraphicsDriver(&graphicsDriverCreatorImpl{
-		colorSpace: options.ColorSpace,
-	}, options.GraphicsLibrary)
+	g, err := render.InitGraphicsDriver(options.GraphicsLibrary, options.ColorSpace, nil)
 	if err != nil {
 		return err
 	}
-	u.graphicsDriver = g
-	u.setGraphicsLibrary(lib)
 
-	if g, ok := u.graphicsDriver.(interface{ SetMainThreadRunner(func(func())) }); ok {
+	if g, ok := g.(interface{ SetMainThreadRunner(func(func())) }); ok {
 		g.SetMainThreadRunner(u.mainThread.Call)
 	}
 
-	if lib == GraphicsLibraryOpenGL {
+	if render.Library() == render.GraphicsLibraryOpenGL {
 		if err := u.createGLContextWindow(); err != nil {
 			return err
 		}
@@ -155,7 +152,7 @@ func (u *UserInterface) createGLContextWindow() error {
 		return err
 	}
 	u.glContextWindow = w
-	u.graphicsDriver.(interface {
+	render.GraphicsDriver().(interface {
 		SetDrawingContext(interface{ MakeContextCurrent() error })
 	}).SetDrawingContext(w)
 	return nil
@@ -205,8 +202,8 @@ func (u *glfwBackend) createWindowOnMainThread() error {
 
 	// The OpenGL driver needs a window with a GL context, unlike the other drivers.
 	// Set the context-related hints before creating a window.
-	lib := u.GraphicsLibrary()
-	if lib == GraphicsLibraryOpenGL {
+	lib := render.Library()
+	if lib == render.GraphicsLibraryOpenGL {
 		if err := u.setOpenGLWindowHints(); err != nil {
 			return err
 		}
@@ -215,7 +212,7 @@ func (u *glfwBackend) createWindowOnMainThread() error {
 	// A window created without a redirection surface shows nothing unless its content is presented
 	// through DirectComposition, and only the graphics driver can tell whether that works (#3489).
 	noRedirectionBitmap := glfw.False
-	if d, ok := u.graphicsDriver.(interface{ SupportsDirectComposition() bool }); ok && d.SupportsDirectComposition() {
+	if d, ok := render.GraphicsDriver().(interface{ SupportsDirectComposition() bool }); ok && d.SupportsDirectComposition() {
 		noRedirectionBitmap = glfw.True
 	}
 	if err := glfw.WindowHint(glfw.Win32NoRedirectionBitmap, noRedirectionBitmap); err != nil {
@@ -290,14 +287,14 @@ func (u *glfwBackend) createWindowOnMainThread() error {
 
 	// The OpenGL driver presents through the GLFW window; the others need the native handle.
 	var target any = u.window
-	if lib != GraphicsLibraryOpenGL {
+	if lib != render.GraphicsLibraryOpenGL {
 		w, err := u.nativeWindow()
 		if err != nil {
 			return err
 		}
 		target = w
 	}
-	surface, err := u.graphicsDriver.NewSurface(target, u.desktopWindow.isInitWindowTransparent())
+	surface, err := render.NewSurface(target, u.desktopWindow.isInitWindowTransparent())
 	if err != nil {
 		return err
 	}
@@ -333,7 +330,7 @@ func (u *glfwBackend) destroy() error {
 	u.closed = true
 	u.context.dispose()
 	if u.surface != nil {
-		graphicscommand.DisposeSurface(u.surface)
+		render.DisposeSurface(u.surface)
 		u.surface = nil
 	}
 	if err := u.window.Destroy(); err != nil {
@@ -669,13 +666,13 @@ func (u *UserInterface) updateFrame() error {
 	// Whether swapping buffers waits for the display can differ per monitor, e.g. when the monitors
 	// are driven by different GPUs. Measure it again on the new monitor.
 	if monitorChanged {
-		u.pacer.resetVsyncDetection()
+		u.pacer.ResetVsyncDetection()
 	}
 
 	// The tick advances once per iteration, so that the time-based caches, like the current
 	// monitor, keep expiring. The before-update hooks, like the text input's, run for the same
 	// reason.
-	u.incrementTick()
+	render.IncrementTick()
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}
@@ -691,13 +688,13 @@ func (u *UserInterface) updateFrame() error {
 		if !f.render || !f.window.context.wantsFrame() || f.window.sizeChanged.Load() {
 			continue
 		}
-		ran, err := f.window.context.renderFrame(u.graphicsDriver, f.screenWidth, f.screenHeight, f.deviceScaleFactor, u, false)
+		ran, err := f.window.context.renderFrame(f.screenWidth, f.screenHeight, f.deviceScaleFactor, false)
 		if err != nil {
 			return err
 		}
 		needsSwapBuffers = needsSwapBuffers || (ran && f.present)
 	}
-	if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.RefreshRate()); err != nil {
+	if err := u.pacer.FlushCommandsAndWait(needsSwapBuffers, u.RefreshRate()); err != nil {
 		return err
 	}
 

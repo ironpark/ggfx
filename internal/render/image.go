@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ui
+package render
 
 import (
 	"cmp"
@@ -53,8 +53,6 @@ func ImageFromEbitenImage(ebitenImage any) (*Image, image.Rectangle) {
 var lastImageID atomic.Int64
 
 type Image struct {
-	ui *UserInterface
-
 	mipmap    *mipmap.Mipmap
 	width     int
 	height    int
@@ -79,18 +77,17 @@ type Image struct {
 	tmpVerticesForFill []float32
 }
 
-func (u *UserInterface) NewImage(width, height int, imageType atlas.ImageType) *Image {
-	return u.newImage(mipmap.New(width, height, imageType), width, height, imageType)
+func NewImage(width, height int, imageType atlas.ImageType) *Image {
+	return newImage(mipmap.New(width, height, imageType), width, height, imageType)
 }
 
 // NewScreenImage returns the image presented on surface.
-func (u *UserInterface) NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
-	return u.newImage(mipmap.NewScreen(width, height, surface), width, height, atlas.ImageTypeScreen)
+func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
+	return newImage(mipmap.NewScreen(width, height, surface), width, height, atlas.ImageTypeScreen)
 }
 
-func (u *UserInterface) newImage(m *mipmap.Mipmap, width, height int, imageType atlas.ImageType) *Image {
+func newImage(m *mipmap.Mipmap, width, height int, imageType atlas.ImageType) *Image {
 	return &Image{
-		ui:        u,
 		mipmap:    m,
 		width:     width,
 		height:    height,
@@ -224,15 +221,15 @@ func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
 
 func (i *Image) ReadPixels(pixels []byte, region image.Rectangle) {
 	// Check the error existence and avoid unnecessary calls.
-	if i.ui.error() != nil {
+	if Error() != nil {
 		return
 	}
 
-	if err := i.ui.readPixels(i, pixels, region); err != nil {
+	if err := readPixels(i, pixels, region); err != nil {
 		if panicOnErrorOnReadingPixels {
 			panic(err)
 		}
-		i.ui.setError(err)
+		SetError(err)
 	}
 }
 
@@ -244,15 +241,12 @@ func (i *Image) readPixels(pixels []byte, region image.Rectangle) (bool, error) 
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	return i.mipmap.ReadPixels(i.ui.graphicsDriver, pixels, region)
+	return i.mipmap.ReadPixels(driver, pixels, region)
 }
 
-func (i *Image) clear() {
+// Clear clears the whole image.
+func (i *Image) Clear() {
 	i.Fill(0, 0, 0, 0, image.Rect(0, 0, i.width, i.height))
-}
-
-func (i *Image) fillBlack() {
-	i.Fill(0, 0, 0, 1, image.Rect(0, 0, i.width, i.height))
 }
 
 func (i *Image) Fill(r, g, b, a float32, region image.Rectangle) {
@@ -261,7 +255,7 @@ func (i *Image) Fill(r, g, b, a float32, region image.Rectangle) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	srcs := [graphics.ShaderSrcImageCount]*Image{i.ui.whiteImage}
+	srcs := [graphics.ShaderSrcImageCount]*Image{whiteImage}
 
 	if len(i.tmpVerticesForFill) < 4*graphics.VertexFloatCount {
 		i.tmpVerticesForFill = make([]float32, 4*graphics.VertexFloatCount)
@@ -269,7 +263,7 @@ func (i *Image) Fill(r, g, b, a float32, region image.Rectangle) {
 	// i.tmpVerticesForFill can be reused as this is sent to drawTriangles immediately.
 	graphics.QuadVerticesFromSrcAndMatrix(
 		i.tmpVerticesForFill,
-		1, 1, float32(i.ui.whiteImage.width-1), float32(i.ui.whiteImage.height-1),
+		1, 1, float32(whiteImage.width-1), float32(whiteImage.height-1),
 		float32(i.width), 0, 0, float32(i.height), 0, 0,
 		r, g, b, a)
 	is := graphics.QuadIndices()
@@ -279,7 +273,7 @@ func (i *Image) Fill(r, g, b, a float32, region image.Rectangle) {
 	if a == 1 && i.lastBlend == graphicsdriver.BlendSourceOver {
 		blend = graphicsdriver.BlendSourceOver
 	}
-	sr := image.Rect(0, 0, i.ui.whiteImage.width, i.ui.whiteImage.height)
+	sr := image.Rect(0, 0, whiteImage.width, whiteImage.height)
 	// i.lastBlend is updated in drawTriangles.
 	i.drawTriangles(srcs, i.tmpVerticesForFill, is, blend, region, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader, nil, true)
 }

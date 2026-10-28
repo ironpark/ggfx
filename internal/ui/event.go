@@ -18,16 +18,15 @@ import (
 	"io/fs"
 	"sync/atomic"
 
-	"github.com/ironpark/ggfx/internal/atlas"
-	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 // App is what RunApp drives: it receives every event and creates the screen images.
 type App interface {
 	// NewScreenImage creates the image presented on the window's surface. The app owns the image
 	// and gets it back in FrameEvent.Screen.
-	NewScreenImage(window AppWindow, width, height int, surface graphicsdriver.Surface) *Image
+	NewScreenImage(window AppWindow, width, height int, surface graphicsdriver.Surface) *render.Image
 
 	// HandleEvent handles one event. Returning RegularTermination ends the loop without an error.
 	HandleEvent(ev Event) error
@@ -111,7 +110,7 @@ type WakeEvent struct{}
 // device-independent pixels to physical pixels.
 type FrameEvent struct {
 	Window AppWindow
-	Screen *Image
+	Screen *render.Image
 	Scale  float64
 }
 
@@ -326,7 +325,7 @@ type eventContext struct {
 	window AppWindow
 
 	surface graphicsdriver.Surface
-	screen  *Image
+	screen  *render.Image
 
 	screenWidth  int
 	screenHeight int
@@ -362,7 +361,7 @@ func (c *eventContext) dispose() {
 
 // renderFrame runs one frame if one was requested, or regardless when force is set. It returns
 // whether the frame ran; the caller decides whether that frame is presented.
-func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface, force bool) (ran bool, err error) {
+func (c *eventContext) renderFrame(screenWidth, screenHeight int, deviceScaleFactor float64, force bool) (ran bool, err error) {
 	if screenWidth == 0 || screenHeight == 0 {
 		return false, nil
 	}
@@ -371,17 +370,17 @@ func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, scree
 	}
 	c.frameRequested.Store(false)
 
-	if err := atlas.BeginFrame(graphicsDriver); err != nil {
+	if err := render.BeginFrame(); err != nil {
 		return false, err
 	}
 	defer func() {
-		if atlasErr := atlas.EndFrame(graphicsDriver); atlasErr != nil {
+		if renderErr := render.EndFrame(); renderErr != nil {
 			ran = false
-			err = atlasErr
+			err = renderErr
 		}
 	}()
 
-	if err := ui.processFuncsInFrame(); err != nil {
+	if err := render.ProcessFuncsInFrame(); err != nil {
 		return false, err
 	}
 
@@ -395,8 +394,8 @@ func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, scree
 		c.screenHeight = screenHeight
 	}
 
-	if graphicsDriver.NeedsClearingScreen() {
-		c.screen.clear()
+	if render.NeedsClearingScreen() {
+		c.screen.Clear()
 	}
 
 	if err := c.app.HandleEvent(FrameEvent{
@@ -409,17 +408,17 @@ func (c *eventContext) renderFrame(graphicsDriver graphicsdriver.Graphics, scree
 	return true, nil
 }
 
-func (c *eventContext) forceUpdateFrame(graphicsDriver graphicsdriver.Graphics, screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error {
+func (c *eventContext) forceUpdateFrame(screenWidth, screenHeight int, deviceScaleFactor float64, ui *UserInterface) error {
 	// The size change is queued as a ResizeEvent; hand it over before the frame.
 	if err := ui.dispatchEvents(); err != nil {
 		return err
 	}
-	needsSwapBuffers, err := c.renderFrame(graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, ui, true)
+	needsSwapBuffers, err := c.renderFrame(screenWidth, screenHeight, deviceScaleFactor, true)
 	if err != nil {
 		return err
 	}
-	if err := ui.pacer.flushCommandsAndWait(needsSwapBuffers, graphicsDriver, ui.RefreshRate()); err != nil {
+	if err := ui.pacer.FlushCommandsAndWait(needsSwapBuffers, ui.RefreshRate()); err != nil {
 		return err
 	}
-	return graphicscommand.FinishForcedFrame(graphicsDriver)
+	return render.FinishForcedFrame()
 }

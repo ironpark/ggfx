@@ -15,44 +15,16 @@
 package ui
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"syscall/js"
 	"time"
 
-	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/file"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 	"github.com/ironpark/ggfx/internal/hook"
+	"github.com/ironpark/ggfx/internal/render"
 )
-
-type graphicsDriverCreatorImpl struct {
-	canvas     js.Value
-	colorSpace color.ColorSpace
-}
-
-func (g *graphicsDriverCreatorImpl) newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error) {
-	graphics, err := g.newOpenGL()
-	return graphics, GraphicsLibraryOpenGL, err
-}
-
-func (g *graphicsDriverCreatorImpl) newOpenGL() (graphicsdriver.Graphics, error) {
-	return opengl.NewGraphics(g.canvas, g.colorSpace)
-}
-
-func (*graphicsDriverCreatorImpl) newDirectX() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: DirectX is not supported in this environment")
-}
-
-func (*graphicsDriverCreatorImpl) newMetal() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: Metal is not supported in this environment")
-}
-
-func (*graphicsDriverCreatorImpl) newPlayStation5() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: PlayStation 5 is not supported in this environment")
-}
 
 var (
 	stringNone        = js.ValueOf("none")
@@ -86,8 +58,6 @@ func driverCursorShapeToCSSCursor(cursor CursorShape) string {
 }
 
 type userInterfaceImpl struct {
-	graphicsDriver graphicsdriver.Graphics
-
 	runnableOnUnfocused bool
 	renderingScheduled  bool
 	cursorMode          CursorMode
@@ -325,7 +295,7 @@ func (u *UserInterface) updateImpl(force bool) error {
 	if u.closeRequested.Load() {
 		return RegularTermination
 	}
-	u.incrementTick()
+	render.IncrementTick()
 	if err := hook.RunBeforeUpdateHooks(); err != nil {
 		return err
 	}
@@ -335,15 +305,15 @@ func (u *UserInterface) updateImpl(force bool) error {
 
 	sw, sh := u.screenSize()
 	if force {
-		if err := u.context.forceUpdateFrame(u.graphicsDriver, sw, sh, theMonitor.DeviceScaleFactor(), u); err != nil {
+		if err := u.context.forceUpdateFrame(sw, sh, theMonitor.DeviceScaleFactor(), u); err != nil {
 			return err
 		}
 	} else {
-		needsSwapBuffers, err := u.context.renderFrame(u.graphicsDriver, sw, sh, theMonitor.DeviceScaleFactor(), u, false)
+		needsSwapBuffers, err := u.context.renderFrame(sw, sh, theMonitor.DeviceScaleFactor(), false)
 		if err != nil {
 			return err
 		}
-		if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.graphicsDriver, u.RefreshRate()); err != nil {
+		if err := u.pacer.FlushCommandsAndWait(needsSwapBuffers, u.RefreshRate()); err != nil {
 			return err
 		}
 	}
@@ -821,16 +791,10 @@ func (u *UserInterface) initOnMainThread(options *RunOptions) error {
 		canvas.Call("focus")
 	}
 
-	g, lib, err := newGraphicsDriver(&graphicsDriverCreatorImpl{
-		canvas:     canvas,
-		colorSpace: options.ColorSpace,
-	}, options.GraphicsLibrary)
-	if err != nil {
+	if _, err := render.InitGraphicsDriver(options.GraphicsLibrary, options.ColorSpace, canvas); err != nil {
 		return err
 	}
-	u.graphicsDriver = g
-	u.setGraphicsLibrary(lib)
-	surface, err := g.NewSurface(canvas, options.ScreenTransparent)
+	surface, err := render.NewSurface(canvas, options.ScreenTransparent)
 	if err != nil {
 		return err
 	}
@@ -854,7 +818,7 @@ func (u *UserInterface) screenSize() (int, int) {
 	// the device pixel ratio there rather than reported in device pixels by the browser. Use a
 	// ResizeObserver's devicePixelContentBoxSize, which is measured in device pixels, once it is
 	// available across browsers.
-	if g, ok := u.graphicsDriver.(interface{ ScreenFramebufferSize() (int, int) }); ok {
+	if g, ok := render.GraphicsDriver().(interface{ ScreenFramebufferSize() (int, int) }); ok {
 		return g.ScreenFramebufferSize()
 	}
 	// Node.js has no canvas, and so no drawing buffer to report.

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ui
+package render
 
 import (
 	"fmt"
@@ -23,6 +23,11 @@ import (
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/shader"
+)
+
+var (
+	NearestFilterShader = &Shader{shader: atlas.NearestFilterShader}
+	LinearFilterShader  = &Shader{shader: atlas.LinearFilterShader}
 )
 
 type Shader struct {
@@ -123,18 +128,18 @@ func (s *Shader) uniform(name string) *shader.Uniform {
 			return &s.uniforms[i]
 		}
 	}
-	panic(fmt.Sprintf("ui: the shader has no uniform %q", name))
+	panic(fmt.Sprintf("render: the shader has no uniform %q", name))
 }
 
 func checkUniformScalar(u *shader.Uniform) {
 	if len(u.Slots) != 1 {
-		panic(fmt.Sprintf("ui: unexpected uniform value for %s: a scalar was given for %d elements", u.Name, len(u.Slots)))
+		panic(fmt.Sprintf("render: unexpected uniform value for %s: a scalar was given for %d elements", u.Name, len(u.Slots)))
 	}
 }
 
 func checkUniformLen(u *shader.Uniform, n int) {
 	if n != len(u.Slots) {
-		panic(fmt.Sprintf("ui: unexpected uniform value length for %s: got %d, want %d", u.Name, n, len(u.Slots)))
+		panic(fmt.Sprintf("render: unexpected uniform value length for %s: got %d, want %d", u.Name, n, len(u.Slots)))
 	}
 }
 
@@ -151,7 +156,7 @@ func uniformBits[T UniformScalar](name string, kind ir.ScalarKind, v T) uint32 {
 	case float64:
 		return uniformFromFloat(name, kind, v)
 	}
-	panic("ui: not reached")
+	panic("render: not reached")
 }
 
 func uniformScalar(name string, kind ir.ScalarKind, v reflect.Value) uint32 {
@@ -165,7 +170,7 @@ func uniformScalar(name string, kind ir.ScalarKind, v reflect.Value) uint32 {
 	case reflect.Float32, reflect.Float64:
 		return uniformFromFloat(name, kind, v.Float())
 	default:
-		panic(fmt.Sprintf("ui: unexpected uniform value type for %s: %s", name, v.Kind().String()))
+		panic(fmt.Sprintf("render: unexpected uniform value type for %s: %s", name, v.Kind().String()))
 	}
 }
 
@@ -189,7 +194,7 @@ func uniformFromInteger[T int64 | uint64 | uint32](kind ir.ScalarKind, v T) uint
 
 func uniformFromFloat(name string, kind ir.ScalarKind, v float64) uint32 {
 	if kind != ir.ScalarFloat {
-		panic(fmt.Sprintf("ui: unexpected uniform value type for %s: a float was given for an integer uniform", name))
+		panic(fmt.Sprintf("render: unexpected uniform value type for %s: a float was given for an integer uniform", name))
 	}
 	return math.Float32bits(float32(v))
 }

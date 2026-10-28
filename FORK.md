@@ -247,6 +247,14 @@ lookups and the reflection. See `docs/shaders.md`.
 These change `image.go` and the shader files, so upstream commits to them
 no longer merge cleanly.
 
+## The renderer core
+
+`internal/render` holds what draws, apart from what shows it: `Image`, `Shader` and the uniform
+packing, the white image fills draw from, the error state, reads of pixels that wait for a frame,
+driver creation, the frame pacer and the tick. It was the drawing half of `internal/ui`, which now
+drives it and keeps the windows, the events and the loop. This is the first step of moving the
+window system out of ggfx; see `docs/renderer-split.md`.
+
 ## Windows and the event loop
 
 `Run`, `NewWindow`, `Window` and the event types in `app.go` are the API a

@@ -23,8 +23,8 @@ import (
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 	etesting "github.com/ironpark/ggfx/internal/testing"
-	"github.com/ironpark/ggfx/internal/ui"
 )
 
 func TestShaderFillTwice(t *testing.T) {
@@ -35,7 +35,7 @@ func TestShaderFillTwice(t *testing.T) {
 	vs := quadVertices(w, h, 0, 0, 1)
 	is := graphics.QuadIndices()
 	dr := image.Rect(0, 0, w, h)
-	g := ui.Get().GraphicsDriverForTesting()
+	g := render.GraphicsDriver()
 	s0 := atlas.NewShader(etesting.ShaderProgramFill(0xff, 0xff, 0xff, 0xff), "")
 	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{}, s0, nil)
 
@@ -77,7 +77,7 @@ func TestImageDrawTwice(t *testing.T) {
 	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src1}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader, nil)
 
 	pix := make([]byte, 4*w*h)
-	ok, err := dst.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, w, h))
+	ok, err := dst.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, w, h))
 	if err != nil {
 		t.Error(err)
 	}

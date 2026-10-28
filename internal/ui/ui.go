@@ -16,16 +16,14 @@ package ui
 
 import (
 	"errors"
-	"image"
 	"sync"
 	"sync/atomic"
 
 	_ "github.com/ebitengine/hideconsole"
 
-	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/colormode"
-	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/thread"
 )
 
@@ -66,12 +64,8 @@ const (
 )
 
 type UserInterface struct {
-	err atomic.Pointer[error]
-
-	graphicsLibrary atomic.Int32
-	running         atomic.Bool
-	terminated      atomic.Bool
-	tick            atomic.Int64
+	running    atomic.Bool
+	terminated atomic.Bool
 
 	// preferredColorMode is the color mode the application prefers.
 	//
@@ -83,15 +77,10 @@ type UserInterface struct {
 	// It is 0 when the rate is unknown.
 	refreshRate atomic.Int32
 
-	whiteImage *Image
-
 	mainThread thread.Thread
 
 	// pacer paces the loop when a present does not wait for the display.
-	pacer framePacer
-
-	// funcsInFrameCh carries functions that must run inside a frame, like reading pixels.
-	funcsInFrameCh chan func()
+	pacer render.FramePacer
 
 	// app is the App driven by RunApp.
 	app App
@@ -135,33 +124,9 @@ func Get() *UserInterface {
 	return theUI
 }
 
-// GraphicsMaxImageSize returns the maximum image size the graphics driver supports. The graphics
-// driver must be initialized before this is called.
-func (u *UserInterface) GraphicsMaxImageSize() int {
-	return graphicscommand.MaxImageSize(u.graphicsDriver)
-}
-
-// GraphicsColorSpace returns the graphics driver's color space. The graphics driver must be
-// initialized before this is called.
-func (u *UserInterface) GraphicsColorSpace() color.ColorSpace {
-	return u.graphicsDriver.ColorSpace()
-}
-
 // newUserInterface must be called from the main thread.
 func newUserInterface() (*UserInterface, error) {
-	u := &UserInterface{
-		funcsInFrameCh: make(chan func()),
-	}
-	u.graphicsLibrary.Store(int32(GraphicsLibraryUnknown))
-
-	u.whiteImage = u.NewImage(3, 3, atlas.ImageTypeRegular)
-	pix := make([]byte, 4*u.whiteImage.width*u.whiteImage.height)
-	for i := range pix {
-		pix[i] = 0xff
-	}
-	// As a white image is used at Fill, use WritePixels instead.
-	u.whiteImage.WritePixels(pix, image.Rect(0, 0, u.whiteImage.width, u.whiteImage.height))
-
+	u := &UserInterface{}
 	if err := u.init(); err != nil {
 		return nil, err
 	}
@@ -169,74 +134,8 @@ func newUserInterface() (*UserInterface, error) {
 	return u, nil
 }
 
-func (u *UserInterface) readPixels(img *Image, pixels []byte, region image.Rectangle) error {
-	if !u.running.Load() {
-		panic("ui: ReadPixels cannot be called before the game starts")
-	}
-
-	ok, err := img.readPixels(pixels, region)
-	if err != nil {
-		return err
-	}
-
-	// ReadPixels failed since this was called in between two frames.
-	// Try this again at the next frame.
-	if !ok {
-		// If this function is called from the same sequence as a frame's event handler,
-		// this causes a dead lock.
-		// This never happens so far, but if handling inputs after EndFrame is implemented,
-		// this might be possible (#1704).
-
-		var err error
-		u.runInFrame(func() {
-			ok, imgErr := img.readPixels(pixels, region)
-			if imgErr != nil {
-				err = imgErr
-				return
-			}
-			if !ok {
-				// This never reaches since this function must be called in a frame.
-				panic("ui: ReadPixels unexpectedly failed")
-			}
-		})
-		return err
-	}
-
-	return nil
-}
-
-// runInFrame runs f inside a frame, on the goroutine running the frame, and waits for it.
-func (u *UserInterface) runInFrame(f func()) {
-	ch := make(chan struct{})
-	u.funcsInFrameCh <- func() {
-		defer close(ch)
-		f()
-	}
-	<-ch
-}
-
-// processFuncsInFrame runs the functions queued by runInFrame. It must be called inside a frame.
-func (u *UserInterface) processFuncsInFrame() error {
-	var processed bool
-	for {
-		select {
-		case f := <-u.funcsInFrameCh:
-			f()
-			processed = true
-		default:
-			if processed {
-				// Catch the error that happened at (*Image).At.
-				if err := u.error(); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
-}
-
 type RunOptions struct {
-	GraphicsLibrary GraphicsLibrary
+	GraphicsLibrary render.GraphicsLibrary
 	// InitUnfocused is read by the browser at initialization. Desktop windows use
 	// WindowOptions.Unfocused instead.
 	InitUnfocused bool
@@ -267,37 +166,14 @@ func InitialWindowPosition(mw, mh, ww, wh int) (x, y int) {
 	return (mw - ww) / 2, (mh - wh) / 3
 }
 
+// error returns the error the loop stops with. The renderer's state holds it, so that a draw
+// that fails stops the loop too.
 func (u *UserInterface) error() error {
-	if err := u.err.Load(); err != nil {
-		return *err
-	}
-	return nil
+	return render.Error()
 }
 
 func (u *UserInterface) setError(err error) {
-	if err == nil {
-		return
-	}
-	for {
-		oldErr := u.err.Load()
-		var newErr error
-		if oldErr != nil {
-			newErr = errors.Join(*oldErr, err)
-		} else {
-			newErr = err
-		}
-		if u.err.CompareAndSwap(oldErr, &newErr) {
-			break
-		}
-	}
-}
-
-func (u *UserInterface) setGraphicsLibrary(library GraphicsLibrary) {
-	u.graphicsLibrary.Store(int32(library))
-}
-
-func (u *UserInterface) GraphicsLibrary() GraphicsLibrary {
-	return GraphicsLibrary(u.graphicsLibrary.Load())
+	render.SetError(err)
 }
 
 func (u *UserInterface) setRefreshRate(refreshRate int) {
@@ -324,6 +200,7 @@ func (u *UserInterface) isRunning() bool {
 
 func (u *UserInterface) setRunning(running bool) {
 	u.running.Store(running)
+	render.SetRunning(running)
 }
 
 func (u *UserInterface) isTerminated() bool {
@@ -332,12 +209,4 @@ func (u *UserInterface) isTerminated() bool {
 
 func (u *UserInterface) setTerminated() {
 	u.terminated.Store(true)
-}
-
-func (u *UserInterface) Tick() int64 {
-	return u.tick.Load()
-}
-
-func (u *UserInterface) incrementTick() {
-	u.tick.Add(1)
 }

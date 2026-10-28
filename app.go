@@ -20,6 +20,7 @@ import (
 	"io/fs"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/ui"
 )
 
@@ -63,7 +64,7 @@ type appForUI struct {
 	handler Handler
 }
 
-func (a *appForUI) NewScreenImage(window ui.AppWindow, width, height int, surface graphicsdriver.Surface) *ui.Image {
+func (a *appForUI) NewScreenImage(window ui.AppWindow, width, height int, surface graphicsdriver.Surface) *render.Image {
 	w := window.Handle().(*Window)
 	if w.screen != nil {
 		w.screen.Deallocate()

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ui_test
+package render_test
 
 import (
 	"testing"
@@ -20,7 +20,7 @@ import (
 
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/ui"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 func TestVsyncIgnored(t *testing.T) {
@@ -91,8 +91,8 @@ func TestVsyncIgnored(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got, want := ui.VsyncIgnoredForTest(c.frameTimes, refreshInterval), c.want; got != want {
-				t.Errorf("ui.VsyncIgnoredForTest(%d frames): got: %t, want: %t", len(c.frameTimes), got, want)
+			if got, want := render.VsyncIgnoredForTest(c.frameTimes, refreshInterval), c.want; got != want {
+				t.Errorf("render.VsyncIgnoredForTest(%d frames): got: %t, want: %t", len(c.frameTimes), got, want)
 			}
 		})
 	}
@@ -129,7 +129,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 	const frames = 10
 	for frame := range frames {
 		graphicscommand.NewImage(1, 1, nil, "")
-		if err := ui.FlushCommandsAndWaitForTesting(&driver, false); err != nil {
+		if err := render.FlushCommandsAndWaitForTesting(&driver, false); err != nil {
 			t.Fatal(err)
 		}
 		if driver.images != frame+1 || driver.frames != frame+1 || driver.presents != 0 {
@@ -137,7 +137,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 		}
 	}
 	graphicscommand.NewImage(1, 1, nil, "")
-	if err := ui.FlushCommandsAndWaitForTesting(&driver, true); err != nil {
+	if err := render.FlushCommandsAndWaitForTesting(&driver, true); err != nil {
 		t.Fatal(err)
 	}
 	if driver.images != frames+1 || driver.frames != frames+1 || driver.presents != 1 {

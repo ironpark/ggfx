@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	ecolor "github.com/ironpark/ggfx/internal/color"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/ui"
 )
 
@@ -137,7 +138,7 @@ func toUIRunOptions(options *RunOptions) *ui.RunOptions {
 	}
 
 	return &ui.RunOptions{
-		GraphicsLibrary:          ui.GraphicsLibrary(options.GraphicsLibrary),
+		GraphicsLibrary:          render.GraphicsLibrary(options.GraphicsLibrary),
 		InitUnfocused:            options.InitUnfocused,
 		ScreenTransparent:        options.ScreenTransparent,
 		SkipTaskbar:              options.SkipTaskbar,
@@ -161,7 +162,7 @@ type AbsPather interface {
 //
 // Tick is concurrent-safe.
 func Tick() int64 {
-	return ui.Get().Tick()
+	return render.Tick()
 }
 
 // RunOnMainThread runs the given function on the main thread.

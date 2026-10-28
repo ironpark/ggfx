@@ -21,14 +21,14 @@ import (
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/ui"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 // Shader represents a compiled shader program.
 //
 // For the details about shaders, see docs/shaders.md.
 type Shader struct {
-	shader *ui.Shader
+	shader *render.Shader
 }
 
 func NewShader(src []byte) (*Shader, error) {
@@ -41,7 +41,7 @@ func newShader(src []byte, name string) (*Shader, error) {
 		return nil, err
 	}
 	return &Shader{
-		shader: ui.NewShader(program, name),
+		shader: render.NewShader(program, name),
 	}, nil
 }
 
@@ -100,9 +100,9 @@ func builtinShader(filter builtinshader.Filter, address builtinshader.Address) *
 	if address == builtinshader.AddressUnsafe && (filter == builtinshader.FilterNearest || filter == builtinshader.FilterLinear) {
 		switch filter {
 		case builtinshader.FilterNearest:
-			shader = &Shader{shader: ui.NearestFilterShader}
+			shader = &Shader{shader: render.NearestFilterShader}
 		case builtinshader.FilterLinear:
-			shader = &Shader{shader: ui.LinearFilterShader}
+			shader = &Shader{shader: render.LinearFilterShader}
 		}
 	} else {
 		var name string

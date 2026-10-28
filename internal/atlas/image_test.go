@@ -25,8 +25,8 @@ import (
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 	t "github.com/ironpark/ggfx/internal/testing"
-	"github.com/ironpark/ggfx/internal/ui"
 )
 
 const (
@@ -118,7 +118,7 @@ func TestEnsureIsolatedFromSourceBackend(t *testing.T) {
 	}
 
 	pix = make([]byte, 4*size*size)
-	ok, err := img4.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, size, size))
+	ok, err := img4.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, size, size))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestReputOnSourceBackend(t *testing.T) {
 	atlas.PutImagesOnSourceBackendForTesting()
 
 	pix = make([]byte, 4*size*size)
-	ok, err := img1.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, size, size))
+	ok, err := img1.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, size, size))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestReputOnSourceBackend(t *testing.T) {
 	}
 
 	pix = make([]byte, 4*size*size)
-	ok, err = img1.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, size, size))
+	ok, err = img1.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, size, size))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestExtend(t *testing.T) {
 	img1.WritePixels(p1, image.Rect(0, 0, w1, h1))
 
 	pix0 := make([]byte, 4*w0*h0)
-	ok, err := img0.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix0, image.Rect(0, 0, w0, h0))
+	ok, err := img0.ReadPixels(render.GraphicsDriver(), pix0, image.Rect(0, 0, w0, h0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestExtend(t *testing.T) {
 	}
 
 	pix1 := make([]byte, 4*w1*h1)
-	ok, err = img1.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix1, image.Rect(0, 0, w1, h1))
+	ok, err = img1.ReadPixels(render.GraphicsDriver(), pix1, image.Rect(0, 0, w1, h1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestWritePixelsAfterDrawTriangles(t *testing.T) {
 	dst.WritePixels(pix, image.Rect(0, 0, w, h))
 
 	pix = make([]byte, 4*w*h)
-	ok, err := dst.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, w, h))
+	ok, err := dst.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, w, h))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestSmallImages(t *testing.T) {
 	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, is, graphicsdriver.BlendSourceOver, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader, nil)
 
 	pix = make([]byte, 4*w*h)
-	ok, err := dst.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, w, h))
+	ok, err := dst.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, w, h))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestLongImages(t *testing.T) {
 	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, is, graphicsdriver.BlendSourceOver, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader, nil)
 
 	pix = make([]byte, 4*dstW*dstH)
-	ok, err := dst.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, dstW, dstH))
+	ok, err := dst.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, dstW, dstH))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +727,7 @@ func TestImageWritePixelsModify(t *testing.T) {
 
 		// Check the pixels are the original ones.
 		pix = make([]byte, 4*size*size)
-		ok, err := img.ReadPixels(ui.Get().GraphicsDriverForTesting(), pix, image.Rect(0, 0, size, size))
+		ok, err := img.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, size, size))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -950,7 +950,7 @@ func TestImageSizeSameAsBackendSize(t *testing.T) {
 	const regionSize = 16
 	region := image.Rect(size-regionSize, size-regionSize, size, size)
 	readPix := make([]byte, 4*regionSize*regionSize)
-	ok, err := img.ReadPixels(ui.Get().GraphicsDriverForTesting(), readPix, region)
+	ok, err := img.ReadPixels(render.GraphicsDriver(), readPix, region)
 	if err != nil {
 		t.Fatal(err)
 	}

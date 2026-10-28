@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/ironpark/ggfx/internal/glfw"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 // uiBackend is the platform UI implementation for the desktop build.
@@ -92,8 +91,6 @@ type userInterfaceImpl struct {
 	// backend is nil are buffered, and a backend consumes them at its
 	// initialization.
 	backend atomic.Pointer[uiBackend]
-
-	graphicsDriver graphicsdriver.Graphics
 
 	// glContextWindow is the hidden window whose context the OpenGL driver draws in, and nil with
 	// the other drivers. It lives until GLFW terminates.

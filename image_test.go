@@ -30,9 +30,9 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/render"
 	t "github.com/ironpark/ggfx/internal/testing"
 	"github.com/ironpark/ggfx/internal/testresources"
-	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // maxImageSize is a maximum image size that should work in almost every environment.
@@ -51,7 +51,7 @@ func skipTooSlowTests(t *testing.T) bool {
 }
 
 func TestMain(m *testing.M) {
-	ui.SetPanicOnErrorOnReadingPixelsForTesting(true)
+	render.SetPanicOnErrorOnReadingPixelsForTesting(true)
 	t.MainWithRunLoop(m)
 }
 

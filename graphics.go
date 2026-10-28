@@ -17,7 +17,7 @@ package ggfx
 import (
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/builtinshader"
-	"github.com/ironpark/ggfx/internal/ui"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 // Filter represents the type of texture filter to be used when an image is magnified or minified.
@@ -40,32 +40,32 @@ type GraphicsLibrary int
 
 const (
 	// GraphicsLibraryAuto represents the automatic choice of graphics library by Ebitengine.
-	GraphicsLibraryAuto GraphicsLibrary = GraphicsLibrary(ui.GraphicsLibraryAuto)
+	GraphicsLibraryAuto GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryAuto)
 
 	// GraphicsLibraryUnknown represents the state at which graphics library cannot be determined,
 	// e.g. hasn't loaded yet or failed to initialize.
-	GraphicsLibraryUnknown GraphicsLibrary = GraphicsLibrary(ui.GraphicsLibraryUnknown)
+	GraphicsLibraryUnknown GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryUnknown)
 
 	// GraphicsLibraryOpenGL represents the graphics library OpenGL.
-	GraphicsLibraryOpenGL GraphicsLibrary = GraphicsLibrary(ui.GraphicsLibraryOpenGL)
+	GraphicsLibraryOpenGL GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryOpenGL)
 
 	// GraphicsLibraryDirectX represents the graphics library Microsoft DirectX.
-	GraphicsLibraryDirectX GraphicsLibrary = GraphicsLibrary(ui.GraphicsLibraryDirectX)
+	GraphicsLibraryDirectX GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryDirectX)
 
 	// GraphicsLibraryMetal represents the graphics library Apple's Metal.
-	GraphicsLibraryMetal GraphicsLibrary = GraphicsLibrary(ui.GraphicsLibraryMetal)
+	GraphicsLibraryMetal GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryMetal)
 
 	// GraphicsLibraryPlayStation5 represents the graphics library PlayStation 5.
-	GraphicsLibraryPlayStation5 GraphicsLibrary = GraphicsLibrary(ui.GraphicsLibraryPlayStation5)
+	GraphicsLibraryPlayStation5 GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryPlayStation5)
 
 	// GraphicsLibraryRemote represents a virtualization guest that forwards its graphics commands to a
 	// host process rather than rendering on a local GPU.
-	GraphicsLibraryRemote GraphicsLibrary = GraphicsLibrary(ui.GraphicsLibraryRemote)
+	GraphicsLibraryRemote GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryRemote)
 )
 
 // String returns a string representing the graphics library.
 func (g GraphicsLibrary) String() string {
-	return ui.GraphicsLibrary(g).String()
+	return render.GraphicsLibrary(g).String()
 }
 
 // Ensures GraphicsLibraryAuto is zero (the default value for RunOptions).
@@ -85,7 +85,7 @@ type DebugInfo struct {
 //
 // ReadDebugInfo is concurrent-safe.
 func ReadDebugInfo(d *DebugInfo) {
-	d.GraphicsLibrary = GraphicsLibrary(ui.Get().GraphicsLibrary())
+	d.GraphicsLibrary = GraphicsLibrary(render.Library())
 	d.TotalGPUImageMemoryUsageInBytes = atlas.TotalGPUImageMemoryUsageInBytes()
 }
 

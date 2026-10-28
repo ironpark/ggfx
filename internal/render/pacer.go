@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ui
+package render
 
 import (
 	"time"
@@ -21,13 +21,8 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
-var (
-	NearestFilterShader = &Shader{shader: atlas.NearestFilterShader}
-	LinearFilterShader  = &Shader{shader: atlas.LinearFilterShader}
-)
-
-// framePacer paces the loop when presenting does not wait for the display.
-type framePacer struct {
+// FramePacer paces a loop when presenting does not wait for the display.
+type FramePacer struct {
 	lastSwapBufferTime time.Time
 
 	// vsyncIgnored reports whether swapping buffers does not wait for the display even though vsync
@@ -39,7 +34,14 @@ type framePacer struct {
 	vsyncIgnoredCount int
 }
 
-func (c *framePacer) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver graphicsdriver.Graphics, refreshRate int) error {
+// FlushCommandsAndWait flushes the commands, presenting them when present is set, and sleeps as
+// long as the display did not make the loop wait. refreshRate is the display's rate in Hz, or 0
+// when it is unknown.
+func (c *FramePacer) FlushCommandsAndWait(present bool, refreshRate int) error {
+	return c.flushCommandsAndWait(present, driver, refreshRate)
+}
+
+func (c *FramePacer) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver graphicsdriver.Graphics, refreshRate int) error {
 	if err := atlas.FlushCommands(graphicsDriver, needsSwapBuffers); err != nil {
 		return err
 	}
@@ -88,15 +90,15 @@ func (c *framePacer) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver 
 	return nil
 }
 
-// resetVsyncDetection makes whether swapping buffers waits for the display measured again.
-func (c *framePacer) resetVsyncDetection() {
+// ResetVsyncDetection makes whether swapping buffers waits for the display measured again.
+func (c *FramePacer) ResetVsyncDetection() {
 	c.vsyncIgnored = false
 	c.vsyncIgnoredCount = 0
 }
 
 // updateVsyncIgnored records how long one frame took, including swapping its buffers, and reports
 // whether swapping buffers turns out not to wait for the display.
-func (c *framePacer) updateVsyncIgnored(frameTime, refreshInterval time.Duration) bool {
+func (c *FramePacer) updateVsyncIgnored(frameTime, refreshInterval time.Duration) bool {
 	if c.vsyncIgnored {
 		return true
 	}
@@ -117,24 +119,4 @@ func (c *framePacer) updateVsyncIgnored(frameTime, refreshInterval time.Duration
 
 	c.vsyncIgnored = true
 	return true
-}
-
-// monitorDeviceScaleFactor returns the current monitor's device scale factor, or 1 when no monitor
-// is available.
-func (u *UserInterface) monitorDeviceScaleFactor() float64 {
-	m := u.Monitor()
-	if m == nil {
-		return 1
-	}
-	return m.DeviceScaleFactor()
-}
-
-// LogicalPositionToClientPositionInNativePixels converts a logical position to a client-area
-// position in native pixels. A logical position is already a client position in
-// device-independent pixels: an app window has no letterboxing.
-func (u *UserInterface) LogicalPositionToClientPositionInNativePixels(x, y float64) (float64, float64) {
-	s := u.monitorDeviceScaleFactor()
-	x = dipToNativePixels(x, s)
-	y = dipToNativePixels(y, s)
-	return x, y
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ui
+package render
 
 import (
 	"fmt"
@@ -51,7 +51,7 @@ func newGraphicsDriver(creator graphicsDriverCreator, graphicsLibrary GraphicsLi
 		case "playstation5":
 			graphicsLibrary = GraphicsLibraryPlayStation5
 		default:
-			return nil, 0, fmt.Errorf("ui: an unsupported graphics library is specified by the environment variable: %s", env)
+			return nil, 0, fmt.Errorf("render: an unsupported graphics library is specified by the environment variable: %s", env)
 		}
 	}
 
@@ -62,7 +62,7 @@ func newGraphicsDriver(creator graphicsDriverCreator, graphicsLibrary GraphicsLi
 			return nil, 0, err
 		}
 		if g == nil {
-			return nil, 0, fmt.Errorf("ui: no graphics library is available")
+			return nil, 0, fmt.Errorf("render: no graphics library is available")
 		}
 		return g, lib, nil
 	case GraphicsLibraryOpenGL:
@@ -90,12 +90,8 @@ func newGraphicsDriver(creator graphicsDriverCreator, graphicsLibrary GraphicsLi
 		}
 		return g, GraphicsLibraryPlayStation5, nil
 	default:
-		return nil, 0, fmt.Errorf("ui: an unsupported graphics library is specified: %d", graphicsLibrary)
+		return nil, 0, fmt.Errorf("render: an unsupported graphics library is specified: %d", graphicsLibrary)
 	}
-}
-
-func (u *UserInterface) GraphicsDriverForTesting() graphicsdriver.Graphics {
-	return u.graphicsDriver
 }
 
 type GraphicsLibrary int

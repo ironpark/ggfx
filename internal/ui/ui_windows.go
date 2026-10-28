@@ -23,14 +23,9 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/colormode"
 	"github.com/ironpark/ggfx/internal/glfw"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/graphicsdriver/directx"
-	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 	"github.com/ironpark/ggfx/internal/microsoftgdk"
-	"github.com/ironpark/ggfx/internal/winver"
 )
 
 func (u *UserInterface) initializePlatform() error {
@@ -39,61 +34,6 @@ func (u *UserInterface) initializePlatform() error {
 
 func setApplePressAndHoldEnabled(enabled bool) {
 	// Do nothing.
-}
-
-type graphicsDriverCreatorImpl struct {
-	colorSpace color.ColorSpace
-}
-
-func (g *graphicsDriverCreatorImpl) newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error) {
-	var dxErr error
-	var glErr error
-	if winver.IsWindows10OrGreater() {
-		d, err := g.newDirectX()
-		if err == nil {
-			return d, GraphicsLibraryDirectX, nil
-		}
-		dxErr = err
-
-		o, err := g.newOpenGL()
-		if err == nil {
-			return o, GraphicsLibraryOpenGL, nil
-		}
-		glErr = err
-	} else {
-		// Creating a swap chain on an older machine than Windows 10 might fail (#2613).
-		// Prefer OpenGL to DirectX.
-		o, err := g.newOpenGL()
-		if err == nil {
-			return o, GraphicsLibraryOpenGL, nil
-		}
-		glErr = err
-
-		// Initializing OpenGL can fail, though this is pretty rare.
-		d, err := g.newDirectX()
-		if err == nil {
-			return d, GraphicsLibraryDirectX, nil
-		}
-		dxErr = err
-	}
-
-	return nil, GraphicsLibraryUnknown, fmt.Errorf("ui: failed to choose graphics drivers: DirectX: %v, OpenGL: %v", dxErr, glErr)
-}
-
-func (*graphicsDriverCreatorImpl) newOpenGL() (graphicsdriver.Graphics, error) {
-	return opengl.NewGraphics()
-}
-
-func (*graphicsDriverCreatorImpl) newDirectX() (graphicsdriver.Graphics, error) {
-	return directx.NewGraphics()
-}
-
-func (*graphicsDriverCreatorImpl) newMetal() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: Metal is not supported in this environment")
-}
-
-func (*graphicsDriverCreatorImpl) newPlayStation5() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: PlayStation 5 is not supported in this environment")
 }
 
 // setOpenGLWindowHints sets the GLFW hints to create a window with an OpenGL context.

@@ -30,8 +30,8 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/pool"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/scratch"
-	"github.com/ironpark/ggfx/internal/ui"
 )
 
 // Image represents a rectangle set of pixels.
@@ -41,17 +41,17 @@ type Image struct {
 	// addr holds self to check copying.
 	// See strings.Builder for similar examples.
 	addr     *Image
-	image    *ui.Image
+	image    *render.Image
 	original *Image
 	bounds   image.Rectangle
 
-	// tmpVertices must not be reused until ui.Image.Draw* is called.
+	// tmpVertices must not be reused until render.Image.Draw* is called.
 	tmpVertices []float32
 
-	// tmpIndices must not be reused until ui.Image.Draw* is called.
+	// tmpIndices must not be reused until render.Image.Draw* is called.
 	tmpIndices []uint32
 
-	// tmpUniforms must not be reused until ui.Image.Draw* is called.
+	// tmpUniforms must not be reused until render.Image.Draw* is called.
 	tmpUniforms []uint32
 
 	// subImageCache is a cache for sub-images.
@@ -185,7 +185,7 @@ type DrawImageOptions struct {
 	DisableMipmaps bool
 }
 
-// adjustPosition converts the position in the *ebiten.Image coordinate to the *ui.Image coordinate.
+// adjustPosition converts the position in the *ebiten.Image coordinate to the *render.Image coordinate.
 func (i *Image) adjustPosition(x, y int) (int, int) {
 	if i.isSubImage() {
 		or := i.original.Bounds()
@@ -204,7 +204,7 @@ func (i *Image) adjustPosition(x, y int) (int, int) {
 var negZero = float32(math.Copysign(0, -1))
 
 // positionOffsetF32 returns the offset that converts a position in the *ebiten.Image coordinate to
-// the *ui.Image coordinate by addition.
+// the *render.Image coordinate by addition.
 //
 // The offset is the negated origin, so adding it to x equals x - origin exactly.
 func (i *Image) positionOffsetF32() (float32, float32) {
@@ -238,7 +238,7 @@ func (i *Image) adjustedBounds() image.Rectangle {
 func init() {
 	// The bridge serves module-internal packages drawing at the internal image layer (e.g. vmhost);
 	// the ui package cannot import this package.
-	ui.SetImageFromEbitenImageFunc(func(img any) (*ui.Image, image.Rectangle) {
+	render.SetImageFromEbitenImageFunc(func(img any) (*render.Image, image.Rectangle) {
 		i := img.(*Image)
 		i.copyCheck()
 		if i.isDisposed() {
@@ -323,7 +323,7 @@ func (i *Image) DrawImage(img *Image, options *DrawImageOptions) {
 	graphics.QuadVerticesFromSrcAndMatrix(vs, float32(sx0), float32(sy0), float32(sx1), float32(sy1), a, b, c, d, tx, ty, cr, cg, cb, ca)
 	is := graphics.QuadIndices()
 
-	srcs := [graphics.ShaderSrcImageCount]*ui.Image{img.image}
+	srcs := [graphics.ShaderSrcImageCount]*render.Image{img.image}
 
 	shader := builtinShader(filter, builtinshader.AddressUnsafe)
 	i.tmpUniforms = i.tmpUniforms[:0]
@@ -552,7 +552,7 @@ func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, o
 	}
 	graphics.ConvertVertices(vs, vertexFloats(vertices), dx, dy, sx, sy, flags)
 
-	srcs := [graphics.ShaderSrcImageCount]*ui.Image{img.image}
+	srcs := [graphics.ShaderSrcImageCount]*render.Image{img.image}
 
 	shader := builtinShader(filter, address)
 	i.tmpUniforms = i.tmpUniforms[:0]
@@ -698,7 +698,7 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 	}
 	graphics.ConvertVertices(vs, vertexFloats(vertices), dx, dy, sx, sy, graphics.ConvertVerticesCopyCustom)
 
-	var imgs [graphics.ShaderSrcImageCount]*ui.Image
+	var imgs [graphics.ShaderSrcImageCount]*render.Image
 	for i, img := range options.Images {
 		if img == nil {
 			continue
@@ -826,7 +826,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 
 	blend := options.Blend.internalBlend()
 
-	var imgs [graphics.ShaderSrcImageCount]*ui.Image
+	var imgs [graphics.ShaderSrcImageCount]*render.Image
 	for i, img := range options.Images {
 		if img == nil {
 			continue
@@ -1246,7 +1246,7 @@ func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Imag
 // newScreenImage creates the image presented on surface.
 func newScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
 	i := &Image{}
-	i.image = ui.Get().NewScreenImage(width, height, surface)
+	i.image = render.NewScreenImage(width, height, surface)
 	i.bounds = image.Rect(0, 0, width, height)
 	i.addr = i
 	return i
@@ -1266,7 +1266,7 @@ func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
 	}
 
 	i := &Image{}
-	i.image = ui.Get().NewImage(width, height, imageType)
+	i.image = render.NewImage(width, height, imageType)
 	i.bounds = bounds
 	i.addr = i
 	return i

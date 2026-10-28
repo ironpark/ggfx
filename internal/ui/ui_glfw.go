@@ -30,6 +30,7 @@ import (
 	"github.com/ironpark/ggfx/internal/file"
 	"github.com/ironpark/ggfx/internal/glfw"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/windowsystem"
 )
 
@@ -800,7 +801,7 @@ func (u *glfwBackend) forceUpdateFrameDuringPollEvents(screenWidth, screenHeight
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	go func() {
 		defer cancel()
-		err = u.context.forceUpdateFrame(u.graphicsDriver, screenWidth, screenHeight, deviceScaleFactor, u.UserInterface)
+		err = u.context.forceUpdateFrame(screenWidth, screenHeight, deviceScaleFactor, u.UserInterface)
 	}()
 	_ = mainThread.NestedLoop(ctx)
 	if err != nil {
@@ -1413,7 +1414,7 @@ const monitorCacheTicks = 60
 //
 // currentMonitor must be called on the main thread.
 func (u *glfwBackend) currentMonitor() (*Monitor, error) {
-	if u.cachedCurrentMonitor != nil && u.cachedCurrentMonitorTime > u.Tick()-monitorCacheTicks && theMonitors.contains(u.cachedCurrentMonitor) {
+	if u.cachedCurrentMonitor != nil && u.cachedCurrentMonitorTime > render.Tick()-monitorCacheTicks && theMonitors.contains(u.cachedCurrentMonitor) {
 		return u.cachedCurrentMonitor, nil
 	}
 
@@ -1422,7 +1423,7 @@ func (u *glfwBackend) currentMonitor() (*Monitor, error) {
 		return nil, err
 	}
 	u.cachedCurrentMonitor = m
-	u.cachedCurrentMonitorTime = u.Tick()
+	u.cachedCurrentMonitorTime = render.Tick()
 	return m, nil
 }
 

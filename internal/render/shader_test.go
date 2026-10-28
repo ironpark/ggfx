@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ui_test
+package render_test
 
 import (
 	"slices"
 	"testing"
 
 	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/ui"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 const uniformsTestShader = `
@@ -40,13 +40,13 @@ fn fragment(v: Vertex) -> vec4f {
 }
 `
 
-func newTestShader(tb testing.TB) *ui.Shader {
+func newTestShader(tb testing.TB) *render.Shader {
 	tb.Helper()
 	program, err := graphics.CompileShader([]byte(uniformsTestShader))
 	if err != nil {
 		tb.Fatal(err)
 	}
-	return ui.NewShader(program, "")
+	return render.NewShader(program, "")
 }
 
 var (
@@ -55,7 +55,7 @@ var (
 	testColors = []float32{1, 1, 1, 1, 0.5, 0.25, 0, 1}
 )
 
-func putTestUniforms(s *ui.Shader, block []uint32, scale float32) {
+func putTestUniforms(s *render.Shader, block []uint32, scale float32) {
 	s.PutUniform(block, "scale", scale)
 	s.PutUniformSlice(block, "offset", testOffset)
 	s.PutUniformSlice(block, "m", testM)

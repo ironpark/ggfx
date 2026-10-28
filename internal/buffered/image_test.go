@@ -23,8 +23,8 @@ import (
 	"github.com/ironpark/ggfx/internal/buffered"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 	t "github.com/ironpark/ggfx/internal/testing"
-	"github.com/ironpark/ggfx/internal/ui"
 )
 
 func TestMain(m *testing.M) {
@@ -39,7 +39,7 @@ func TestUnsyncedPixels(t *testing.T) {
 
 	// Merge the entry into the cached pixels.
 	// The entry for dots is now gone in the current implementation.
-	ok, err := dst.ReadPixels(ui.Get().GraphicsDriverForTesting(), make([]byte, 4*16*16), image.Rect(0, 0, 16, 16))
+	ok, err := dst.ReadPixels(render.GraphicsDriver(), make([]byte, 4*16*16), image.Rect(0, 0, 16, 16))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestUnsyncedPixels(t *testing.T) {
 
 	// Check the result is correct.
 	var got [4]byte
-	ok, err = dst.ReadPixels(ui.Get().GraphicsDriverForTesting(), got[:], image.Rect(0, 0, 1, 1))
+	ok, err = dst.ReadPixels(render.GraphicsDriver(), got[:], image.Rect(0, 0, 1, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestReadPixelsOnLargeImage(t *testing.T) {
 	// Read the same region twice. The entry for dots must be applied to the result both times.
 	for range 2 {
 		got := make([]byte, 4*4*4)
-		ok, err := img.ReadPixels(ui.Get().GraphicsDriverForTesting(), got, image.Rect(1, 1, 5, 5))
+		ok, err := img.ReadPixels(render.GraphicsDriver(), got, image.Rect(1, 1, 5, 5))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -140,7 +140,7 @@ func TestReadPixelsOnLargeImageAcrossTiles(t *testing.T) {
 
 	// Reading one pixel caches only the tile containing it.
 	var dot [4]byte
-	ok, err := img.ReadPixels(ui.Get().GraphicsDriverForTesting(), dot[:], image.Rect(0, 0, 1, 1))
+	ok, err := img.ReadPixels(render.GraphicsDriver(), dot[:], image.Rect(0, 0, 1, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestReadPixelsOnLargeImageAcrossTiles(t *testing.T) {
 	// Read the same region twice. The entry for dots must be applied to the result both times.
 	for range 2 {
 		got := make([]byte, 4*8*8)
-		ok, err := img.ReadPixels(ui.Get().GraphicsDriverForTesting(), got, image.Rect(252, 252, 260, 260))
+		ok, err := img.ReadPixels(render.GraphicsDriver(), got, image.Rect(252, 252, 260, 260))
 		if err != nil {
 			t.Fatal(err)
 		}

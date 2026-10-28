@@ -23,11 +23,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/colormode"
 	"github.com/ironpark/ggfx/internal/glfw"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 func (u *UserInterface) initializePlatform() error {
@@ -36,31 +34,6 @@ func (u *UserInterface) initializePlatform() error {
 
 func setApplePressAndHoldEnabled(enabled bool) {
 	// Do nothing.
-}
-
-type graphicsDriverCreatorImpl struct {
-	colorSpace color.ColorSpace
-}
-
-func (g *graphicsDriverCreatorImpl) newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error) {
-	graphics, err := g.newOpenGL()
-	return graphics, GraphicsLibraryOpenGL, err
-}
-
-func (*graphicsDriverCreatorImpl) newOpenGL() (graphicsdriver.Graphics, error) {
-	return opengl.NewGraphics()
-}
-
-func (*graphicsDriverCreatorImpl) newDirectX() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: DirectX is not supported in this environment")
-}
-
-func (*graphicsDriverCreatorImpl) newMetal() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: Metal is not supported in this environment")
-}
-
-func (*graphicsDriverCreatorImpl) newPlayStation5() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("ui: PlayStation 5 is not supported in this environment")
 }
 
 func isGLXExtensionForGL2Available() bool {
@@ -105,7 +78,7 @@ func isGLXExtensionForGL2Available() bool {
 // setOpenGLWindowHints must be called from the main thread.
 func (u *UserInterface) setOpenGLWindowHints() error {
 	var isES bool
-	if g, ok := u.graphicsDriver.(interface{ IsES() bool }); ok {
+	if g, ok := render.GraphicsDriver().(interface{ IsES() bool }); ok {
 		isES = g.IsES()
 	}
 

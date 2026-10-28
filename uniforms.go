@@ -14,13 +14,11 @@
 
 package ggfx
 
-import (
-	"github.com/ironpark/ggfx/internal/ui"
-)
+import "github.com/ironpark/ggfx/internal/render"
 
 // UniformScalar is a Go type that a [Uniforms] setter accepts for one scalar element:
 // int, int32, uint32, float32 or float64.
-type UniformScalar = ui.UniformScalar
+type UniformScalar = render.UniformScalar
 
 // Uniforms is the uniform block of one shader, laid out as the shader reads it.
 //
