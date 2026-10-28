@@ -64,9 +64,9 @@ func parseFeatureLevel(str string) (_D3D_FEATURE_LEVEL, bool) {
 }
 
 func surfaceTarget(target any) (windows.HWND, error) {
-	w, ok := target.(uintptr)
+	w, ok := target.(graphicsdriver.HWND)
 	if !ok {
-		return 0, fmt.Errorf("directx: NewSurface needs an HWND as uintptr but got %T", target)
+		return 0, fmt.Errorf("directx: NewSurface needs an HWND but got %T", target)
 	}
 	return windows.HWND(w), nil
 }

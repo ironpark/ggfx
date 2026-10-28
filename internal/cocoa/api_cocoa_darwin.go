@@ -76,6 +76,7 @@ var (
 	sel_isVisible                                  = objc.RegisterName("isVisible")
 	sel_occlusionState                             = objc.RegisterName("occlusionState")
 	sel_inLiveResize                               = objc.RegisterName("inLiveResize")
+	sel_window                                     = objc.RegisterName("window")
 	sel_deviceDescription                          = objc.RegisterName("deviceDescription")
 	sel_objectForKey                               = objc.RegisterName("objectForKey:")
 	sel_unsignedIntValue                           = objc.RegisterName("unsignedIntValue")
@@ -180,6 +181,15 @@ func (w NSWindow) ContentView() NSView {
 
 type NSView struct {
 	objc.ID
+}
+
+// Window returns the window the view is in, or a zero NSWindow if it is in none.
+func (v NSView) Window() NSWindow {
+	return NSWindow{v.Send(sel_window)}
+}
+
+func (v NSView) InLiveResize() bool {
+	return v.Send(sel_inLiveResize) != 0
 }
 
 func (v NSView) SetLayer(layer uintptr) {

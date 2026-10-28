@@ -54,7 +54,7 @@ type Graphics interface {
 	NewImage(width, height int) (Image, error)
 
 	// NewSurface creates a presentation target for a native window. target is what the platform's
-	// UI layer has: an NSWindow or HWND handle as uintptr, or an opengl.Presenter for OpenGL.
+	// UI layer has: an NSView or an HWND, or an opengl.Presenter for OpenGL.
 	// transparent asks for a surface that composites with what is behind the window; a driver
 	// that cannot present one returns an error. NewSurface is called on the main thread.
 	NewSurface(target any, transparent bool) (Surface, error)
@@ -66,6 +66,13 @@ type Graphics interface {
 	// DrawTriangles draws an image onto another image with the given parameters.
 	DrawTriangles(dst ImageID, srcs [graphics.ShaderSrcImageCount]ImageID, shader ShaderID, dstRegions []DstRegion, indexOffset int, blend Blend, uniforms []uint32) error
 }
+
+// NSView is an NSView pointer. The view a Metal surface is made for renders that surface and
+// nothing else: the surface becomes its layer.
+type NSView uintptr
+
+// HWND is a Win32 window handle.
+type HWND uintptr
 
 // Surface is one presentation target: a window's swap chain or layer, or the default framebuffer
 // of a GL context. End(FlushModePresent) presents every surface whose screen image was drawn to

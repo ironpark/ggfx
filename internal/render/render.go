@@ -18,8 +18,10 @@
 package render
 
 import (
+	"context"
 	"errors"
 	"image"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
@@ -33,8 +35,15 @@ var (
 	driver  graphicsdriver.Graphics
 	library atomic.Int32
 
-	// running reports whether frames run, so that a read of pixels can wait for one.
+	// running reports whether Init was called and Terminate was not, so that a read of pixels
+	// can wait for a frame.
 	running atomic.Bool
+
+	// stopRenderThread stops the render thread Init started, and renderThreadDone is closed
+	// when it has stopped. Both are nil when the render thread is the caller's.
+	stopRenderThread context.CancelFunc
+	renderThreadDone chan struct{}
+	terminateOnce    sync.Once
 
 	theErr atomic.Pointer[error]
 	tick   atomic.Int64
@@ -58,27 +67,116 @@ func init() {
 	whiteImage.WritePixels(pix, image.Rect(0, 0, whiteImage.width, whiteImage.height))
 }
 
-// InitGraphicsDriver creates the graphics driver for lib and makes it the driver everything is
-// drawn with. canvas is the browser's canvas, and is ignored elsewhere.
-func InitGraphicsDriver(lib GraphicsLibrary, colorSpace color.ColorSpace, canvas any) (graphicsdriver.Graphics, error) {
-	g, lib, err := newGraphicsDriver(newGraphicsDriverCreator(colorSpace, canvas), lib)
+// Options are what Init is given.
+type Options struct {
+	// GraphicsLibrary is the graphics library to draw with. GraphicsLibraryAuto chooses one, and
+	// the EBITENGINE_GRAPHICS_LIBRARY environment variable can name one then.
+	GraphicsLibrary GraphicsLibrary
+
+	ColorSpace color.ColorSpace
+
+	// SingleThread makes the caller's goroutine run the graphics commands, instead of a thread
+	// of the renderer's own. The browser always runs them so.
+	SingleThread bool
+
+	// MainThread runs a function on the OS main thread and returns when it has run. Metal sets
+	// the layer's properties through it while a window is resized by the user. Nil runs the
+	// function on the calling goroutine.
+	MainThread func(func())
+
+	// Canvas is the browser's canvas, the only one WebGL draws to. It is ignored elsewhere.
+	Canvas any
+}
+
+// Init creates the graphics driver and starts the render thread. It is called once, before
+// anything is drawn: images can be made and drawn to before, but they are not rendered until a
+// frame after Init. Init must be called on the main thread.
+func Init(o *Options) error {
+	if driver != nil {
+		return errors.New("render: Init is called twice")
+	}
+	g, lib, err := newGraphicsDriver(newGraphicsDriverCreator(o.ColorSpace, o.Canvas), o.GraphicsLibrary)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	if r, ok := g.(interface{ SetMainThreadRunner(func(func())) }); ok && o.MainThread != nil {
+		r.SetMainThreadRunner(o.MainThread)
 	}
 	driver = g
 	library.Store(int32(lib))
-	return g, nil
+
+	if !o.SingleThread {
+		graphicscommand.SetOSThreadAsRenderThread()
+		ctx, cancel := context.WithCancel(context.Background())
+		stopRenderThread = cancel
+		renderThreadDone = make(chan struct{})
+		go func() {
+			defer close(renderThreadDone)
+			graphicscommand.LoopRenderThread(ctx)
+		}()
+	}
+	running.Store(true)
+	return nil
 }
 
-// GraphicsDriver returns the graphics driver, or nil before InitGraphicsDriver.
+// Terminate waits for the queued graphics commands to run and stops the render thread. Nothing
+// is rendered after it. A window system calls it before it destroys the context or the windows
+// the commands draw to.
+func Terminate() {
+	terminateOnce.Do(func() {
+		running.Store(false)
+		graphicscommand.Terminate()
+		if stopRenderThread != nil {
+			stopRenderThread()
+			<-renderThreadDone
+		}
+	})
+}
+
+// SetGLContext sets the OpenGL context everything is drawn in on the desktop. It shares objects
+// with every surface's context and is never presented. A window system that uses OpenGL creates
+// it after Init, with what IsOpenGLES reports, and sets it before the first frame.
+func SetGLContext(c interface{ MakeContextCurrent() error }) {
+	driver.(interface {
+		SetDrawingContext(interface{ MakeContextCurrent() error })
+	}).SetDrawingContext(c)
+}
+
+// GraphicsDriver returns the graphics driver, or nil before Init.
 func GraphicsDriver() graphicsdriver.Graphics {
 	return driver
 }
 
-// Library returns the graphics library in use, or GraphicsLibraryUnknown before
-// InitGraphicsDriver.
+// Library returns the graphics library in use, or GraphicsLibraryUnknown before Init.
 func Library() GraphicsLibrary {
 	return GraphicsLibrary(library.Load())
+}
+
+// IsOpenGLES reports whether the OpenGL driver draws with OpenGL ES, which decides the context a
+// window system creates for it. It is false for the other drivers.
+func IsOpenGLES() bool {
+	g, ok := driver.(interface{ IsES() bool })
+	return ok && g.IsES()
+}
+
+// SupportsDirectComposition reports whether the DirectX driver presents through
+// DirectComposition, so that a window can be created without a redirection surface (#3489).
+func SupportsDirectComposition() bool {
+	d, ok := driver.(interface{ SupportsDirectComposition() bool })
+	return ok && d.SupportsDirectComposition()
+}
+
+// Occluded reports whether the last present went to a swap chain nothing of which is visible,
+// and so returned without waiting for the display.
+func Occluded() bool {
+	o, ok := driver.(interface{ IsOccluded() bool })
+	return ok && o.IsOccluded()
+}
+
+// Flush runs the graphics commands queued in the frames since the last flush, and presents every
+// surface whose screen was drawn to when present is set.
+func Flush(present bool) error {
+	return atlas.FlushCommands(driver, present)
 }
 
 // MaxImageSize returns the maximum image size the graphics driver supports.
@@ -91,12 +189,7 @@ func ColorSpace() color.ColorSpace {
 	return driver.ColorSpace()
 }
 
-// SetRunning records whether frames run.
-func SetRunning(r bool) {
-	running.Store(r)
-}
-
-// Error returns the error a draw or a read of pixels ran into, if any.
+// Error returns the error a read of pixels ran into, if any.
 func Error() error {
 	if err := theErr.Load(); err != nil {
 		return *err
@@ -133,10 +226,18 @@ func IncrementTick() {
 	tick.Add(1)
 }
 
-// BeginFrame begins a frame. Images are drawn and their pixels read between BeginFrame and
-// EndFrame, which must be called even when what follows BeginFrame fails.
+// BeginFrame begins a frame. Screens are drawn between BeginFrame and EndFrame, which is called
+// when BeginFrame succeeded. A read of pixels that missed the last frame runs at BeginFrame, and
+// BeginFrame returns the error a read of pixels ran into, as the read itself cannot.
 func BeginFrame() error {
-	return atlas.BeginFrame(driver)
+	if err := atlas.BeginFrame(driver); err != nil {
+		return err
+	}
+	processFuncsInFrame()
+	if err := Error(); err != nil {
+		return errors.Join(err, atlas.EndFrame(driver))
+	}
+	return nil
 }
 
 // EndFrame ends the frame BeginFrame began.
@@ -144,30 +245,15 @@ func EndFrame() error {
 	return atlas.EndFrame(driver)
 }
 
-// NewSurface creates a presentation target for target, which is what the platform's window has.
-// It must be called on the main thread.
-func NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	return driver.NewSurface(target, transparent)
-}
-
-// DisposeSurface releases surface once the commands queued before it ran.
-func DisposeSurface(surface graphicsdriver.Surface) {
-	graphicscommand.DisposeSurface(surface)
-}
-
-// FinishForcedFrame completes a frame drawn outside the loop, during a live resize.
+// FinishForcedFrame waits for a frame drawn and flushed while the main thread was blocked, as in
+// a live resize on macOS, to be presented.
 func FinishForcedFrame() error {
 	return graphicscommand.FinishForcedFrame(driver)
 }
 
-// NeedsClearingScreen reports whether a screen image must be cleared at the start of a frame.
-func NeedsClearingScreen() bool {
-	return driver.NeedsClearingScreen()
-}
-
 func readPixels(img *Image, pixels []byte, region image.Rectangle) error {
 	if !running.Load() {
-		panic("render: ReadPixels cannot be called before frames run")
+		panic("render: ReadPixels cannot be called before Init or after Terminate")
 	}
 
 	ok, err := img.readPixels(pixels, region)
@@ -211,23 +297,15 @@ func runInFrame(f func()) {
 	<-ch
 }
 
-// ProcessFuncsInFrame runs the functions queued to run inside a frame, like a read of pixels that
+// processFuncsInFrame runs the functions queued to run inside a frame, like a read of pixels that
 // missed one. It must be called inside a frame.
-func ProcessFuncsInFrame() error {
-	var processed bool
+func processFuncsInFrame() {
 	for {
 		select {
 		case f := <-funcsInFrameCh:
 			f()
-			processed = true
 		default:
-			if processed {
-				// Catch the error that happened at (*Image).At.
-				if err := Error(); err != nil {
-					return err
-				}
-			}
-			return nil
+			return
 		}
 	}
 }

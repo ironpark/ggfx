@@ -107,19 +107,30 @@ type RunOptions struct {
 	X11InstanceName string
 }
 
+// toRenderColorSpace resolves ColorSpaceDefault to the environment's color space.
+func toRenderColorSpace(colorSpace ColorSpace) ecolor.ColorSpace {
+	if colorSpace != ColorSpaceDefault {
+		return ecolor.ColorSpace(colorSpace)
+	}
+	if runtime.GOOS == "darwin" {
+		// On macOS, the default color space is Display P3.
+		// TODO: Remove this logic at v3. sRGB should be the default in the future (#3349).
+		return ecolor.ColorSpaceDisplayP3
+	}
+	return ecolor.ColorSpaceSRGB
+}
+
 func toUIRunOptions(options *RunOptions) *ui.RunOptions {
 	const (
 		defaultX11ClassName    = "Ebitengine-Application"
 		defaultX11InstanceName = "ebitengine-application"
 	)
 
-	colorSpace := ecolor.ColorSpaceSRGB
-	if options != nil && options.ColorSpace != ColorSpaceDefault {
-		colorSpace = ecolor.ColorSpace(options.ColorSpace)
-	} else if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
-		// On macOS or iOS, the default color space is Display P3.
-		// TODO: Remove this logic at v3. sRGB should be the default in the future (#3349).
-		colorSpace = ecolor.ColorSpaceDisplayP3
+	var colorSpace ecolor.ColorSpace
+	if options != nil {
+		colorSpace = toRenderColorSpace(options.ColorSpace)
+	} else {
+		colorSpace = toRenderColorSpace(ColorSpaceDefault)
 	}
 
 	if options == nil {
@@ -158,7 +169,8 @@ type AbsPather interface {
 }
 
 // Tick returns the current tick count.
-// The tick count starts with 0 and is incremented by one on every iteration of the event loop.
+// The tick count starts with 0 and is incremented by one on every iteration of the event loop,
+// by [Run] or by a window system's [AdvanceTick].
 //
 // Tick is concurrent-safe.
 func Tick() int64 {

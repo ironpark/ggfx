@@ -28,10 +28,9 @@ import (
 
 const kCVReturnSuccess = 0
 
-func (v *view) setWindow(window uintptr) {
-	// NSView can be updated e.g., fullscreen-state is switched.
-	v.window = window
-	v.windowChanged = true
+func (v *view) setNSView(nsView uintptr) {
+	v.nsView = nsView
+	v.nsViewChanged = true
 }
 
 func (v *view) setUIView(uiview uintptr) {
@@ -39,21 +38,21 @@ func (v *view) setUIView(uiview uintptr) {
 }
 
 func (v *view) update() {
-	if !v.windowChanged {
+	if !v.nsViewChanged {
 		return
 	}
 
 	// TODO: Should this be called on the main thread?
-	cocoaWindow := cocoa.NSWindow{ID: objc.ID(v.window)}
-	cocoaWindow.ContentView().SetLayer(uintptr(v.ml.Layer()))
-	cocoaWindow.ContentView().SetWantsLayer(true)
+	nsView := cocoa.NSView{ID: objc.ID(v.nsView)}
+	nsView.SetLayer(uintptr(v.ml.Layer()))
+	nsView.SetWantsLayer(true)
 	// The layer content is updated by the drawable presentations, not by the view's display
 	// mechanism. Keep AppKit from updating the layer content, especially when window resizing
 	// starts. Otherwise, the layer content is reset and the window background is shown for a
 	// moment (#3478).
-	cocoaWindow.ContentView().SetLayerContentsRedrawPolicy(cocoa.NSViewLayerContentsRedrawNever)
+	nsView.SetLayerContentsRedrawPolicy(cocoa.NSViewLayerContentsRedrawNever)
 
-	v.windowChanged = false
+	v.nsViewChanged = false
 }
 
 const (
@@ -135,20 +134,25 @@ func (v *view) applyDrawableSizeIfNeeded() {
 	v.updateMetalDisplayLink()
 }
 
-// inLiveResize reports whether the window is being resized by the user.
+// inLiveResize reports whether the view is being resized by the user, with its window.
 func (v *view) inLiveResize() bool {
-	if v.window == 0 {
+	if v.nsView == 0 {
 		return false
 	}
-	return cocoa.NSWindow{ID: objc.ID(v.window)}.InLiveResize()
+	return cocoa.NSView{ID: objc.ID(v.nsView)}.InLiveResize()
 }
 
-// isFullscreen reports whether the window is in the fullscreen mode.
+// isFullscreen reports whether the view's window is in the fullscreen mode. A view in no window is
+// not. The window is asked for every time, as the view can move to another one.
 func (v *view) isFullscreen() bool {
-	if v.window == 0 {
+	if v.nsView == 0 {
 		return false
 	}
-	return cocoa.NSWindow{ID: objc.ID(v.window)}.StyleMask()&cocoa.NSWindowStyleMaskFullScreen != 0
+	w := cocoa.NSView{ID: objc.ID(v.nsView)}.Window()
+	if w.ID == 0 {
+		return false
+	}
+	return w.StyleMask()&cocoa.NSWindowStyleMaskFullScreen != 0
 }
 
 // shouldPresentWithTransaction reports whether a drawable must be presented in sync with

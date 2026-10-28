@@ -24,6 +24,7 @@ import (
 	"github.com/ironpark/ggfx/internal/cocoa"
 	"github.com/ironpark/ggfx/internal/colormode"
 	"github.com/ironpark/ggfx/internal/glfw"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 var class_EbitengineWindowDelegate objc.Class
@@ -343,6 +344,15 @@ func monitorFromWindowByOS(w *glfw.Window) (*Monitor, error) {
 
 func (u *glfwBackend) nativeWindow() (uintptr, error) {
 	return u.window.GetCocoaWindow()
+}
+
+// surfaceTarget returns what a surface other than OpenGL's presents to: the window's content view.
+func (u *glfwBackend) surfaceTarget() (any, error) {
+	w, err := u.window.GetCocoaWindow()
+	if err != nil {
+		return nil, err
+	}
+	return render.NSView(cocoa.NSWindow{ID: objc.ID(w)}.ContentView().ID), nil
 }
 
 // isWindowOccluded reports whether no part of the window is visible on the screen.

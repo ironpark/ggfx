@@ -64,6 +64,8 @@ const (
 )
 
 type UserInterface struct {
+	err atomic.Pointer[error]
+
 	running    atomic.Bool
 	terminated atomic.Bool
 
@@ -80,7 +82,7 @@ type UserInterface struct {
 	mainThread thread.Thread
 
 	// pacer paces the loop when a present does not wait for the display.
-	pacer render.FramePacer
+	pacer framePacer
 
 	// app is the App driven by RunApp.
 	app App
@@ -166,14 +168,31 @@ func InitialWindowPosition(mw, mh, ww, wh int) (x, y int) {
 	return (mw - ww) / 2, (mh - wh) / 3
 }
 
-// error returns the error the loop stops with. The renderer's state holds it, so that a draw
-// that fails stops the loop too.
+// error returns the error the loop stops with. The renderer's errors stop the loop at the frame
+// they are reported at.
 func (u *UserInterface) error() error {
-	return render.Error()
+	if err := u.err.Load(); err != nil {
+		return *err
+	}
+	return nil
 }
 
 func (u *UserInterface) setError(err error) {
-	render.SetError(err)
+	if err == nil {
+		return
+	}
+	for {
+		oldErr := u.err.Load()
+		var newErr error
+		if oldErr != nil {
+			newErr = errors.Join(*oldErr, err)
+		} else {
+			newErr = err
+		}
+		if u.err.CompareAndSwap(oldErr, &newErr) {
+			break
+		}
+	}
 }
 
 func (u *UserInterface) setRefreshRate(refreshRate int) {
@@ -200,7 +219,6 @@ func (u *UserInterface) isRunning() bool {
 
 func (u *UserInterface) setRunning(running bool) {
 	u.running.Store(running)
-	render.SetRunning(running)
 }
 
 func (u *UserInterface) isTerminated() bool {

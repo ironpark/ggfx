@@ -18,16 +18,11 @@ import (
 	"io/fs"
 	"sync/atomic"
 
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/render"
 )
 
-// App is what RunApp drives: it receives every event and creates the screen images.
+// App is what RunApp drives: it receives every event.
 type App interface {
-	// NewScreenImage creates the image presented on the window's surface. The app owns the image
-	// and gets it back in FrameEvent.Screen.
-	NewScreenImage(window AppWindow, width, height int, surface graphicsdriver.Surface) *render.Image
-
 	// HandleEvent handles one event. Returning RegularTermination ends the loop without an error.
 	HandleEvent(ev Event) error
 }
@@ -324,11 +319,7 @@ type eventContext struct {
 	app    App
 	window AppWindow
 
-	surface graphicsdriver.Surface
-	screen  *render.Image
-
-	screenWidth  int
-	screenHeight int
+	surface *render.Surface
 
 	frameRequested atomic.Bool
 }
@@ -348,15 +339,8 @@ func (c *eventContext) wantsFrame() bool {
 	return c.frameRequested.Load()
 }
 
-func (c *eventContext) setSurface(surface graphicsdriver.Surface) {
+func (c *eventContext) setSurface(surface *render.Surface) {
 	c.surface = surface
-}
-
-func (c *eventContext) dispose() {
-	if c.screen != nil {
-		c.screen.Deallocate()
-		c.screen = nil
-	}
 }
 
 // renderFrame runs one frame if one was requested, or regardless when force is set. It returns
@@ -380,27 +364,9 @@ func (c *eventContext) renderFrame(screenWidth, screenHeight int, deviceScaleFac
 		}
 	}()
 
-	if err := render.ProcessFuncsInFrame(); err != nil {
-		return false, err
-	}
-
-	if c.screen != nil && (c.screenWidth != screenWidth || c.screenHeight != screenHeight) {
-		c.screen.Deallocate()
-		c.screen = nil
-	}
-	if c.screen == nil {
-		c.screen = c.app.NewScreenImage(c.window, screenWidth, screenHeight, c.surface)
-		c.screenWidth = screenWidth
-		c.screenHeight = screenHeight
-	}
-
-	if render.NeedsClearingScreen() {
-		c.screen.Clear()
-	}
-
 	if err := c.app.HandleEvent(FrameEvent{
 		Window: c.window,
-		Screen: c.screen,
+		Screen: c.surface.Screen(screenWidth, screenHeight),
 		Scale:  deviceScaleFactor,
 	}); err != nil {
 		return false, err
@@ -417,7 +383,7 @@ func (c *eventContext) forceUpdateFrame(screenWidth, screenHeight int, deviceSca
 	if err != nil {
 		return err
 	}
-	if err := ui.pacer.FlushCommandsAndWait(needsSwapBuffers, ui.RefreshRate()); err != nil {
+	if err := ui.pacer.flushCommandsAndWait(needsSwapBuffers, ui.RefreshRate()); err != nil {
 		return err
 	}
 	return render.FinishForcedFrame()

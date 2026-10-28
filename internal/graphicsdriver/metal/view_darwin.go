@@ -35,14 +35,15 @@ import (
 const maximumDrawableCount = 3
 
 type view struct {
-	window uintptr
+	// nsView is the NSView whose layer this view is, on macOS.
+	nsView uintptr
 
 	// uiview is the UIView the game is rendered into.
 	// This is written on the UI thread and read on the rendering thread.
 	// This is always 0 on macOS.
 	uiview atomic.Uintptr
 
-	windowChanged bool
+	nsViewChanged bool
 
 	// vsyncDisabled reports whether vsync is disabled.
 	// This can be read from the thread for CAMetalDisplayLink, while the other members are used only on the rendering thread.

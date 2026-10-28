@@ -16,87 +16,11 @@ package render_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/render"
 )
-
-func TestVsyncIgnored(t *testing.T) {
-	const refreshInterval = time.Second / 60
-
-	repeat := func(frameTime time.Duration, count int) []time.Duration {
-		ts := make([]time.Duration, count)
-		for i := range ts {
-			ts[i] = frameTime
-		}
-		return ts
-	}
-
-	concat := func(tss ...[]time.Duration) []time.Duration {
-		var ts []time.Duration
-		for _, t := range tss {
-			ts = append(ts, t...)
-		}
-		return ts
-	}
-
-	cases := []struct {
-		name       string
-		frameTimes []time.Duration
-		want       bool
-	}{
-		{
-			name:       "no frame",
-			frameTimes: nil,
-			want:       false,
-		},
-		{
-			name:       "waiting for the vsync",
-			frameTimes: repeat(refreshInterval, 1000),
-			want:       false,
-		},
-		{
-			name:       "waiting for a slightly shorter time than the refresh interval",
-			frameTimes: repeat(refreshInterval*9/10, 1000),
-			want:       false,
-		},
-		{
-			name:       "not waiting at all",
-			frameTimes: repeat(time.Millisecond, 1000),
-			want:       true,
-		},
-		{
-			name:       "a burst of early frames",
-			frameTimes: concat(repeat(time.Millisecond, 29), repeat(refreshInterval, 1000)),
-			want:       false,
-		},
-		{
-			name:       "early frames interrupted by a frame waiting for the vsync",
-			frameTimes: concat(repeat(time.Millisecond, 29), repeat(refreshInterval, 1), repeat(time.Millisecond, 29)),
-			want:       false,
-		},
-		{
-			name:       "early frames just reaching the threshold",
-			frameTimes: repeat(time.Millisecond, 30),
-			want:       true,
-		},
-		{
-			name:       "frames longer than the refresh interval",
-			frameTimes: repeat(refreshInterval*2, 1000),
-			want:       false,
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got, want := render.VsyncIgnoredForTest(c.frameTimes, refreshInterval), c.want; got != want {
-				t.Errorf("render.VsyncIgnoredForTest(%d frames): got: %t, want: %t", len(c.frameTimes), got, want)
-			}
-		})
-	}
-}
 
 type frameDriver struct {
 	graphicsdriver.Graphics
@@ -129,7 +53,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 	const frames = 10
 	for frame := range frames {
 		graphicscommand.NewImage(1, 1, nil, "")
-		if err := render.FlushCommandsAndWaitForTesting(&driver, false); err != nil {
+		if err := render.FlushForTesting(&driver, false); err != nil {
 			t.Fatal(err)
 		}
 		if driver.images != frame+1 || driver.frames != frame+1 || driver.presents != 0 {
@@ -137,7 +61,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 		}
 	}
 	graphicscommand.NewImage(1, 1, nil, "")
-	if err := render.FlushCommandsAndWaitForTesting(&driver, true); err != nil {
+	if err := render.FlushForTesting(&driver, true); err != nil {
 		t.Fatal(err)
 	}
 	if driver.images != frames+1 || driver.frames != frames+1 || driver.presents != 1 {

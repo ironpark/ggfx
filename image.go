@@ -28,7 +28,6 @@ import (
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/pool"
 	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/scratch"
@@ -1243,10 +1242,15 @@ func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Imag
 	return newImage(bounds, imageType)
 }
 
-// newScreenImage creates the image presented on surface.
-func newScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
+// screenImage returns the Image for a surface's screen img: cur when it already is, and a new one
+// when the surface replaced its screen.
+func screenImage(cur *Image, img *render.Image) *Image {
+	if cur != nil && cur.image == img {
+		return cur
+	}
+	width, height := img.Size()
 	i := &Image{}
-	i.image = render.NewScreenImage(width, height, surface)
+	i.image = img
 	i.bounds = image.Rect(0, 0, width, height)
 	i.addr = i
 	return i

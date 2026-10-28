@@ -17,71 +17,14 @@
 package ui
 
 import (
-	stdcontext "context"
-	"runtime"
-
-	"golang.org/x/sync/errgroup"
-
-	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/thread"
 )
 
-// runLoop runs the loop. start, if any, runs on the loop's goroutine after the initialization and
-// before the first iteration.
+// runLoop runs the loop on the calling goroutine, the only one the browser has. start, if any,
+// runs after the initialization and before the first iteration.
 func (u *UserInterface) runLoop(options *RunOptions, start func() error) error {
-	if options.SingleThread || buildTagSingleThread || runtime.GOOS == "js" {
-		return u.runSingleThread(options, start)
-	}
-	return u.runMultiThread(options, start)
-}
-
-func (u *UserInterface) runMultiThread(options *RunOptions, start func() error) error {
-	u.mainThread = thread.NewOSThread()
-	graphicscommand.SetOSThreadAsRenderThread()
-
-	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
-	defer cancel()
-
-	var wg errgroup.Group
-
-	// Run the render thread.
-	wg.Go(func() error {
-		defer cancel()
-
-		graphicscommand.LoopRenderThread(ctx)
-		return nil
-	})
-
-	// Run the game thread.
-	wg.Go(func() error {
-		defer cancel()
-
-		var err error
-		u.mainThread.Call(func() {
-			if mainErr := u.initOnMainThread(options); mainErr != nil {
-				err = mainErr
-			}
-		})
-		if err != nil {
-			return err
-		}
-
-		// setRunning(true) should be called in initOnMainThread for each platform.
-		defer u.setRunning(false)
-
-		if start != nil {
-			if err := start(); err != nil {
-				return err
-			}
-		}
-
-		return u.loopFrames()
-	})
-
-	// Run the main thread. The loop is the thread's whole life, so a call arriving after
-	// it ends is a no-op rather than a block forever.
-	_ = u.mainThread.LoopAndStop(ctx)
-	return wg.Wait()
+	return u.runSingleThread(options, start)
 }
 
 func (u *UserInterface) runSingleThread(options *RunOptions, start func() error) error {
@@ -90,6 +33,7 @@ func (u *UserInterface) runSingleThread(options *RunOptions, start func() error)
 
 	u.setRunning(true)
 	defer u.setRunning(false)
+	defer render.Terminate()
 
 	if err := u.initOnMainThread(options); err != nil {
 		return err

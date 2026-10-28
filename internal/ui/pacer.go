@@ -12,17 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package render
+package ui
 
 import (
 	"time"
 
-	"github.com/ironpark/ggfx/internal/atlas"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
-// FramePacer paces a loop when presenting does not wait for the display.
-type FramePacer struct {
+// framePacer paces the loop when presenting does not wait for the display.
+type framePacer struct {
 	lastSwapBufferTime time.Time
 
 	// vsyncIgnored reports whether swapping buffers does not wait for the display even though vsync
@@ -34,24 +33,17 @@ type FramePacer struct {
 	vsyncIgnoredCount int
 }
 
-// FlushCommandsAndWait flushes the commands, presenting them when present is set, and sleeps as
-// long as the display did not make the loop wait. refreshRate is the display's rate in Hz, or 0
-// when it is unknown.
-func (c *FramePacer) FlushCommandsAndWait(present bool, refreshRate int) error {
-	return c.flushCommandsAndWait(present, driver, refreshRate)
-}
-
-func (c *FramePacer) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver graphicsdriver.Graphics, refreshRate int) error {
-	if err := atlas.FlushCommands(graphicsDriver, needsSwapBuffers); err != nil {
+// flushCommandsAndWait flushes the commands, presenting them when needsSwapBuffers is set, and
+// sleeps as long as the display did not make the loop wait. refreshRate is the display's rate in
+// Hz, or 0 when it is unknown.
+func (c *framePacer) flushCommandsAndWait(needsSwapBuffers bool, refreshRate int) error {
+	if err := render.Flush(needsSwapBuffers); err != nil {
 		return err
 	}
 
 	// Swapping buffers for an invisible screen returns without waiting for the display. Pace such a
 	// frame like a skipped swap, or the loop would run as fast as the CPU allows (#2181).
-	var occluded bool
-	if o, ok := graphicsDriver.(interface{ IsOccluded() bool }); ok {
-		occluded = o.IsOccluded()
-	}
+	occluded := render.Occluded()
 
 	now := time.Now()
 
@@ -90,15 +82,15 @@ func (c *FramePacer) flushCommandsAndWait(needsSwapBuffers bool, graphicsDriver 
 	return nil
 }
 
-// ResetVsyncDetection makes whether swapping buffers waits for the display measured again.
-func (c *FramePacer) ResetVsyncDetection() {
+// resetVsyncDetection makes whether swapping buffers waits for the display measured again.
+func (c *framePacer) resetVsyncDetection() {
 	c.vsyncIgnored = false
 	c.vsyncIgnoredCount = 0
 }
 
 // updateVsyncIgnored records how long one frame took, including swapping its buffers, and reports
 // whether swapping buffers turns out not to wait for the display.
-func (c *FramePacer) updateVsyncIgnored(frameTime, refreshInterval time.Duration) bool {
+func (c *framePacer) updateVsyncIgnored(frameTime, refreshInterval time.Duration) bool {
 	if c.vsyncIgnored {
 		return true
 	}

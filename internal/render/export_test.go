@@ -15,23 +15,11 @@
 package render
 
 import (
-	"time"
-
+	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
-// VsyncIgnoredForTest reports whether the given successive frame times, measured on a display with
-// the given refresh interval, make the loop pace itself instead of relying on the vsync.
-func VsyncIgnoredForTest(frameTimes []time.Duration, refreshInterval time.Duration) bool {
-	var c FramePacer
-	var ignored bool
-	for _, frameTime := range frameTimes {
-		ignored = c.updateVsyncIgnored(frameTime, refreshInterval)
-	}
-	return ignored
-}
-
-func FlushCommandsAndWaitForTesting(driver graphicsdriver.Graphics, present bool) error {
-	var c FramePacer
-	return c.flushCommandsAndWait(present, driver, 60)
+// FlushForTesting flushes the queued commands to driver, as Flush does to the graphics driver.
+func FlushForTesting(driver graphicsdriver.Graphics, present bool) error {
+	return atlas.FlushCommands(driver, present)
 }

@@ -252,8 +252,15 @@ no longer merge cleanly.
 `internal/render` holds what draws, apart from what shows it: `Image`, `Shader` and the uniform
 packing, the white image fills draw from, the error state, reads of pixels that wait for a frame,
 driver creation, the frame pacer and the tick. It was the drawing half of `internal/ui`, which now
-drives it and keeps the windows, the events and the loop. This is the first step of moving the
-window system out of ggfx; see `docs/renderer-split.md`.
+drives it and keeps the windows, the events and the loop, through what `renderer.go` makes
+public: `Init`, `Terminate`, `NewSurface`, `Surface.Screen`, `BeginFrame`, `EndFrame`, `Flush`
+and the rest. The render thread starts at `Init` rather than with the loop, and the frame pacer
+stays with the loop. This is the way to moving the window system out of ggfx; see
+`docs/renderer-split.md`.
+
+A Metal surface is made for an NSView rather than an NSWindow, and the window is asked of the view
+whenever it is needed, for whether it is in a live resize or fullscreen. The view becomes the
+layer's alone; GLFW's windows pass their content view.
 
 ## Windows and the event loop
 

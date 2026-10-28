@@ -27,7 +27,6 @@ import (
 
 	"github.com/ironpark/ggfx/internal/colormode"
 	"github.com/ironpark/ggfx/internal/glfw"
-	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/hook"
 	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/thread"
@@ -47,24 +46,17 @@ func (u *UserInterface) runLoop(options *RunOptions, initMain func() error, star
 
 func (u *UserInterface) runMultiThread(options *RunOptions, initMain func() error, start func() error) error {
 	u.mainThread = thread.NewOSThread()
-	graphicscommand.SetOSThreadAsRenderThread()
 
 	ctx, cancel := stdcontext.WithCancel(stdcontext.Background())
 	defer cancel()
 
 	var wg errgroup.Group
 
-	// Run the render thread.
+	// Run the game thread. The renderer's own thread starts at the renderer's initialization.
 	wg.Go(func() error {
 		defer cancel()
-
-		graphicscommand.LoopRenderThread(ctx)
-		return nil
-	})
-
-	// Run the game thread.
-	wg.Go(func() error {
-		defer cancel()
+		// The loop terminates the renderer as it ends; this stops it when the initialization fails.
+		defer render.Terminate()
 
 		var err error
 		u.mainThread.Call(func() {
@@ -114,13 +106,13 @@ func (u *UserInterface) initGraphicsOnMainThread(options *RunOptions) error {
 
 	setApplePressAndHoldEnabled(options.ApplePressAndHoldEnabled)
 
-	g, err := render.InitGraphicsDriver(options.GraphicsLibrary, options.ColorSpace, nil)
-	if err != nil {
+	if err := render.Init(&render.Options{
+		GraphicsLibrary: options.GraphicsLibrary,
+		ColorSpace:      options.ColorSpace,
+		SingleThread:    u.renderOnMainThread,
+		MainThread:      u.mainThread.Call,
+	}); err != nil {
 		return err
-	}
-
-	if g, ok := g.(interface{ SetMainThreadRunner(func(func())) }); ok {
-		g.SetMainThreadRunner(u.mainThread.Call)
 	}
 
 	if render.Library() == render.GraphicsLibraryOpenGL {
@@ -152,9 +144,7 @@ func (u *UserInterface) createGLContextWindow() error {
 		return err
 	}
 	u.glContextWindow = w
-	render.GraphicsDriver().(interface {
-		SetDrawingContext(interface{ MakeContextCurrent() error })
-	}).SetDrawingContext(w)
+	render.SetGLContext(w)
 	return nil
 }
 
@@ -212,7 +202,7 @@ func (u *glfwBackend) createWindowOnMainThread() error {
 	// A window created without a redirection surface shows nothing unless its content is presented
 	// through DirectComposition, and only the graphics driver can tell whether that works (#3489).
 	noRedirectionBitmap := glfw.False
-	if d, ok := render.GraphicsDriver().(interface{ SupportsDirectComposition() bool }); ok && d.SupportsDirectComposition() {
+	if render.SupportsDirectComposition() {
 		noRedirectionBitmap = glfw.True
 	}
 	if err := glfw.WindowHint(glfw.Win32NoRedirectionBitmap, noRedirectionBitmap); err != nil {
@@ -285,14 +275,14 @@ func (u *glfwBackend) createWindowOnMainThread() error {
 		_ = u.skipTaskbar()
 	}
 
-	// The OpenGL driver presents through the GLFW window; the others need the native handle.
+	// The OpenGL driver presents through the GLFW window; the others need the native view.
 	var target any = u.window
 	if lib != render.GraphicsLibraryOpenGL {
-		w, err := u.nativeWindow()
+		t, err := u.surfaceTarget()
 		if err != nil {
 			return err
 		}
-		target = w
+		target = t
 	}
 	surface, err := render.NewSurface(target, u.desktopWindow.isInitWindowTransparent())
 	if err != nil {
@@ -328,9 +318,8 @@ func (u *glfwBackend) destroy() error {
 		return nil
 	}
 	u.closed = true
-	u.context.dispose()
 	if u.surface != nil {
-		render.DisposeSurface(u.surface)
+		u.surface.Dispose()
 		u.surface = nil
 	}
 	if err := u.window.Destroy(); err != nil {
@@ -347,7 +336,7 @@ func (u *glfwBackend) destroy() error {
 
 func (u *UserInterface) loopFrames(start func() error) (err error) {
 	defer func() {
-		graphicscommand.Terminate()
+		render.Terminate()
 		u.mainThread.Call(func() {
 			// Mark the termination before terminating GLFW so that a concurrent-safe API
 			// like ScheduleFrame stops touching GLFW's state before it is destroyed.
@@ -666,7 +655,7 @@ func (u *UserInterface) updateFrame() error {
 	// Whether swapping buffers waits for the display can differ per monitor, e.g. when the monitors
 	// are driven by different GPUs. Measure it again on the new monitor.
 	if monitorChanged {
-		u.pacer.ResetVsyncDetection()
+		u.pacer.resetVsyncDetection()
 	}
 
 	// The tick advances once per iteration, so that the time-based caches, like the current
@@ -694,7 +683,7 @@ func (u *UserInterface) updateFrame() error {
 		}
 		needsSwapBuffers = needsSwapBuffers || (ran && f.present)
 	}
-	if err := u.pacer.FlushCommandsAndWait(needsSwapBuffers, u.RefreshRate()); err != nil {
+	if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.RefreshRate()); err != nil {
 		return err
 	}
 

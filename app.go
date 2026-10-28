@@ -19,8 +19,6 @@ import (
 	"image"
 	"io/fs"
 
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/ui"
 )
 
@@ -64,15 +62,6 @@ type appForUI struct {
 	handler Handler
 }
 
-func (a *appForUI) NewScreenImage(window ui.AppWindow, width, height int, surface graphicsdriver.Surface) *render.Image {
-	w := window.Handle().(*Window)
-	if w.screen != nil {
-		w.screen.Deallocate()
-	}
-	w.screen = newScreenImage(width, height, surface)
-	return w.screen.image
-}
-
 func (a *appForUI) HandleEvent(ev ui.Event) error {
 	return a.handler.HandleEvent(eventFromUI(ev))
 }
@@ -92,6 +81,7 @@ func eventFromUI(ev ui.Event) Event {
 		return WakeEvent{}
 	case ui.FrameEvent:
 		w := windowFromUI(ev.Window)
+		w.screen = screenImage(w.screen, ev.Screen)
 		return FrameEvent{Window: w, Screen: w.screen, Scale: ev.Scale}
 	case ui.ResizeEvent:
 		return ResizeEvent{Window: windowFromUI(ev.Window), Width: ev.Width, Height: ev.Height, Scale: ev.Scale}

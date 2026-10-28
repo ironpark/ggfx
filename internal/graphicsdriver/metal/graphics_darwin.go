@@ -124,7 +124,7 @@ func NewGraphics(colorSpace color.ColorSpace) (graphicsdriver.Graphics, error) {
 	return g, nil
 }
 
-// Surface is a CAMetalLayer on one window.
+// Surface is a CAMetalLayer, the layer of one NSView.
 type Surface struct {
 	graphics *Graphics
 	view     view
@@ -138,12 +138,12 @@ type Surface struct {
 	cleared bool
 }
 
-// NewSurface creates a layer for the NSWindow given as a uintptr. NewSurface must be called on the
-// main thread.
+// NewSurface makes a layer the layer of the graphicsdriver.NSView target. NewSurface must be
+// called on the main thread.
 func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	window, ok := target.(uintptr)
+	nsView, ok := target.(graphicsdriver.NSView)
 	if !ok {
-		return nil, fmt.Errorf("metal: NewSurface needs an NSWindow as uintptr but got %T", target)
+		return nil, fmt.Errorf("metal: NewSurface needs an NSView but got %T", target)
 	}
 	s := &Surface{graphics: g}
 	s.view.runOnMainThread = g.runOnMainThread
@@ -153,7 +153,7 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 	}
 	s.view.ml.SetOpaque(!transparent)
 	s.view.setDisplaySyncEnabled(true)
-	s.view.setWindow(window)
+	s.view.setNSView(uintptr(nsView))
 	g.surfaces = append(g.surfaces, s)
 	return s, nil
 }

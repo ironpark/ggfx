@@ -77,12 +77,7 @@ func isGLXExtensionForGL2Available() bool {
 //
 // setOpenGLWindowHints must be called from the main thread.
 func (u *UserInterface) setOpenGLWindowHints() error {
-	var isES bool
-	if g, ok := render.GraphicsDriver().(interface{ IsES() bool }); ok {
-		isES = g.IsES()
-	}
-
-	if isES {
+	if render.IsOpenGLES() {
 		if err := glfw.WindowHint(glfw.ClientAPI, glfw.OpenGLESAPI); err != nil {
 			return err
 		}
@@ -197,6 +192,11 @@ func monitorFromWindowByOS(_ *glfw.Window) (*Monitor, error) {
 func (u *glfwBackend) nativeWindow() (uintptr, error) {
 	// TODO: Implement this.
 	return 0, nil
+}
+
+// surfaceTarget returns what a surface other than OpenGL's presents to. Only OpenGL presents here.
+func (u *glfwBackend) surfaceTarget() (any, error) {
+	return nil, errors.New("ui: only OpenGL presents on this platform")
 }
 
 func (u *glfwBackend) isWindowOccluded() (bool, error) {

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/ironpark/ggfx/internal/file"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/hook"
 	"github.com/ironpark/ggfx/internal/render"
 )
@@ -70,7 +69,7 @@ type userInterfaceImpl struct {
 	reportedFullscreen bool
 
 	context        *eventContext
-	surface        graphicsdriver.Surface
+	surface        *render.Surface
 	closeRequested atomic.Bool
 
 	keyboardLayoutMap js.Value
@@ -313,7 +312,7 @@ func (u *UserInterface) updateImpl(force bool) error {
 		if err != nil {
 			return err
 		}
-		if err := u.pacer.FlushCommandsAndWait(needsSwapBuffers, u.RefreshRate()); err != nil {
+		if err := u.pacer.flushCommandsAndWait(needsSwapBuffers, u.RefreshRate()); err != nil {
 			return err
 		}
 	}
@@ -791,7 +790,12 @@ func (u *UserInterface) initOnMainThread(options *RunOptions) error {
 		canvas.Call("focus")
 	}
 
-	if _, err := render.InitGraphicsDriver(options.GraphicsLibrary, options.ColorSpace, canvas); err != nil {
+	if err := render.Init(&render.Options{
+		GraphicsLibrary: options.GraphicsLibrary,
+		ColorSpace:      options.ColorSpace,
+		SingleThread:    true,
+		Canvas:          canvas,
+	}); err != nil {
 		return err
 	}
 	surface, err := render.NewSurface(canvas, options.ScreenTransparent)
@@ -818,8 +822,10 @@ func (u *UserInterface) screenSize() (int, int) {
 	// the device pixel ratio there rather than reported in device pixels by the browser. Use a
 	// ResizeObserver's devicePixelContentBoxSize, which is measured in device pixels, once it is
 	// available across browsers.
-	if g, ok := render.GraphicsDriver().(interface{ ScreenFramebufferSize() (int, int) }); ok {
-		return g.ScreenFramebufferSize()
+	if u.surface != nil {
+		if w, h, ok := u.surface.FramebufferSize(); ok {
+			return w, h
+		}
 	}
 	// Node.js has no canvas, and so no drawing buffer to report.
 	w, h := u.outsideSize()

@@ -26,6 +26,7 @@ import (
 	"github.com/ironpark/ggfx/internal/colormode"
 	"github.com/ironpark/ggfx/internal/glfw"
 	"github.com/ironpark/ggfx/internal/microsoftgdk"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 func (u *UserInterface) initializePlatform() error {
@@ -161,6 +162,15 @@ func monitorFromWin32Window(w windows.HWND) *Monitor {
 func (u *glfwBackend) nativeWindow() (uintptr, error) {
 	w, err := u.window.GetWin32Window()
 	return uintptr(w), err
+}
+
+// surfaceTarget returns what a surface other than OpenGL's presents to: the window's HWND.
+func (u *glfwBackend) surfaceTarget() (any, error) {
+	w, err := u.window.GetWin32Window()
+	if err != nil {
+		return nil, err
+	}
+	return render.HWND(w), nil
 }
 
 func (u *glfwBackend) isWindowOccluded() (bool, error) {

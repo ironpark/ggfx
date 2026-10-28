@@ -86,6 +86,11 @@ func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
 	return newImage(mipmap.NewScreen(width, height, surface), width, height, atlas.ImageTypeScreen)
 }
 
+// Size returns the image's size in pixels.
+func (i *Image) Size() (width, height int) {
+	return i.width, i.height
+}
+
 func newImage(m *mipmap.Mipmap, width, height int, imageType atlas.ImageType) *Image {
 	return &Image{
 		mipmap:    m,

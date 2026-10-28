@@ -26,54 +26,39 @@ Goes to ggwin:
 
 ## The renderer API
 
-The atlas and the command queue are process-wide, so the device is too.
+The atlas and the command queue are process-wide, so the renderer is too. `renderer.go` has it:
 
 ```go
-// Init creates the graphics device and starts the render thread. It is called once, on the
-// main thread.
-func Init(o *InitOptions) error
+func Init(o *InitOptions) error // GraphicsLibrary, ColorSpace, SingleThread, MainThread, Canvas
+func Terminate()
 
-type InitOptions struct {
-	GraphicsLibrary GraphicsLibrary
-	ColorSpace      ColorSpace
-	SingleThread    bool
-	// GLContext is the context the OpenGL driver draws in on the desktop. Every surface's
-	// context shares objects with it.
-	GLContext GLContext
-	// MainThread runs a function on the OS main thread and waits for it. Metal and OpenGL
-	// need it for their main-thread calls.
-	MainThread func(func())
-}
+func SetGLContext(c GLContext)  // the hidden context OpenGL draws in on the desktop
+func IsOpenGLES() bool          // which context to create for it
+func SupportsDirectComposition() bool
 
-type GLContext interface{ MakeContextCurrent() error }
+type NSView uintptr             // Metal's target; the view becomes the layer's alone
+type HWND uintptr               // DirectX's target
+type GLPresenter interface{ MakeContextCurrent() error; SwapInterval(int) error; SwapBuffers() error }
 
-// GLPresenter is a window's own OpenGL context, which a frame is copied to and swapped on.
-type GLPresenter interface {
-	MakeContextCurrent() error
-	SwapInterval(int) error
-	SwapBuffers() error
-}
-
-// NewSurface makes a presentation target: a CAMetalLayer's host NSView or NSWindow on macOS,
-// an HWND on Windows, a GLPresenter for desktop OpenGL, a canvas in the browser.
-func NewSurface(target any, o *SurfaceOptions) (*Surface, error)
-
-// Screen returns the image presented on s, sized width by height. A size other than the
-// last one replaces the image.
-func (s *Surface) Screen(width, height int) *Image
+func NewSurface(target any, transparent bool) (*Surface, error)
+func (s *Surface) Screen(width, height int) *Image // once a frame; cleared where needed
+func (s *Surface) FramebufferSize() (int, int, bool)
 func (s *Surface) Dispose()
 
-// BeginFrame and EndFrame bracket the draws to screens. EndFrame presents every surface whose
-// screen was drawn to when present is set.
-func BeginFrame() error
-func EndFrame(present bool) error
-
-// Tick advances the clock the image GC and the glyph caches expire against.
-func Tick()
+func BeginFrame() error         // also reports the error a read of pixels ran into
+func EndFrame() error
+func Flush(present bool) error  // runs the frames' commands, presents the drawn surfaces
+func Occluded() bool            // the last present waited for nothing
+func FinishForcedFrame() error  // after a frame drawn during a live resize
+func AdvanceTick()
 ```
 
-Pacing, occlusion, live resize and which windows draw are the window system's: it calls
-`BeginFrame`, draws, and `EndFrame` from wherever its loop or its resize callback is.
+Pacing, occlusion, live resize and which windows draw are the window system's: the frame pacer,
+which tells a present that waits for the display from one that does not, moved back to
+`internal/ui` on top of `Flush` and `Occluded`. The GL context is set after `Init` rather than
+passed to it, because which context to create depends on the driver `Init` chose (`IsOpenGLES`).
+
+`internal/rendertest` drives this API with no window, on Metal, which renders without a surface.
 
 ## Steps
 
@@ -85,8 +70,9 @@ Linux and wasm, and is a commit of its own.
    creation, the frame pacer and the tick. `internal/ui` drives it. The render thread is still
    started by the loop, which owns the main thread it shares a goroutine group with; step 2
    moves it.
-2. Add the public API above to ggfx, and make `internal/ui` use only what it exposes plus the
-   window internals.
+2. Done. Add the public API above to ggfx, start the render thread at `Init`, and make Metal
+   take an NSView. `internal/ui` uses nothing from `internal/render` that the API does not
+   expose, and no other renderer package: what is left is to spell `render.X` as `ggfx.X`.
 3. Move the window system into `ggfx/ggwin` with its own internal packages, importing nothing from
    `ggfx/internal`. A test fails the build if it does. Rebuild `internal/testing` on the renderer
    API: Metal renders without a surface, and OpenGL needs a context that the test harness gets
@@ -96,8 +82,8 @@ Linux and wasm, and is a commit of its own.
 
 ## Open questions
 
-- Metal's surface takes an NSWindow and owns its view's resize handling and display link. Taking
-  the NSView instead would let a window system that is not GLFW host it.
 - The browser has one canvas and its own frame loop through `requestAnimationFrame`; that loop
   belongs to ggwin, and the WebGL driver's single surface stays a renderer limit.
 - `RunOptions.ColorSpace` and `GraphicsLibrary` become `InitOptions`; ggwin passes them through.
+- A live resize on macOS draws from the main thread, in the resize callback, and only GLFW's
+  path was run; the NSView switch did not change it, but no resize was dragged after it.
