@@ -17,5 +17,6 @@ package bridge
 
 import "github.com/ironpark/ggfx/internal/render"
 
-// ScreenImage returns a *ggfx.Image of a surface's screen. ggfx sets it.
-var ScreenImage func(img *render.Image) any
+// ScreenImage returns the *ggfx.Image of a surface's screen img: cur, a *ggfx.Image or nil, when
+// it already is img's, and a new one when the surface replaced its screen. ggfx sets it.
+var ScreenImage func(cur any, img *render.Image) any

@@ -1231,7 +1231,10 @@ func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Imag
 
 // The Image of a surface's screen is made by ggfx/host, through the bridge.
 func init() {
-	bridge.ScreenImage = func(img *render.Image) any {
+	bridge.ScreenImage = func(cur any, img *render.Image) any {
+		if cur, ok := cur.(*Image); ok && cur != nil && cur.image == img {
+			return cur
+		}
 		width, height := img.Size()
 		i := &Image{image: img, bounds: image.Rect(0, 0, width, height)}
 		i.addr = i

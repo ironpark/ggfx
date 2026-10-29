@@ -56,10 +56,7 @@ func (w GLWindow) driverTarget() any { return w.Context }
 // Surface is a presentation target: a view's layer, a window's swap chain or its OpenGL context.
 type Surface struct {
 	surface *render.Surface
-
-	// screen is the Image of screenOf, the surface's screen.
-	screen   *ggfx.Image
-	screenOf *render.Image
+	screen  *ggfx.Image
 }
 
 // NewSurface makes a surface for target. transparent asks for a surface that composites with
@@ -84,5 +81,4 @@ func (s *Surface) FramebufferSize() (width, height int, ok bool) {
 func (s *Surface) Dispose() {
 	s.surface.Dispose()
 	s.screen = nil
-	s.screenOf = nil
 }
