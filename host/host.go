@@ -18,7 +18,6 @@
 //
 // An iteration of a window system's loop goes:
 //
-//	host.AdvanceTick()
 //	f, err := host.BeginFrame()
 //	if err != nil { ... }
 //	screen := f.Screen(surface, width, height)
@@ -173,7 +172,9 @@ type FlushResult struct {
 
 // Flush runs the graphics commands of the frames since the last flush, and presents every
 // surface whose screen was drawn to when present is set. Presenting waits for the display where
-// the driver's vsync makes it, unless the result reports the surface occluded.
+// the driver's vsync makes it, unless the result reports the surface occluded. The image and
+// glyph caches expire after so many flushes, so a loop flushes once an iteration, presenting or
+// not.
 func Flush(present bool) (FlushResult, error) {
 	if err := render.Flush(present); err != nil {
 		return FlushResult{}, err
@@ -185,10 +186,4 @@ func Flush(present bool) (FlushResult, error) {
 // a live resize on macOS, to be presented.
 func FinishForcedFrame() error {
 	return render.FinishForcedFrame()
-}
-
-// AdvanceTick advances the clock that ggfx.Tick reads, against which the image GC and the glyph
-// caches expire. A window system advances it once per iteration of its loop.
-func AdvanceTick() {
-	render.IncrementTick()
 }

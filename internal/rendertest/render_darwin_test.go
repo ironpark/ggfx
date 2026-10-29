@@ -25,6 +25,7 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/host"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 func init() {
@@ -44,7 +45,6 @@ func TestMain(m *testing.M) {
 // frame runs f in a frame and flushes it, as a window system's loop does.
 func frame(t *testing.T, f func()) {
 	t.Helper()
-	host.AdvanceTick()
 	fr, err := host.BeginFrame()
 	if err != nil {
 		t.Fatal(err)
@@ -84,10 +84,10 @@ func TestDrawWithoutWindow(t *testing.T) {
 	}
 }
 
-func TestTick(t *testing.T) {
-	before := ggfx.Tick()
+func TestFlushAdvancesTick(t *testing.T) {
+	before := render.Tick()
 	frame(t, func() {})
-	if got := ggfx.Tick(); got != before+1 {
-		t.Errorf("ggfx.Tick() = %d, want %d", got, before+1)
+	if got := render.Tick(); got != before+1 {
+		t.Errorf("render.Tick() = %d, want %d", got, before+1)
 	}
 }

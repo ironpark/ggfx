@@ -18,7 +18,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 const infTick = math.MaxInt64
@@ -49,7 +49,7 @@ func newCache[Key comparable, Value any](softLimit int) *cache[Key, Value] {
 }
 
 func (c *cache[Key, Value]) getOrCreate(key Key, create func() (Value, bool)) Value {
-	n := ggfx.Tick()
+	n := render.Tick()
 
 	c.m.Lock()
 	defer c.m.Unlock()

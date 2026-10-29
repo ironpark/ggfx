@@ -39,6 +39,7 @@ import (
 	xlanguage "golang.org/x/text/language"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/text/v2/internal/chunk"
 	"github.com/ironpark/ggfx/text/v2/internal/textutil"
 )
@@ -129,7 +130,7 @@ type glyphImageCaches struct {
 }
 
 func (c *glyphImageCaches) getOrCreate(face *GoTextFace, key goTextGlyphImageCacheKey, create func() (*ggfx.Image, bool)) *ggfx.Image {
-	return c.cacheForFace(face, ggfx.Tick()).getOrCreate(key, create)
+	return c.cacheForFace(face, render.Tick()).getOrCreate(key, create)
 }
 
 // cacheForFace returns the cache for the size of the given face, creating it if necessary.

@@ -58,7 +58,6 @@ func runInFrame(m *testing.M) (int, error) {
 		host.SetGLContext(c)
 	}
 
-	host.AdvanceTick()
 	f, err := host.BeginFrame()
 	if err != nil {
 		return 0, err

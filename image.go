@@ -109,7 +109,7 @@ func (i *Image) copyCheck() {
 }
 
 func (i *Image) updateAccessTime() {
-	i.atime.Store(Tick())
+	i.atime.Store(render.Tick())
 }
 
 func (i *Image) isDisposed() bool {
@@ -901,7 +901,7 @@ func (i *Image) SubImage(r image.Rectangle) image.Image {
 		return img
 	}
 
-	if tick := Tick(); i.subImageGCLastTick < tick {
+	if tick := render.Tick(); i.subImageGCLastTick < tick {
 		i.subImageGCLastTick = tick
 
 		for _, img := range i.subImageCache {

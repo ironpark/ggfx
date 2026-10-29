@@ -195,8 +195,9 @@ func Occluded() bool {
 }
 
 // Flush runs the graphics commands queued in the frames since the last flush, and presents every
-// surface whose screen was drawn to when present is set.
+// surface whose screen was drawn to when present is set. It advances the tick.
 func Flush(present bool) error {
+	tick.Add(1)
 	return atlas.FlushCommands(driver, present)
 }
 
@@ -227,14 +228,10 @@ func setError(e error) {
 	}
 }
 
-// Tick returns the number of times IncrementTick was called.
+// Tick returns the number of flushes: the clock that the image GC and the glyph caches expire
+// against.
 func Tick() int64 {
 	return tick.Load()
-}
-
-// IncrementTick advances the clock that the image GC and the glyph caches expire against.
-func IncrementTick() {
-	tick.Add(1)
 }
 
 // BeginFrame begins a frame. Screens are drawn between BeginFrame and EndFrame, which is called

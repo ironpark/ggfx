@@ -51,7 +51,6 @@ func (f Frame) Screen(s *Surface, width, height int) *ggfx.Image // cleared wher
 func (f Frame) End() error
 func Flush(present bool) (FlushResult, error) // runs the frames' commands, presents; Occluded
 func FinishForcedFrame() error  // after a frame drawn during a live resize
-func AdvanceTick()
 ```
 
 Pacing, occlusion, live resize and which windows draw are the window system's: the frame pacer,
@@ -84,6 +83,9 @@ Linux and wasm, and is a commit of its own.
    since the move; point ggui and ggip's ggfxinput at it, and move `docs/window.md` and the window
    sections of `FORK.md` there. Go's internal rule now keeps ggwd off ggfx's internals, so the
    import test went.
+5. Done. Count the tick in flushes inside the renderer. `ggfx.Tick` and `host.AdvanceTick` are
+   gone: the caches that expire against the tick are the renderer's, and a loop flushes once an
+   iteration anyway. ggwd counts its own iterations for the monitor cache and `exp/textinput`.
 
 ## Open questions
 
