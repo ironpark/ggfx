@@ -1,8 +1,8 @@
 // Copyright 2026 The ggfx Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package svg draws SVG documents with the rasterizer text/v2 draws color
-// glyphs with. It reads a subset of SVG 1.1: paths, shapes, groups, use,
+// Package svg draws SVG documents with the oksvg fork in internal/oksvg, the
+// rasterizer that color glyphs were drawn with while ggfx carried text. It reads a subset of SVG 1.1: paths, shapes, groups, use,
 // transforms, gradients, opacity and presentation attributes. What it leaves
 // out, such as clipPath, mask, filter and image, is listed in
 // internal/oksvg/README.md.

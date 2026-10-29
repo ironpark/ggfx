@@ -72,7 +72,7 @@ jobs:
       - name: go test (macOS OpenGL)
         if: runner.os == 'macOS'
         run: |
-          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v -skip '^TestFillPathBatching(WithGeneratedPaths|IsExact)$' . ./internal/atlas ./internal/buffered ./internal/graphicscommand ./text/... ./vector
+          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v -skip '^TestFillPathBatching(WithGeneratedPaths|IsExact)$' . ./internal/atlas ./internal/buffered ./internal/graphicscommand ./vector
 
       # Runners have no GPU, so DirectX draws with WARP, its software rasterizer.
       - name: go test (Windows DirectX 11)
@@ -94,7 +94,6 @@ jobs:
               -e github.com/ironpark/ggfx/internal/atlas \
               -e github.com/ironpark/ggfx/internal/buffered \
               -e github.com/ironpark/ggfx/internal/graphicscommand \
-              -e github.com/ironpark/ggfx/text/v2 \
               -e github.com/ironpark/ggfx/vector \
             | xargs go test -shuffle=on -v
 

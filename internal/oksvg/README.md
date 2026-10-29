@@ -59,7 +59,7 @@ Required by the OpenType SVG specification but not implemented:
   names clipping paths as must-support alongside gradients and opacity.
 - `currentColor`. The specification requires it, initialized to the text
   foreground color. `ReadReplacingCurrentColor` substitutes it textually
-  before parsing, but the text/v2 caller uses `ReadIconStream`, and
+  before parsing, but the `svg` package and ggui's glyph drawing use `ReadIconStream`, and
   gradient stops do not inherit it.
 - `<image>` elements with embedded base64 PNG or JPEG data.
 - The `fill-rule` property. `evenodd` is not parsed; all paths are filled

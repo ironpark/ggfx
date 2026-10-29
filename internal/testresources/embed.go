@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package testresources holds the fonts and images the package tests need.
+// Package testresources holds the images the package tests need.
 // See license.md for the licenses of the embedded files.
 package testresources
 
@@ -21,12 +21,6 @@ import (
 )
 
 var (
-	//go:embed mplus-1p-regular.ttf
-	MPlus1pRegular_ttf []byte
-
-	//go:embed TerminusTTF-4.49.3.ttf
-	TerminusTTF_ttf []byte
-
 	//go:embed ebiten.png
 	Ebiten_png []byte
 )

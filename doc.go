@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ggfx is a renderer: images, shaders, text through text/v2, vectors through vector and
-// SVG through svg, drawn on the GPU and presented on surfaces that a window system owns.
+// Package ggfx is a renderer: images, shaders, vectors through vector and SVG through svg, drawn
+// on the GPU and presented on surfaces that a window system owns.
 //
 // ggfx has no windows. A window system drives it through package host: it initializes the
 // renderer, makes a surface of each window's native view, and draws a frame to the surface's

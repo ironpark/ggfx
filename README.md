@@ -4,7 +4,7 @@ ggfx is the renderer of [ggui](https://github.com/ironpark/ggui): it draws
 images, shaders, text, vectors and SVG on the GPU and presents them on
 surfaces that a window system owns. It is a fork of
 [Ebitengine](https://ebitengine.org/) v2.10.2 for desktop and the browser
-that keeps the GPU pipeline, `text/v2` and `vector`, replaces the Kage
+that keeps the GPU pipeline and `vector`, replaces the Kage
 shader language with WGSL compiled by [naga](https://github.com/gogpu/naga),
 and drops audio, mobile and console support.
 

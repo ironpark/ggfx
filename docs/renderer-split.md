@@ -9,8 +9,8 @@ ggui joins the two.
 
 Stays in ggfx:
 
-- `Image`, `Shader`, `Uniforms`, `GeoM`, `ColorScale`, `Blend`, the draw options, `text/v2`,
-  `vector`, `svg`.
+- `Image`, `Shader`, `Uniforms`, `GeoM`, `ColorScale`, `Blend`, the draw options, `vector`,
+  `svg`. (`text/v2` stayed at first and moved to ggui in step 9.)
 - The graphics drivers, the atlas, the command queue and the render thread.
 - A new device and surface API (below).
 
@@ -98,6 +98,9 @@ Linux and wasm, and is a commit of its own.
    variables that choose them: only `Init` and `CurrentDriver` take them, so what is left in
    ggfx is drawing. `DebugInfo` lost its `GraphicsLibrary`, which `CurrentDriver` reports.
    ggwd's `RunOptions` take the `host` types and pass them through.
+9. Done. Move `text/v2` to ggui, its only user, as `internal/text`, with a copy of the oksvg fork
+   and a glyph-cache clock ggui advances each frame. ggfx has no text: ggui shapes and draws it
+   onto ggfx images, and the go-text dependencies went with it.
 
 ## Open questions
 

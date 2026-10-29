@@ -171,10 +171,11 @@ pass; Windows and wasm were cross-compiled; Linux and BSD were not built.
 Do not merge upstream wholesale. Cherry-pick fixes to the layers that are
 kept close to upstream: `internal/graphicsdriver` (except the shader files),
 `internal/graphicscommand`, `internal/atlas`, `internal/restorable`,
-`text/v2`, `vector` (except the stencil shaders and the batched fill in
+`vector` (except the stencil shaders and the batched fill in
 `fill.go` and `atlas.go`). The oksvg fork moved from `text/v2/internal/oksvg` to
 `internal/oksvg`, so that the `svg` package can draw SVG documents with it; a commit to it
-needs its paths rewritten. The Metal driver's per-draw calls also diverge;
+needs its paths rewritten. `text/v2` moved to ggui as `internal/text`, with a copy of the oksvg
+fork, and upstream commits to it go there. The Metal driver's per-draw calls also diverge;
 see "Draw call cost" below. The shader stack and `internal/render` diverge and are not
 expected to merge; the windowing and the run loop are ggwd's.
 
@@ -216,9 +217,9 @@ macOS OpenGL draws in a CGL context the harness makes. ggwd's tests run in a win
 `internal/render` holds what draws, apart from what shows it: `Image`, `Shader` and the uniform
 packing, the white image fills draw from, the error state, reads of pixels that wait for a frame,
 driver creation and the tick. It was the drawing half of `internal/ui`. The tick counts flushes,
-and the image GC and `text/v2`'s glyph caches expire against it; it is not exported, so a window
-system keeps a clock of its own for what it caches, as ggwd does for the current monitor and
-`exp/textinput`'s state queue. A window system drives it
+and the image GC expires against it; it is not exported, so a window system keeps a clock of its
+own for what it caches, as ggwd does for the current monitor and `exp/textinput`'s state queue,
+and ggui for its glyph caches. A window system drives it
 through package `host`: `Init`, `Terminate`, `NewSurface`, `BeginFrame`, `Frame.Screen`,
 `Frame.End`, `Flush` and the rest, so that an app drawing with ggfx does not see them. A surface's
 target is typed (`NSView`, `HWND`, `GLWindow`, `Canvas`), and the WebGL driver is created for the
