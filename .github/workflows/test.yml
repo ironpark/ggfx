@@ -65,10 +65,12 @@ jobs:
         run: |
           go test -shuffle=on -v ./...
 
+      # OpenGL draws with Apple's software renderer here, on which the batched vector fill does
+      # not match the unbatched one pixel for pixel; those two tests run on Metal and DirectX.
       - name: go test (macOS OpenGL)
         if: runner.os == 'macOS'
         run: |
-          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v . ./internal/atlas ./internal/buffered ./internal/graphicscommand ./text/... ./vector
+          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v -skip '^TestFillPathBatching(WithGeneratedPaths|IsExact)$' . ./internal/atlas ./internal/buffered ./internal/graphicscommand ./text/... ./vector
 
       # Runners have no GPU, so DirectX draws with WARP, its software rasterizer.
       - name: go test (Windows DirectX 11)
