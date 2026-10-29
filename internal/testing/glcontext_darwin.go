@@ -45,10 +45,20 @@ func newGLContext() (*glContext, error) {
 		kCGLPFAOpenGLProfile     = 99
 		kCGLOGLPVersion_3_2_Core = 0x3200
 	)
-	attribs := []int32{kCGLPFAOpenGLProfile, kCGLOGLPVersion_3_2_Core, kCGLPFAAccelerated, 0}
+	// A machine without a GPU, like a CI runner, has only Apple's software renderer, which is not
+	// accelerated: no accelerated format is kCGLBadPixelFormat there.
 	var pix uintptr
 	var npix int32
-	if e := cglChoosePixelFormat(&attribs[0], &pix, &npix); e != 0 || pix == 0 {
+	var e int32
+	for _, attribs := range [][]int32{
+		{kCGLPFAOpenGLProfile, kCGLOGLPVersion_3_2_Core, kCGLPFAAccelerated, 0},
+		{kCGLPFAOpenGLProfile, kCGLOGLPVersion_3_2_Core, 0},
+	} {
+		if e = cglChoosePixelFormat(&attribs[0], &pix, &npix); e == 0 && pix != 0 {
+			break
+		}
+	}
+	if e != 0 || pix == 0 {
 		return nil, fmt.Errorf("CGLChoosePixelFormat failed: %d", e)
 	}
 	var ctx uintptr
