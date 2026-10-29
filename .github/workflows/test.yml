@@ -43,8 +43,15 @@ jobs:
           fi
 
       - name: go vet
+        if: runner.os != 'Windows'
         run: |
           go vet ./...
+
+      # The DirectX bindings pass COM pointers through uintptr to syscalls, which unsafeptr flags.
+      - name: go vet (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          go vet -unsafeptr=false ./...
 
       - name: go build
         run: |
