@@ -86,6 +86,9 @@ Linux and wasm, and is a commit of its own.
 5. Done. Count the tick in flushes inside the renderer. `ggfx.Tick` and `host.AdvanceTick` are
    gone: the caches that expire against the tick are the renderer's, and a loop flushes once an
    iteration anyway. ggwd counts its own iterations for the monitor cache and `exp/textinput`.
+6. Done. Drop what the renderer kept for windows and consoles it no longer has:
+   `internal/microsoftgdk` and the DirectX 12 driver's Xbox paths, and `internal/windowsystem`,
+   which only decided whether the Linux OpenGL loader tried OpenGL as well as OpenGL ES.
 
 ## Open questions
 

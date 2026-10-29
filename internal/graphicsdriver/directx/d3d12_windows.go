@@ -23,8 +23,6 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
-
-	"github.com/ironpark/ggfx/internal/microsoftgdk"
 )
 
 // Reference:
@@ -43,7 +41,6 @@ const (
 	_D3D12_MIN_DEPTH                         = 0.0
 	_D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION    = 16384
 	_D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES = 0xffffffff
-	_D3D12XBOX_DEFAULT_SIZE_BYTES            = 0xffffffff
 )
 
 type _D3D12_BLEND int32
@@ -335,6 +332,7 @@ const (
 type _D3D12_RESOURCE_STATES int32
 
 const (
+	_D3D12_RESOURCE_STATE_PRESENT                    _D3D12_RESOURCE_STATES = 0
 	_D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER _D3D12_RESOURCE_STATES = 0x1
 	_D3D12_RESOURCE_STATE_INDEX_BUFFER               _D3D12_RESOURCE_STATES = 0x2
 	_D3D12_RESOURCE_STATE_RENDER_TARGET              _D3D12_RESOURCE_STATES = 0x4
@@ -344,23 +342,14 @@ const (
 	_D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT          _D3D12_RESOURCE_STATES = 0x200
 	_D3D12_RESOURCE_STATE_COPY_DEST                  _D3D12_RESOURCE_STATES = 0x400
 	_D3D12_RESOURCE_STATE_COPY_SOURCE                _D3D12_RESOURCE_STATES = 0x800
-)
 
-func _D3D12_RESOURCE_STATE_GENERIC_READ() _D3D12_RESOURCE_STATES {
-	if microsoftgdk.IsXbox() {
-		return _D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER |
-			_D3D12_RESOURCE_STATE_INDEX_BUFFER |
-			_D3D12_RESOURCE_STATE_COPY_SOURCE |
-			_D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-			_D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
-	}
-	return _D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER |
+	_D3D12_RESOURCE_STATE_GENERIC_READ = _D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER |
 		_D3D12_RESOURCE_STATE_INDEX_BUFFER |
 		_D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
 		_D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
 		_D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT |
 		_D3D12_RESOURCE_STATE_COPY_SOURCE
-}
+)
 
 type _D3D12_ROOT_PARAMETER_TYPE int32
 
@@ -469,67 +458,6 @@ const (
 	_D3D12_TEXTURE_LAYOUT_ROW_MAJOR              _D3D12_TEXTURE_LAYOUT = 1
 	_D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE _D3D12_TEXTURE_LAYOUT = 2
 	_D3D12_TEXTURE_LAYOUT_64KB_STANDARD_SWIZZLE  _D3D12_TEXTURE_LAYOUT = 3
-)
-
-type _D3D12XBOX_CREATE_DEVICE_FLAGS int32
-
-type _D3D12XBOX_FRAME_EVENT_TYPE int32
-
-const (
-	_D3D12XBOX_FRAME_EVENT_ORIGIN _D3D12XBOX_FRAME_EVENT_TYPE = 0
-)
-
-type _D3D12XBOX_FRAME_INTERVAL_FLAGS int32
-
-const (
-	_D3D12XBOX_FRAME_INTERVAL_FLAG_NONE _D3D12XBOX_FRAME_INTERVAL_FLAGS = 0x0
-)
-
-type _D3D12XBOX_FRAME_PIPELINE_TOKEN uint64
-
-const (
-	_D3D12XBOX_FRAME_PIPELINE_TOKEN_NULL _D3D12XBOX_FRAME_PIPELINE_TOKEN = 0
-)
-
-type _D3D12XBOX_PRESENT_DESC_TITLE_PERFORMANCE_OVERLAY_FLAGS int32
-
-type _D3D12XBOX_PRESENT_DESC_TYPE int32
-
-type _D3D12XBOX_PRESENT_FLAGS int32
-
-type _D3D12XBOX_PRESENT_PLANE_FLAGS int32
-
-type _D3D12XBOX_PRESENT_PLANE_SCALE_FILTER int32
-
-type _D3D12XBOX_PRESENT_PLANE_DESC_TYPE int32
-
-type _D3D12XBOX_PROCESS_DEBUG_FLAGS int32
-
-const (
-	_D3D12XBOX_PROCESS_DEBUG_FLAG_NONE                          _D3D12XBOX_PROCESS_DEBUG_FLAGS = 0x0
-	_D3D12XBOX_PROCESS_DEBUG_FLAG_DEBUG                         _D3D12XBOX_PROCESS_DEBUG_FLAGS = 0x00000001
-	_D3D12_PROCESS_DEBUG_FLAG_DEBUG_LAYER_ENABLED               _D3D12XBOX_PROCESS_DEBUG_FLAGS = _D3D12XBOX_PROCESS_DEBUG_FLAG_DEBUG
-	_D3D12XBOX_PROCESS_DEBUG_FLAG_INSTRUMENTED                  _D3D12XBOX_PROCESS_DEBUG_FLAGS = 0x00100000
-	_D3D12XBOX_PROCESS_DEBUG_FLAG_VALIDATED                     _D3D12XBOX_PROCESS_DEBUG_FLAGS = _D3D12XBOX_PROCESS_DEBUG_FLAG_DEBUG
-	_D3D12XBOX_PROCESS_DEBUG_FLAG_NULL_GPU                      _D3D12XBOX_PROCESS_DEBUG_FLAGS = 0x00400000
-	_D3D12XBOX_PROCESS_DEBUG_FLAG_ENABLE_COMMON_STATE_PROMOTION _D3D12XBOX_PROCESS_DEBUG_FLAGS = 0x01000000
-	_D3D12XBOX_PROCESS_DEBUG_FLAG_ENHANCED_VALIDATION           _D3D12XBOX_PROCESS_DEBUG_FLAGS = 0x02000000
-)
-
-type _D3D12XBOX_SCHEDULE_FRAME_EVENT_FLAGS int32
-
-const (
-	_D3D12XBOX_SCHEDULE_FRAME_EVENT_FLAG_NONE _D3D12XBOX_SCHEDULE_FRAME_EVENT_FLAGS = 0x0
-)
-
-type _D3D12XBOX_WAIT_FRAME_EVENT_FLAGS int32
-
-const (
-	_D3D12XBOX_WAIT_FRAME_EVENT_FLAG_NONE _D3D12XBOX_WAIT_FRAME_EVENT_FLAGS = 0x0
-)
-
-const (
-	_D3D12XBOX_FRAME_INTERVAL_60_HZ = 16667
 )
 
 var (
@@ -844,101 +772,12 @@ type _D3D12_VIEWPORT struct {
 	MaxDepth float32
 }
 
-type _D3D12XBOX_CREATE_DEVICE_PARAMETERS struct {
-	_                                    structs.HostLayout
-	Version                              uint32
-	ProcessDebugFlags                    _D3D12XBOX_PROCESS_DEBUG_FLAGS
-	GraphicsCommandQueueRingSizeBytes    uint32
-	pOffchipTessellationBuffer           _D3D12_GPU_VIRTUAL_ADDRESS
-	GraphicsScratchMemorySizeBytes       uint32
-	ComputeScratchMemorySizeBytes        uint32
-	DisableGeometryShaderAllocations     _BOOL
-	DisableTessellationShaderAllocations _BOOL
-
-	// These members are for Xbox Series.
-	DisableDXR                             _BOOL
-	DisableAutomaticDPBBBreakBatchEvents   _BOOL
-	pDXRStackBuffer                        _D3D12_GPU_VIRTUAL_ADDRESS
-	DXRStackBufferOverrideSizeBytes        uint32
-	CreateDeviceFlags                      _D3D12XBOX_CREATE_DEVICE_FLAGS
-	AutoHDRPaperWhiteLevelNits             uint32
-	DisableAutomaticCommandSegmentChaining _BOOL
-}
-
-type _D3D12XBOX_PRESENT_DESC_TITLE_PERFORMANCE_OVERLAY struct {
-	_                      structs.HostLayout
-	Flags                  _D3D12XBOX_PRESENT_DESC_TITLE_PERFORMANCE_OVERLAY_FLAGS
-	RenderResolutionWidth  uint16
-	RenderResolutionHeight uint16
-	MaxResolutionWidth     uint16
-	MaxResolutionHeight    uint16
-}
-
-type _D3D12XBOX_PRESENT_PARAMETERS struct {
-	_                         structs.HostLayout
-	ImmediateThresholdPercent float32
-	ViewCount                 uint32
-	ExtendedDescCount         uint32
-	pExtendedDescs            *_D3D12XBOX_PRESENT_DESC
-	Flags                     _D3D12XBOX_PRESENT_FLAGS
-}
-
-type _D3D12XBOX_PRESENT_DESC struct {
-	_                structs.HostLayout
-	Type             _D3D12XBOX_PRESENT_DESC_TYPE
-	TitlePerfOverlay _D3D12XBOX_PRESENT_DESC_TITLE_PERFORMANCE_OVERLAY
-}
-
-type _D3D12XBOX_PRESENT_PLANE_DESC struct {
-	_    structs.HostLayout
-	Type _D3D12XBOX_PRESENT_PLANE_DESC_TYPE
-}
-
-type _D3D12XBOX_PRESENT_PLANE_PARAMETERS struct {
-	_                  structs.HostLayout
-	Token              _D3D12XBOX_FRAME_PIPELINE_TOKEN
-	ResourceCount      uint32
-	ppResources        **_ID3D12Resource
-	pSrcViewRects      *_D3D12_RECT
-	pDestPlacementBase *_D3D12XBOX_VIEW_RECT
-	ColorSpace         _DXGI_COLOR_SPACE_TYPE
-	ScaleFilter        _D3D12XBOX_PRESENT_PLANE_SCALE_FILTER
-	ExtendedDescCount  uint32
-	pExtendedDescs     *_D3D12XBOX_PRESENT_PLANE_DESC
-	Flags              _D3D12XBOX_PRESENT_PLANE_FLAGS
-}
-
-type _D3D12XBOX_SCHEDULE_FRAME_OBJECT_LIST struct {
-	_        structs.HostLayout
-	Count    uint32
-	pObjects *windows.Handle
-}
-
-type _D3D12XBOX_VIEW_RECT struct {
-	_      structs.HostLayout
-	left   float32
-	top    float32
-	right  float32
-	bottom float32
-}
-
-type _D3D12XBOX_WAIT_FRAME_OBJECT_LIST struct {
-	_                    structs.HostLayout
-	Count                uint32
-	pObjects             *windows.Handle
-	pSignaledObjectIndex *uint32
-}
-
 var (
-	d3d12  = windows.NewLazySystemDLL("d3d12.dll")
-	d3d12x = windows.NewLazySystemDLL(microsoftgdk.D3D12DLLName())
+	d3d12 = windows.NewLazySystemDLL("d3d12.dll")
 
 	procD3D12CreateDevice           = d3d12.NewProc("D3D12CreateDevice")
 	procD3D12GetDebugInterface      = d3d12.NewProc("D3D12GetDebugInterface")
 	procD3D12SerializeRootSignature = d3d12.NewProc("D3D12SerializeRootSignature")
-
-	procD3D12SerializeRootSignature_Xbox = d3d12x.NewProc("D3D12SerializeRootSignature")
-	procD3D12XboxCreateDevice            = d3d12x.NewProc("D3D12XboxCreateDevice")
 )
 
 func _D3D12CreateDevice(pAdapter unsafe.Pointer, minimumFeatureLevel _D3D_FEATURE_LEVEL, riid *windows.GUID, createDevice bool) (unsafe.Pointer, error) {
@@ -969,13 +808,7 @@ func _D3D12GetDebugInterface() (*_ID3D12Debug, error) {
 func _D3D12SerializeRootSignature(pRootSignature *_D3D12_ROOT_SIGNATURE_DESC, version _D3D_ROOT_SIGNATURE_VERSION) (*_ID3DBlob, error) {
 	var blob *_ID3DBlob
 	var errorBlob *_ID3DBlob
-	var proc *windows.LazyProc
-	if microsoftgdk.IsXbox() {
-		proc = procD3D12SerializeRootSignature_Xbox
-	} else {
-		proc = procD3D12SerializeRootSignature
-	}
-	r, _, _ := proc.Call(uintptr(unsafe.Pointer(pRootSignature)), uintptr(version), uintptr(unsafe.Pointer(&blob)), uintptr(unsafe.Pointer(&errorBlob)))
+	r, _, _ := procD3D12SerializeRootSignature.Call(uintptr(unsafe.Pointer(pRootSignature)), uintptr(version), uintptr(unsafe.Pointer(&blob)), uintptr(unsafe.Pointer(&errorBlob)))
 	if uint32(r) != uint32(windows.S_OK) {
 		if errorBlob != nil {
 			defer errorBlob.Release()
@@ -984,15 +817,6 @@ func _D3D12SerializeRootSignature(pRootSignature *_D3D12_ROOT_SIGNATURE_DESC, ve
 		return nil, fmt.Errorf("directx: D3D12SerializeRootSignature failed: %w", handleError(windows.Handle(uint32(r))))
 	}
 	return blob, nil
-}
-
-func _D3D12XboxCreateDevice(pAdapter unsafe.Pointer, pParameters *_D3D12XBOX_CREATE_DEVICE_PARAMETERS, riid *windows.GUID) (unsafe.Pointer, error) {
-	var v unsafe.Pointer
-	r, _, _ := procD3D12XboxCreateDevice.Call(uintptr(pAdapter), uintptr(unsafe.Pointer(pParameters)), uintptr(unsafe.Pointer(riid)), uintptr(unsafe.Pointer(&v)))
-	if uint32(r) != uint32(windows.S_OK) {
-		return nil, fmt.Errorf("directx: D3D12XboxCreateDevice failed: %w", handleError(windows.Handle(uint32(r))))
-	}
-	return v, nil
 }
 
 type _D3D12_COMMAND_QUEUE_DESC struct {
@@ -1123,51 +947,19 @@ type _ID3D12CommandQueue_Vtbl struct {
 }
 
 func (i *_ID3D12CommandQueue) ExecuteCommandLists(ppCommandLists []*_ID3D12GraphicsCommandList) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12CommandQueue_ExecuteCommandLists(i, ppCommandLists)
-	} else {
-		_, _, _ = syscall.Syscall(i.vtbl.ExecuteCommandLists, 3, uintptr(unsafe.Pointer(i)),
-			uintptr(len(ppCommandLists)), uintptr(unsafe.Pointer(&ppCommandLists[0])))
-	}
+	_, _, _ = syscall.Syscall(i.vtbl.ExecuteCommandLists, 3, uintptr(unsafe.Pointer(i)),
+		uintptr(len(ppCommandLists)), uintptr(unsafe.Pointer(&ppCommandLists[0])))
 	runtime.KeepAlive(ppCommandLists)
 }
 
-func (i *_ID3D12CommandQueue) PresentX(planeCount uint32, pPlaneParameters *_D3D12XBOX_PRESENT_PLANE_PARAMETERS, pPresentParameters *_D3D12XBOX_PRESENT_PARAMETERS) error {
-	if !microsoftgdk.IsXbox() {
-		panic("directx: ID3D12CommandQueue::PresentX is only available on Xbox")
-	}
-	r := _ID3D12CommandQueue_PresentX(i, planeCount, pPlaneParameters, pPresentParameters)
-	runtime.KeepAlive(pPlaneParameters)
-	runtime.KeepAlive(pPresentParameters)
-	if uint32(r) != uint32(windows.S_OK) {
-		return fmt.Errorf("directx: ID3D12CommandQueue::PresentX failed: %w", handleError(windows.Handle(uint32(r))))
-	}
-	return nil
-}
-
 func (i *_ID3D12CommandQueue) Release() uint32 {
-	if microsoftgdk.IsXbox() {
-		return _ID3D12CommandQueue_Release(i)
-	}
 	r, _, _ := syscall.Syscall(i.vtbl.Release, 1, uintptr(unsafe.Pointer(i)), 0, 0)
 	return uint32(r)
 }
 
-func (i *_ID3D12CommandQueue) ResumeX() error {
-	if !microsoftgdk.IsXbox() {
-		panic("directx: ID3D12CommandQueue::ResumeX is only available on Xbox")
-	}
-	if r := _ID3D12CommandQueue_ResumeX(i); uint32(r) != uint32(windows.S_OK) {
-		return fmt.Errorf("directx: ID3D12CommandQueue::ResumeX failed: %w", handleError(windows.Handle(uint32(r))))
-	}
-	return nil
-}
-
 func (i *_ID3D12CommandQueue) Signal(signal *_ID3D12Fence, value uint64) error {
 	var r uintptr
-	if microsoftgdk.IsXbox() {
-		r = _ID3D12CommandQueue_Signal(i, signal, value)
-	} else if is64bit {
+	if is64bit {
 		r, _, _ = syscall.Syscall(i.vtbl.Signal, 3, uintptr(unsafe.Pointer(i)),
 			uintptr(unsafe.Pointer(signal)), uintptr(value))
 	} else {
@@ -1177,16 +969,6 @@ func (i *_ID3D12CommandQueue) Signal(signal *_ID3D12Fence, value uint64) error {
 	runtime.KeepAlive(signal)
 	if uint32(r) != uint32(windows.S_OK) {
 		return fmt.Errorf("directx: ID3D12CommandQueue::Signal failed: %w", handleError(windows.Handle(uint32(r))))
-	}
-	return nil
-}
-
-func (i *_ID3D12CommandQueue) SuspendX(flags uint32) error {
-	if !microsoftgdk.IsXbox() {
-		panic("directx: ID3D12CommandQueue::SuspendX is only available on Xbox")
-	}
-	if r := _ID3D12CommandQueue_SuspendX(i, flags); uint32(r) != uint32(windows.S_OK) {
-		return fmt.Errorf("directx: ID3D12CommandQueue::SuspendX failed: %w", handleError(windows.Handle(uint32(r))))
 	}
 	return nil
 }
@@ -1285,16 +1067,6 @@ type _ID3D12DescriptrHeap_Vtbl struct {
 }
 
 func (i *_ID3D12DescriptorHeap) GetCPUDescriptorHandleForHeapStart() (_D3D12_CPU_DESCRIPTOR_HANDLE, error) {
-	if microsoftgdk.IsXbox() {
-		r, _, e := syscall.Syscall(i.vtbl.GetCPUDescriptorHandleForHeapStart, 1, uintptr(unsafe.Pointer(i)), 0, 0)
-		if r == 0 {
-			return _D3D12_CPU_DESCRIPTOR_HANDLE{}, fmt.Errorf("directx: ID3D12DescriptorHeap::GetCPUDescriptorHandleForHeapStart failed: %w", e)
-		}
-		return _D3D12_CPU_DESCRIPTOR_HANDLE{
-			ptr: r,
-		}, nil
-	}
-
 	// There is a bug in the header file:
 	// https://stackoverflow.com/questions/34118929/getcpudescriptorhandleforheapstart-stack-corruption
 	var handle _D3D12_CPU_DESCRIPTOR_HANDLE
@@ -1306,22 +1078,6 @@ func (i *_ID3D12DescriptorHeap) GetCPUDescriptorHandleForHeapStart() (_D3D12_CPU
 }
 
 func (i *_ID3D12DescriptorHeap) GetGPUDescriptorHandleForHeapStart() (_D3D12_GPU_DESCRIPTOR_HANDLE, error) {
-	if microsoftgdk.IsXbox() {
-		r1, r2, e := syscall.Syscall(i.vtbl.GetGPUDescriptorHandleForHeapStart, 1, uintptr(unsafe.Pointer(i)), 0, 0)
-		var ptr uint64
-		if is64bit {
-			ptr = uint64(r1)
-		} else {
-			ptr = uint64(r1) | (uint64(r2) << 32)
-		}
-		if ptr == 0 {
-			return _D3D12_GPU_DESCRIPTOR_HANDLE{}, fmt.Errorf("directx: ID3D12DescriptorHeap::GetGPUDescriptorHandleForHeapStart failed: %w", e)
-		}
-		return _D3D12_GPU_DESCRIPTOR_HANDLE{
-			ptr: ptr,
-		}, nil
-	}
-
 	// This has the same issue as GetCPUDescriptorHandleForHeapStart.
 	var handle _D3D12_GPU_DESCRIPTOR_HANDLE
 	_, _, e := syscall.Syscall(i.vtbl.GetGPUDescriptorHandleForHeapStart, 2, uintptr(unsafe.Pointer(i)), uintptr(unsafe.Pointer(&handle)), 0)
@@ -1388,51 +1144,6 @@ type _ID3D12Device_Vtbl struct {
 	CreateCommandSignature           uintptr
 	GetResourceTiling                uintptr
 	GetAdapterLuid                   uintptr
-
-	// These members are for Xbox.
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	CreateCommandListX  uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	SetFrameIntervalX   uintptr
-	ScheduleFrameEventX uintptr
-	WaitFrameEventX     uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
-	_                   uintptr
 }
 
 func (i *_ID3D12Device) CreateCommandAllocator(typ _D3D12_COMMAND_LIST_TYPE) (*_ID3D12CommandAllocator, error) {
@@ -1449,27 +1160,10 @@ func (i *_ID3D12Device) CreateCommandAllocator(typ _D3D12_COMMAND_LIST_TYPE) (*_
 func (i *_ID3D12Device) CreateCommandList(nodeMask uint32, typ _D3D12_COMMAND_LIST_TYPE, pCommandAllocator *_ID3D12CommandAllocator, pInitialState *_ID3D12PipelineState) (*_ID3D12GraphicsCommandList, error) {
 	var commandList *_ID3D12GraphicsCommandList
 	var r uintptr
-	if microsoftgdk.IsXbox() {
-		desc := struct {
-			Member1 _D3D12_COMMAND_LIST_TYPE
-			Member2 int32
-			Member3 uint32
-			Member4 uint32
-		}{
-			Member1: typ,
-			Member2: 0,
-			Member3: nodeMask,
-			Member4: 0,
-		}
-		r, _, _ = syscall.Syscall6(i.vtbl.CreateCommandListX, 6,
-			uintptr(unsafe.Pointer(i)), uintptr(unsafe.Pointer(&desc)), uintptr(unsafe.Pointer(pCommandAllocator)),
-			uintptr(unsafe.Pointer(pInitialState)), uintptr(unsafe.Pointer(&_IID_ID3D12GraphicsCommandList)), uintptr(unsafe.Pointer(&commandList)))
-	} else {
-		r, _, _ = syscall.Syscall9(i.vtbl.CreateCommandList, 7,
-			uintptr(unsafe.Pointer(i)), uintptr(nodeMask), uintptr(typ),
-			uintptr(unsafe.Pointer(pCommandAllocator)), uintptr(unsafe.Pointer(pInitialState)), uintptr(unsafe.Pointer(&_IID_ID3D12GraphicsCommandList)),
-			uintptr(unsafe.Pointer(&commandList)), 0, 0)
-	}
+	r, _, _ = syscall.Syscall9(i.vtbl.CreateCommandList, 7,
+		uintptr(unsafe.Pointer(i)), uintptr(nodeMask), uintptr(typ),
+		uintptr(unsafe.Pointer(pCommandAllocator)), uintptr(unsafe.Pointer(pInitialState)), uintptr(unsafe.Pointer(&_IID_ID3D12GraphicsCommandList)),
+		uintptr(unsafe.Pointer(&commandList)), 0, 0)
 	runtime.KeepAlive(pCommandAllocator)
 	runtime.KeepAlive(pInitialState)
 	if uint32(r) != uint32(windows.S_OK) {
@@ -1628,26 +1322,6 @@ func (i *_ID3D12Device) GetDeviceRemovedReason() error {
 	return nil
 }
 
-func (i *_ID3D12Device) ScheduleFrameEventX(typ _D3D12XBOX_FRAME_EVENT_TYPE, intervalOffsetInMicroseconds uint32, pAncillarySignalList *_D3D12XBOX_SCHEDULE_FRAME_OBJECT_LIST, flags _D3D12XBOX_SCHEDULE_FRAME_EVENT_FLAGS) error {
-	r, _, _ := syscall.Syscall6(i.vtbl.ScheduleFrameEventX, 5, uintptr(unsafe.Pointer(i)), uintptr(typ), uintptr(intervalOffsetInMicroseconds), uintptr(unsafe.Pointer(pAncillarySignalList)), uintptr(flags), 0)
-	runtime.KeepAlive(pAncillarySignalList)
-	// The return value might not be S_OK on Xbox One.
-	if int32(r) < 0 {
-		return fmt.Errorf("directx: ID3D12Device::ScheduleFrameEventX failed: %w", handleError(windows.Handle(uint32(r))))
-	}
-	return nil
-}
-
-func (i *_ID3D12Device) SetFrameIntervalX(pOutputSyncTarget *_IDXGIOutput, lengthInMicroseconds uint32, periodInIntervals uint32, flags _D3D12XBOX_FRAME_INTERVAL_FLAGS) error {
-	r, _, _ := syscall.Syscall6(i.vtbl.SetFrameIntervalX, 5, uintptr(unsafe.Pointer(i)), uintptr(unsafe.Pointer(pOutputSyncTarget)), uintptr(lengthInMicroseconds), uintptr(periodInIntervals), uintptr(flags), 0)
-	runtime.KeepAlive(pOutputSyncTarget)
-	// S_FALSE means the call was successful but the new frame interval is not yet in effect.
-	if uint32(r) != uint32(windows.S_OK) && uint32(r) != uint32(windows.S_FALSE) {
-		return fmt.Errorf("directx: ID3D12Device::SetFrameIntervalX failed: %w", handleError(windows.Handle(uint32(r))))
-	}
-	return nil
-}
-
 func (i *_ID3D12Device) QueryInterface(riid *windows.GUID) (unsafe.Pointer, error) {
 	var v unsafe.Pointer
 	r, _, _ := syscall.Syscall(i.vtbl.QueryInterface, 3, uintptr(unsafe.Pointer(i)), uintptr(unsafe.Pointer(riid)), uintptr(unsafe.Pointer(&v)))
@@ -1661,16 +1335,6 @@ func (i *_ID3D12Device) QueryInterface(riid *windows.GUID) (unsafe.Pointer, erro
 func (i *_ID3D12Device) Release() uint32 {
 	r, _, _ := syscall.Syscall(i.vtbl.Release, 1, uintptr(unsafe.Pointer(i)), 0, 0)
 	return uint32(r)
-}
-
-func (i *_ID3D12Device) WaitFrameEventX(typ _D3D12XBOX_FRAME_EVENT_TYPE, timeOutInMs uint32, pAncillaryWaitList *_D3D12XBOX_WAIT_FRAME_OBJECT_LIST, flags _D3D12XBOX_WAIT_FRAME_EVENT_FLAGS, pToken *_D3D12XBOX_FRAME_PIPELINE_TOKEN) error {
-	r, _, _ := syscall.Syscall6(i.vtbl.WaitFrameEventX, 6, uintptr(unsafe.Pointer(i)), uintptr(typ), uintptr(timeOutInMs), uintptr(unsafe.Pointer(pAncillaryWaitList)), uintptr(flags), uintptr(unsafe.Pointer(pToken)))
-	runtime.KeepAlive(pAncillaryWaitList)
-	runtime.KeepAlive(pToken)
-	if uint32(r) != uint32(windows.S_OK) {
-		return fmt.Errorf("directx: ID3D12Device::WaitFrameEventX failed: %w", handleError(windows.Handle(uint32(r))))
-	}
-	return nil
 }
 
 type _ID3D12Fence struct {
@@ -1794,44 +1458,32 @@ type _ID3D12GraphicsCommandList_Vtbl struct {
 }
 
 func (i *_ID3D12GraphicsCommandList) ClearDepthStencilView(depthStencilView _D3D12_CPU_DESCRIPTOR_HANDLE, clearFlags _D3D12_CLEAR_FLAGS, depth float32, stencil uint8, rects []_D3D12_RECT) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_ClearDepthStencilView(i, depthStencilView, clearFlags, depth, stencil, rects)
-	} else {
-		var pRects *_D3D12_RECT
-		if len(rects) > 0 {
-			pRects = &rects[0]
-		}
-		_, _, _ = syscall.Syscall9(i.vtbl.ClearDepthStencilView, 7, uintptr(unsafe.Pointer(i)),
-			depthStencilView.ptr, uintptr(clearFlags), uintptr(math.Float32bits(depth)),
-			uintptr(stencil), uintptr(len(rects)), uintptr(unsafe.Pointer(pRects)),
-			0, 0)
+	var pRects *_D3D12_RECT
+	if len(rects) > 0 {
+		pRects = &rects[0]
 	}
+	_, _, _ = syscall.Syscall9(i.vtbl.ClearDepthStencilView, 7, uintptr(unsafe.Pointer(i)),
+		depthStencilView.ptr, uintptr(clearFlags), uintptr(math.Float32bits(depth)),
+		uintptr(stencil), uintptr(len(rects)), uintptr(unsafe.Pointer(pRects)),
+		0, 0)
 	runtime.KeepAlive(rects)
 }
 
 func (i *_ID3D12GraphicsCommandList) ClearRenderTargetView(pRenderTargetView _D3D12_CPU_DESCRIPTOR_HANDLE, colorRGBA [4]float32, rects []_D3D12_RECT) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_ClearRenderTargetView(i, pRenderTargetView, colorRGBA, rects)
-	} else {
-		var pRects *_D3D12_RECT
-		if len(rects) > 0 {
-			pRects = &rects[0]
-		}
-		_, _, _ = syscall.Syscall6(i.vtbl.ClearRenderTargetView, 5, uintptr(unsafe.Pointer(i)),
-			pRenderTargetView.ptr, uintptr(unsafe.Pointer(&colorRGBA[0])), uintptr(len(rects)), uintptr(unsafe.Pointer(pRects)),
-			0)
+	var pRects *_D3D12_RECT
+	if len(rects) > 0 {
+		pRects = &rects[0]
 	}
+	_, _, _ = syscall.Syscall6(i.vtbl.ClearRenderTargetView, 5, uintptr(unsafe.Pointer(i)),
+		pRenderTargetView.ptr, uintptr(unsafe.Pointer(&colorRGBA[0])), uintptr(len(rects)), uintptr(unsafe.Pointer(pRects)),
+		0)
 	runtime.KeepAlive(pRenderTargetView)
 	runtime.KeepAlive(rects)
 }
 
 func (i *_ID3D12GraphicsCommandList) Close() error {
 	var r uintptr
-	if microsoftgdk.IsXbox() {
-		r = _ID3D12GraphicsCommandList_Close(i)
-	} else {
-		r, _, _ = syscall.Syscall(i.vtbl.Close, 1, uintptr(unsafe.Pointer(i)), 0, 0)
-	}
+	r, _, _ = syscall.Syscall(i.vtbl.Close, 1, uintptr(unsafe.Pointer(i)), 0, 0)
 	if uint32(r) != uint32(windows.S_OK) {
 		return fmt.Errorf("directx: ID3D12GraphicsCommandList::Close failed: %w", handleError(windows.Handle(uint32(r))))
 	}
@@ -1839,117 +1491,77 @@ func (i *_ID3D12GraphicsCommandList) Close() error {
 }
 
 func (i *_ID3D12GraphicsCommandList) CopyTextureRegion_PlacedFootPrint_SubresourceIndex(pDst *_D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint, dstX uint32, dstY uint32, dstZ uint32, pSrc *_D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex, pSrcBox *_D3D12_BOX) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_CopyTextureRegion(i, unsafe.Pointer(pDst), dstX, dstY, dstZ, unsafe.Pointer(pSrc), pSrcBox)
-	} else {
-		_, _, _ = syscall.Syscall9(i.vtbl.CopyTextureRegion, 7, uintptr(unsafe.Pointer(i)),
-			uintptr(unsafe.Pointer(pDst)), uintptr(dstX), uintptr(dstY),
-			uintptr(dstZ), uintptr(unsafe.Pointer(pSrc)), uintptr(unsafe.Pointer(pSrcBox)),
-			0, 0)
-	}
+	_, _, _ = syscall.Syscall9(i.vtbl.CopyTextureRegion, 7, uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(pDst)), uintptr(dstX), uintptr(dstY),
+		uintptr(dstZ), uintptr(unsafe.Pointer(pSrc)), uintptr(unsafe.Pointer(pSrcBox)),
+		0, 0)
 	runtime.KeepAlive(pDst)
 	runtime.KeepAlive(pSrc)
 	runtime.KeepAlive(pSrcBox)
 }
 
 func (i *_ID3D12GraphicsCommandList) CopyTextureRegion_SubresourceIndex_PlacedFootPrint(pDst *_D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex, dstX uint32, dstY uint32, dstZ uint32, pSrc *_D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint, pSrcBox *_D3D12_BOX) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_CopyTextureRegion(i, unsafe.Pointer(pDst), dstX, dstY, dstZ, unsafe.Pointer(pSrc), pSrcBox)
-	} else {
-		_, _, _ = syscall.Syscall9(i.vtbl.CopyTextureRegion, 7, uintptr(unsafe.Pointer(i)),
-			uintptr(unsafe.Pointer(pDst)), uintptr(dstX), uintptr(dstY),
-			uintptr(dstZ), uintptr(unsafe.Pointer(pSrc)), uintptr(unsafe.Pointer(pSrcBox)),
-			0, 0)
-	}
+	_, _, _ = syscall.Syscall9(i.vtbl.CopyTextureRegion, 7, uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(pDst)), uintptr(dstX), uintptr(dstY),
+		uintptr(dstZ), uintptr(unsafe.Pointer(pSrc)), uintptr(unsafe.Pointer(pSrcBox)),
+		0, 0)
 	runtime.KeepAlive(pDst)
 	runtime.KeepAlive(pSrc)
 	runtime.KeepAlive(pSrcBox)
 }
 
 func (i *_ID3D12GraphicsCommandList) DrawIndexedInstanced(indexCountPerInstance uint32, instanceCount uint32, startIndexLocation uint32, baseVertexLocation int32, startInstanceLocation uint32) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_DrawIndexedInstanced(i, indexCountPerInstance, instanceCount, startIndexLocation, baseVertexLocation, startInstanceLocation)
-		return
-	}
 	_, _, _ = syscall.Syscall6(i.vtbl.DrawIndexedInstanced, 6, uintptr(unsafe.Pointer(i)),
 		uintptr(indexCountPerInstance), uintptr(instanceCount), uintptr(startIndexLocation), uintptr(baseVertexLocation), uintptr(startInstanceLocation))
 }
 
 func (i *_ID3D12GraphicsCommandList) IASetIndexBuffer(pView *_D3D12_INDEX_BUFFER_VIEW) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_IASetIndexBuffer(i, pView)
-	} else {
-		_, _, _ = syscall.Syscall(i.vtbl.IASetIndexBuffer, 2, uintptr(unsafe.Pointer(i)),
-			uintptr(unsafe.Pointer(pView)), 0)
-	}
+	_, _, _ = syscall.Syscall(i.vtbl.IASetIndexBuffer, 2, uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(pView)), 0)
 	runtime.KeepAlive(pView)
 }
 
 func (i *_ID3D12GraphicsCommandList) IASetPrimitiveTopology(primitiveTopology _D3D_PRIMITIVE_TOPOLOGY) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_IASetPrimitiveTopology(i, primitiveTopology)
-		return
-	}
 	_, _, _ = syscall.Syscall(i.vtbl.IASetPrimitiveTopology, 2, uintptr(unsafe.Pointer(i)),
 		uintptr(primitiveTopology), 0)
 }
 
 func (i *_ID3D12GraphicsCommandList) IASetVertexBuffers(startSlot uint32, views []_D3D12_VERTEX_BUFFER_VIEW) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_IASetVertexBuffers(i, startSlot, views)
-		return
-	} else {
-		var pViews *_D3D12_VERTEX_BUFFER_VIEW
-		if len(views) > 0 {
-			pViews = &views[0]
-		}
-		_, _, _ = syscall.Syscall6(i.vtbl.IASetVertexBuffers, 4, uintptr(unsafe.Pointer(i)),
-			uintptr(startSlot), uintptr(len(views)), uintptr(unsafe.Pointer(pViews)),
-			0, 0)
+	var pViews *_D3D12_VERTEX_BUFFER_VIEW
+	if len(views) > 0 {
+		pViews = &views[0]
 	}
+	_, _, _ = syscall.Syscall6(i.vtbl.IASetVertexBuffers, 4, uintptr(unsafe.Pointer(i)),
+		uintptr(startSlot), uintptr(len(views)), uintptr(unsafe.Pointer(pViews)),
+		0, 0)
 	runtime.KeepAlive(views)
 }
 
 func (i *_ID3D12GraphicsCommandList) OMSetRenderTargets(renderTargetDescriptors []_D3D12_CPU_DESCRIPTOR_HANDLE, rtsSingleHandleToDescriptorRange bool, pDepthStencilDescriptor *_D3D12_CPU_DESCRIPTOR_HANDLE) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_OMSetRenderTargets(i, renderTargetDescriptors, rtsSingleHandleToDescriptorRange, pDepthStencilDescriptor)
-	} else {
-		var pRenderTargetDescriptors *_D3D12_CPU_DESCRIPTOR_HANDLE
-		if len(renderTargetDescriptors) > 0 {
-			pRenderTargetDescriptors = &renderTargetDescriptors[0]
-		}
-		_, _, _ = syscall.Syscall6(i.vtbl.OMSetRenderTargets, 5, uintptr(unsafe.Pointer(i)),
-			uintptr(len(renderTargetDescriptors)), uintptr(unsafe.Pointer(pRenderTargetDescriptors)), boolToUintptr(rtsSingleHandleToDescriptorRange), uintptr(unsafe.Pointer(pDepthStencilDescriptor)),
-			0)
+	var pRenderTargetDescriptors *_D3D12_CPU_DESCRIPTOR_HANDLE
+	if len(renderTargetDescriptors) > 0 {
+		pRenderTargetDescriptors = &renderTargetDescriptors[0]
 	}
+	_, _, _ = syscall.Syscall6(i.vtbl.OMSetRenderTargets, 5, uintptr(unsafe.Pointer(i)),
+		uintptr(len(renderTargetDescriptors)), uintptr(unsafe.Pointer(pRenderTargetDescriptors)), boolToUintptr(rtsSingleHandleToDescriptorRange), uintptr(unsafe.Pointer(pDepthStencilDescriptor)),
+		0)
 	runtime.KeepAlive(renderTargetDescriptors)
 	runtime.KeepAlive(pDepthStencilDescriptor)
 }
 
 func (i *_ID3D12GraphicsCommandList) OMSetStencilRef(stencilRef uint32) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_OMSetStencilRef(i, stencilRef)
-		return
-	}
 	_, _, _ = syscall.Syscall(i.vtbl.OMSetStencilRef, 2, uintptr(unsafe.Pointer(i)), uintptr(stencilRef), 0)
 }
 
 func (i *_ID3D12GraphicsCommandList) Release() uint32 {
-	if microsoftgdk.IsXbox() {
-		return _ID3D12GraphicsCommandList_Release(i)
-	}
 	r, _, _ := syscall.Syscall(i.vtbl.Release, 1, uintptr(unsafe.Pointer(i)), 0, 0)
 	return uint32(r)
 }
 
 func (i *_ID3D12GraphicsCommandList) Reset(pAllocator *_ID3D12CommandAllocator, pInitialState *_ID3D12PipelineState) error {
 	var r uintptr
-	if microsoftgdk.IsXbox() {
-		r = _ID3D12GraphicsCommandList_Reset(i, pAllocator, pInitialState)
-	} else {
-		r, _, _ = syscall.Syscall(i.vtbl.Reset, 3, uintptr(unsafe.Pointer(i)),
-			uintptr(unsafe.Pointer(pAllocator)), uintptr(unsafe.Pointer(pInitialState)))
-	}
+	r, _, _ = syscall.Syscall(i.vtbl.Reset, 3, uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(pAllocator)), uintptr(unsafe.Pointer(pInitialState)))
 	runtime.KeepAlive(pAllocator)
 	runtime.KeepAlive(pInitialState)
 	if uint32(r) != uint32(windows.S_OK) {
@@ -1959,66 +1571,46 @@ func (i *_ID3D12GraphicsCommandList) Reset(pAllocator *_ID3D12CommandAllocator, 
 }
 
 func (i *_ID3D12GraphicsCommandList) ResourceBarrier(barriers []_D3D12_RESOURCE_BARRIER_Transition) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_ResourceBarrier(i, barriers)
-	} else {
-		var pBarriers *_D3D12_RESOURCE_BARRIER_Transition
-		if len(barriers) > 0 {
-			pBarriers = &barriers[0]
-		}
-		_, _, _ = syscall.Syscall(i.vtbl.ResourceBarrier, 3, uintptr(unsafe.Pointer(i)),
-			uintptr(len(barriers)), uintptr(unsafe.Pointer(pBarriers)))
+	var pBarriers *_D3D12_RESOURCE_BARRIER_Transition
+	if len(barriers) > 0 {
+		pBarriers = &barriers[0]
 	}
+	_, _, _ = syscall.Syscall(i.vtbl.ResourceBarrier, 3, uintptr(unsafe.Pointer(i)),
+		uintptr(len(barriers)), uintptr(unsafe.Pointer(pBarriers)))
 	runtime.KeepAlive(barriers)
 }
 
 func (i *_ID3D12GraphicsCommandList) RSSetViewports(viewports []_D3D12_VIEWPORT) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_RSSetViewports(i, viewports)
-	} else {
-		var pViewports *_D3D12_VIEWPORT
-		if len(viewports) > 0 {
-			pViewports = &viewports[0]
-		}
-		_, _, _ = syscall.Syscall(i.vtbl.RSSetViewports, 3, uintptr(unsafe.Pointer(i)),
-			uintptr(len(viewports)), uintptr(unsafe.Pointer(pViewports)))
+	var pViewports *_D3D12_VIEWPORT
+	if len(viewports) > 0 {
+		pViewports = &viewports[0]
 	}
+	_, _, _ = syscall.Syscall(i.vtbl.RSSetViewports, 3, uintptr(unsafe.Pointer(i)),
+		uintptr(len(viewports)), uintptr(unsafe.Pointer(pViewports)))
 	runtime.KeepAlive(viewports)
 }
 
 func (i *_ID3D12GraphicsCommandList) RSSetScissorRects(rects []_D3D12_RECT) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_RSSetScissorRects(i, rects)
-	} else {
-		var pRects *_D3D12_RECT
-		if len(rects) > 0 {
-			pRects = &rects[0]
-		}
-		_, _, _ = syscall.Syscall(i.vtbl.RSSetScissorRects, 3, uintptr(unsafe.Pointer(i)),
-			uintptr(len(rects)), uintptr(unsafe.Pointer(pRects)))
+	var pRects *_D3D12_RECT
+	if len(rects) > 0 {
+		pRects = &rects[0]
 	}
+	_, _, _ = syscall.Syscall(i.vtbl.RSSetScissorRects, 3, uintptr(unsafe.Pointer(i)),
+		uintptr(len(rects)), uintptr(unsafe.Pointer(pRects)))
 	runtime.KeepAlive(rects)
 }
 
 func (i *_ID3D12GraphicsCommandList) SetDescriptorHeaps(descriptorHeaps []*_ID3D12DescriptorHeap) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_SetDescriptorHeaps(i, descriptorHeaps)
-	} else {
-		var ppDescriptorHeaps **_ID3D12DescriptorHeap
-		if len(descriptorHeaps) > 0 {
-			ppDescriptorHeaps = &descriptorHeaps[0]
-		}
-		_, _, _ = syscall.Syscall(i.vtbl.SetDescriptorHeaps, 3, uintptr(unsafe.Pointer(i)),
-			uintptr(len(descriptorHeaps)), uintptr(unsafe.Pointer(ppDescriptorHeaps)))
+	var ppDescriptorHeaps **_ID3D12DescriptorHeap
+	if len(descriptorHeaps) > 0 {
+		ppDescriptorHeaps = &descriptorHeaps[0]
 	}
+	_, _, _ = syscall.Syscall(i.vtbl.SetDescriptorHeaps, 3, uintptr(unsafe.Pointer(i)),
+		uintptr(len(descriptorHeaps)), uintptr(unsafe.Pointer(ppDescriptorHeaps)))
 	runtime.KeepAlive(descriptorHeaps)
 }
 
 func (i *_ID3D12GraphicsCommandList) SetGraphicsRootDescriptorTable(rootParameterIndex uint32, baseDescriptor _D3D12_GPU_DESCRIPTOR_HANDLE) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_SetGraphicsRootDescriptorTable(i, rootParameterIndex, baseDescriptor)
-		return
-	}
 	if is64bit {
 		_, _, _ = syscall.Syscall(i.vtbl.SetGraphicsRootDescriptorTable, 3, uintptr(unsafe.Pointer(i)),
 			uintptr(rootParameterIndex), uintptr(baseDescriptor.ptr))
@@ -2029,22 +1621,14 @@ func (i *_ID3D12GraphicsCommandList) SetGraphicsRootDescriptorTable(rootParamete
 }
 
 func (i *_ID3D12GraphicsCommandList) SetGraphicsRootSignature(pRootSignature *_ID3D12RootSignature) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_SetGraphicsRootSignature(i, pRootSignature)
-	} else {
-		_, _, _ = syscall.Syscall(i.vtbl.SetGraphicsRootSignature, 2, uintptr(unsafe.Pointer(i)),
-			uintptr(unsafe.Pointer(pRootSignature)), 0)
-	}
+	_, _, _ = syscall.Syscall(i.vtbl.SetGraphicsRootSignature, 2, uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(pRootSignature)), 0)
 	runtime.KeepAlive(pRootSignature)
 }
 
 func (i *_ID3D12GraphicsCommandList) SetPipelineState(pPipelineState *_ID3D12PipelineState) {
-	if microsoftgdk.IsXbox() {
-		_ID3D12GraphicsCommandList_SetPipelineState(i, pPipelineState)
-	} else {
-		_, _, _ = syscall.Syscall(i.vtbl.SetPipelineState, 2, uintptr(unsafe.Pointer(i)),
-			uintptr(unsafe.Pointer(pPipelineState)), 0)
-	}
+	_, _, _ = syscall.Syscall(i.vtbl.SetPipelineState, 2, uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(pPipelineState)), 0)
 	runtime.KeepAlive(pPipelineState)
 }
 

@@ -94,8 +94,8 @@ monitor and window APIs. Everything outside that was dropped.
   active. A platform state with no active session is now dropped.
 - Console and mobile platforms: Nintendo Switch, PlayStation 5, Xbox GDK,
   Android and iOS sources. The browser (`js`/`wasm`) target is kept. `internal/microsoftgdk`
-  survives as a stub whose `IsXbox` is always false so the glfw and DirectX
-  drivers stay untouched.
+  survived as a stub whose `IsXbox` was always false until the window system
+  left; the DirectX 12 driver's Xbox paths went with it then.
 - `graphicsdriver.Graphics.SetTransparent` and, on the desktop,
   `RunOptions.ScreenTransparent`. Transparency is a property of a surface, so
   it is passed to `NewSurface` and the window's own `Transparent` option
@@ -200,9 +200,10 @@ ggfx is a renderer. The window system moved to its own repository,
 [ggwd](https://github.com/ironpark/ggwd): `Run`, `Window`, the events, keys, mouse buttons,
 cursor, clipboard, monitors, color mode, `RunOnMainThread`, `Wake`, `exp/textinput`,
 `internal/ui`, `internal/glfw`, `internal/hook`, `internal/file`, `internal/colormode` and
-`internal/exeicon`. It keeps copies of `internal/cocoa`, `internal/thread`, `internal/winver`,
-`internal/microsoftgdk` and `internal/windowsystem`, which the drivers use too, and uses ggfx
-through its public API alone, as Go's internal rule makes it. Its FORK.md carries what was
+`internal/exeicon`. It keeps copies of `internal/cocoa`, `internal/thread` and `internal/winver`,
+which the drivers use too, and has `internal/microsoftgdk` and `internal/windowsystem` to itself:
+the renderer dropped the Xbox paths, and the OpenGL loader on Linux and the BSDs tries OpenGL ES
+and then OpenGL whether or not a display server is up. It uses ggfx through its public API alone, as Go's internal rule makes it. Its FORK.md carries what was
 changed in the window system against upstream; the removals below that name its packages
 happened before the move. Upstream commits to `internal/ui` and `internal/glfw` go to ggwd.
 

@@ -40,25 +40,6 @@ func boolToUintptr(v bool) uintptr {
 	return 0
 }
 
-type _PAPPSTATE_CHANGE_ROUTINE func(quiesced bool, context unsafe.Pointer) uintptr
-
-var (
-	// https://github.com/MicrosoftDocs/sdk-api/blob/docs/sdk-api-src/content/appnotify/nf-appnotify-registerappstatechangenotification.md
-	appnotify = windows.NewLazySystemDLL("API-MS-Win-Core-psm-appnotify-l1-1-0.dll")
-
-	procRegisterAppStateChangeNotification = appnotify.NewProc("RegisterAppStateChangeNotification")
-)
-
-func _RegisterAppStateChangeNotification(routine _PAPPSTATE_CHANGE_ROUTINE, context unsafe.Pointer) (unsafe.Pointer, error) {
-	cb := windows.NewCallback(routine)
-	var registration unsafe.Pointer
-	r, _, _ := procRegisterAppStateChangeNotification.Call(cb, uintptr(context), uintptr(unsafe.Pointer(&registration)))
-	if windows.Errno(r) != windows.ERROR_SUCCESS {
-		return nil, fmt.Errorf("directx: RegisterAppStateChangeNotification failed: %w", windows.Errno(r))
-	}
-	return registration, nil
-}
-
 const (
 	_GWL_EXSTYLE = -20
 

@@ -29,7 +29,6 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/microsoftgdk"
 	"github.com/ironpark/ggfx/internal/winver"
 )
 
@@ -102,7 +101,6 @@ func NewGraphics() (graphicsdriver.Graphics, error) {
 		t := strings.TrimSpace(t)
 		switch {
 		case t == "warp":
-			// TODO: Is WARP available on Xbox?
 			useWARP = true
 		case t == "debug":
 			useDebugLayer = true
@@ -121,11 +119,6 @@ func NewGraphics() (graphicsdriver.Graphics, error) {
 			}
 			featureLevel = fl
 		}
-	}
-
-	// On Xbox, only DirectX 12 is available.
-	if microsoftgdk.IsXbox() {
-		version = 12
 	}
 
 	switch version {

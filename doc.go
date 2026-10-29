@@ -48,7 +48,6 @@
 //
 // The possible values for the option "version" are "11" and "12".
 // If the version is not specified, the default version 11 is adopted.
-// On Xbox, the "version" option is ignored and DirectX 12 is always adopted.
 //
 // The option "featurelevel" is valid only for DirectX 12.
 // The possible values are "11_0", "11_1", "12_0", "12_1", and "12_2". The default value is "11_0".

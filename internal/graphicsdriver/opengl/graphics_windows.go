@@ -20,7 +20,6 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
-	"github.com/ironpark/ggfx/internal/microsoftgdk"
 )
 
 type graphicsPlatform struct{}
@@ -28,10 +27,6 @@ type graphicsPlatform struct{}
 // NewGraphics creates an implementation of graphicsdriver.Graphics for OpenGL.
 // The returned graphics value is nil iff the error is not nil.
 func NewGraphics() (graphicsdriver.Graphics, error) {
-	if microsoftgdk.IsXbox() {
-		return nil, fmt.Errorf("opengl: OpenGL is not supported on Xbox")
-	}
-
 	ctx, err := gl.NewDefaultContext()
 	if err != nil {
 		return nil, err

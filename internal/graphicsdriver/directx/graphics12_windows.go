@@ -17,7 +17,6 @@ package directx
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"slices"
 	"unsafe"
 
@@ -26,7 +25,6 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/microsoftgdk"
 	"github.com/ironpark/ggfx/internal/shader"
 )
 
@@ -44,12 +42,11 @@ func (r *resourceWithSize) release() {
 type graphics12 struct {
 	tmpUniforms []uint32
 
-	debug              *_ID3D12Debug
-	dredEnabled        bool
-	device             *_ID3D12Device
-	commandQueue       *_ID3D12CommandQueue
-	rtvDescriptorSize  uint32
-	framePipelineToken _D3D12XBOX_FRAME_PIPELINE_TOKEN
+	debug             *_ID3D12Debug
+	dredEnabled       bool
+	device            *_ID3D12Device
+	commandQueue      *_ID3D12CommandQueue
+	rtvDescriptorSize uint32
 
 	fences         [frameCount]*_ID3D12Fence
 	fenceValues    [frameCount]uint64
@@ -86,19 +83,12 @@ type graphics12 struct {
 	// tmpSwapChains is a temporary slice of the swap chains to present.
 	tmpSwapChains []*swapChain
 
-	// hasSurfaceXbox reports whether a surface was created on Xbox, where only one surface is
-	// supported. hasSurfaceXbox is accessed only on the main thread.
-	hasSurfaceXbox bool
-
 	// frameIndex is the index of the frame resources: the vertex buffers, the command allocators, and
 	// the fences. frameIndex cycles through frameCount frames independently of the swap chains' back
 	// buffer indices, as each surface's swap chain has its own (see surface12.backBufferIndex).
 	// frameIndex must stay stable within a frame.
 	frameIndex          int
 	prevBeginFrameIndex int
-
-	// frameStarted is true from Begin until the frame completes.
-	frameStarted bool
 
 	images         map[graphicsdriver.ImageID]*image12
 	nextImageID    graphicsdriver.ImageID
@@ -108,10 +98,6 @@ type graphics12 struct {
 	nextShaderID    graphicsdriver.ShaderID
 	disposedShaders [frameCount][]*shader12
 
-	suspendingCh chan struct{}
-	suspendedCh  chan struct{}
-	resumeCh     chan struct{}
-
 	pipelineStates
 }
 
@@ -120,14 +106,8 @@ func newGraphics12(useWARP bool, useDebugLayer bool, useDRED bool, featureLevel 
 
 	// Initialize not only a device but also other members like a fence.
 	// Even if initializing a device succeeds, initializing a fence might fail (#2142).
-	if microsoftgdk.IsXbox() {
-		if err := g.initializeXbox(useWARP, useDebugLayer); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := g.initializeDesktop(useWARP, useDebugLayer, useDRED, featureLevel); err != nil {
-			return nil, err
-		}
+	if err := g.initializeDesktop(useWARP, useDebugLayer, useDRED, featureLevel); err != nil {
+		return nil, err
 	}
 
 	return g, nil
@@ -253,94 +233,6 @@ func (g *graphics12) initializeDesktop(useWARP bool, useDebugLayer bool, useDRED
 		return err
 	}
 	i.Dispose()
-
-	return nil
-}
-
-func (g *graphics12) initializeXbox(useWARP bool, useDebugLayer bool) (ferr error) {
-	if err := d3d12x.Load(); err != nil {
-		return err
-	}
-
-	params := &_D3D12XBOX_CREATE_DEVICE_PARAMETERS{
-		Version:                           microsoftgdk.D3D12SDKVersion(),
-		GraphicsCommandQueueRingSizeBytes: _D3D12XBOX_DEFAULT_SIZE_BYTES,
-		GraphicsScratchMemorySizeBytes:    _D3D12XBOX_DEFAULT_SIZE_BYTES,
-		ComputeScratchMemorySizeBytes:     _D3D12XBOX_DEFAULT_SIZE_BYTES,
-	}
-	if useDebugLayer {
-		params.ProcessDebugFlags = _D3D12_PROCESS_DEBUG_FLAG_DEBUG_LAYER_ENABLED
-	}
-	d, err := _D3D12XboxCreateDevice(nil, params, &_IID_ID3D12Device)
-	if err != nil {
-		return err
-	}
-	g.device = (*_ID3D12Device)(d)
-	defer func() {
-		if ferr != nil {
-			g.device.Release()
-			g.device = nil
-		}
-	}()
-
-	if err := g.initializeMembers(); err != nil {
-		return err
-	}
-	defer func() {
-		if ferr != nil {
-			g.releaseMembers()
-		}
-	}()
-
-	if err := g.registerFrameEventForXbox(); err != nil {
-		return err
-	}
-
-	g.suspendingCh = make(chan struct{})
-	g.suspendedCh = make(chan struct{})
-	g.resumeCh = make(chan struct{})
-	if _, err := _RegisterAppStateChangeNotification(func(quiesced bool, context unsafe.Pointer) uintptr {
-		if quiesced {
-			g.suspendingCh <- struct{}{}
-			// Confirm the suspension completed before the callback ends.
-			<-g.suspendedCh
-		} else {
-			g.resumeCh <- struct{}{}
-		}
-		return 0
-	}, nil); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (g *graphics12) registerFrameEventForXbox() error {
-	d, err := g.device.QueryInterface(&_IID_IDXGIDevice)
-	if err != nil {
-		return err
-	}
-	dxgiDevice := (*_IDXGIDevice)(d)
-	defer dxgiDevice.Release()
-
-	dxgiAdapter, err := dxgiDevice.GetAdapter()
-	if err != nil {
-		return err
-	}
-	defer dxgiAdapter.Release()
-
-	dxgiOutput, err := dxgiAdapter.EnumOutputs(0)
-	if err != nil {
-		return err
-	}
-	defer dxgiOutput.Release()
-
-	if err := g.device.SetFrameIntervalX(dxgiOutput, _D3D12XBOX_FRAME_INTERVAL_60_HZ, frameCount-1, _D3D12XBOX_FRAME_INTERVAL_FLAG_NONE); err != nil {
-		return err
-	}
-	if err := g.device.ScheduleFrameEventX(_D3D12XBOX_FRAME_EVENT_ORIGIN, 0, nil, _D3D12XBOX_SCHEDULE_FRAME_EVENT_FLAG_NONE); err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -472,7 +364,7 @@ func (g *graphics12) Initialize() (err error) {
 }
 
 func createBuffer(device *_ID3D12Device, bufferSize uint64, heapType _D3D12_HEAP_TYPE) (*_ID3D12Resource, error) {
-	state := _D3D12_RESOURCE_STATE_GENERIC_READ()
+	state := _D3D12_RESOURCE_STATE_GENERIC_READ
 	if heapType == _D3D12_HEAP_TYPE_READBACK {
 		state = _D3D12_RESOURCE_STATE_COPY_DEST
 	}
@@ -504,12 +396,12 @@ func createBuffer(device *_ID3D12Device, bufferSize uint64, heapType _D3D12_HEAP
 	return r, nil
 }
 
-// surface12 is the swap chain on one window, or the display planes on Xbox.
+// surface12 is the swap chain on one window.
 type surface12 struct {
 	graphics *graphics12
 	window   windows.HWND
 
-	// swapChain is nil until the first screen image is created, and always nil on Xbox.
+	// swapChain is nil until the first screen image is created.
 	swapChain *swapChain
 
 	rtvDescriptorHeap *_ID3D12DescriptorHeap
@@ -517,7 +409,7 @@ type surface12 struct {
 
 	// backBufferIndex is the index of the swap chain's current back buffer, which the screen image
 	// renders into and which present flips. It is updated when the swap chain is created, resized,
-	// or presented. On Xbox, it follows the graphics' frameIndex.
+	// or presented.
 	backBufferIndex int
 
 	screenImage *image12
@@ -531,12 +423,6 @@ type surface12 struct {
 func (g *graphics12) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
 	if transparent {
 		return nil, errors.New("directx: a transparent surface is not supported")
-	}
-	if microsoftgdk.IsXbox() {
-		if g.hasSurfaceXbox {
-			return nil, errors.New("directx: only one surface is supported on Xbox")
-		}
-		g.hasSurfaceXbox = true
 	}
 	w, err := surfaceTarget(target)
 	if err != nil {
@@ -626,28 +512,6 @@ func (g *graphics12) updateSwapChain(s *surface12, width, height int) error {
 }
 
 func (g *graphics12) updateSwapChainImpl(s *surface12, width, height int) error {
-	if microsoftgdk.IsXbox() {
-		// Release the current render targets before creating new ones. The GPU might still be using
-		// them, so make it idle first.
-		if s.renderTargets[0] != nil {
-			if err := g.flushCommandList(g.copyCommandList); err != nil {
-				return err
-			}
-			if err := g.flushCommandList(g.drawCommandList); err != nil {
-				return err
-			}
-			if err := g.waitForCommandQueue(); err != nil {
-				return err
-			}
-			s.releaseRenderTargets()
-		}
-		if err := g.initSwapChainXbox(s, width, height); err != nil {
-			return err
-		}
-		s.backBufferIndex = g.frameIndex
-		return nil
-	}
-
 	if s.swapChain == nil {
 		if err := g.initSwapChainDesktop(s, width, height); err != nil {
 			return err
@@ -687,58 +551,6 @@ func (g *graphics12) initSwapChainDesktop(s *surface12, width, height int) error
 		return err
 	}
 	s.backBufferIndex = idx
-
-	return nil
-}
-
-func (g *graphics12) initSwapChainXbox(s *surface12, width, height int) (ferr error) {
-	h, err := s.rtvDescriptorHeap.GetCPUDescriptorHandleForHeapStart()
-	if err != nil {
-		return err
-	}
-
-	for i := range frameCount {
-		r, err := g.device.CreateCommittedResource(&_D3D12_HEAP_PROPERTIES{
-			Type:                 _D3D12_HEAP_TYPE_DEFAULT,
-			CPUPageProperty:      _D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-			MemoryPoolPreference: _D3D12_MEMORY_POOL_UNKNOWN,
-			CreationNodeMask:     1,
-			VisibleNodeMask:      1,
-		}, _D3D12_HEAP_FLAG_ALLOW_DISPLAY, &_D3D12_RESOURCE_DESC{
-			Dimension:        _D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-			Alignment:        0,
-			Width:            uint64(width),
-			Height:           uint32(height),
-			DepthOrArraySize: 1,
-			MipLevels:        1, // Use a single mipmap level
-			Format:           _DXGI_FORMAT_B8G8R8A8_UNORM,
-			SampleDesc: _DXGI_SAMPLE_DESC{
-				Count:   1,
-				Quality: 0,
-			},
-			Layout: _D3D12_TEXTURE_LAYOUT_UNKNOWN,
-			Flags:  _D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-		}, _D3D12_RESOURCE_STATE_PRESENT(), &_D3D12_CLEAR_VALUE{
-			Format: _DXGI_FORMAT_B8G8R8A8_UNORM,
-		})
-		if err != nil {
-			return err
-		}
-
-		s.renderTargets[i] = r
-		defer func(i int) {
-			if ferr != nil {
-				s.renderTargets[i].Release()
-				s.renderTargets[i] = nil
-			}
-		}(i)
-
-		g.device.CreateRenderTargetView(r, &_D3D12_RENDER_TARGET_VIEW_DESC{
-			Format:        _DXGI_FORMAT_B8G8R8A8_UNORM,
-			ViewDimension: _D3D12_RTV_DIMENSION_TEXTURE2D,
-		}, h)
-		h.Offset(1, g.rtvDescriptorSize)
-	}
 
 	return nil
 }
@@ -852,30 +664,6 @@ func (g *graphics12) ColorSpace() color.ColorSpace {
 }
 
 func (g *graphics12) Begin() error {
-	if microsoftgdk.IsXbox() && !g.frameStarted {
-		select {
-		case <-g.suspendingCh:
-			if err := g.commandQueue.SuspendX(0); err != nil {
-				return err
-			}
-			g.suspendedCh <- struct{}{}
-			<-g.resumeCh
-			if err := g.commandQueue.ResumeX(); err != nil {
-				return err
-			}
-			if err := g.registerFrameEventForXbox(); err != nil {
-				return err
-			}
-		default:
-		}
-
-		g.framePipelineToken = _D3D12XBOX_FRAME_PIPELINE_TOKEN_NULL
-		if err := g.device.WaitFrameEventX(_D3D12XBOX_FRAME_EVENT_ORIGIN, windows.INFINITE, nil, _D3D12XBOX_WAIT_FRAME_EVENT_FLAG_NONE, &g.framePipelineToken); err != nil {
-			return err
-		}
-	}
-	g.frameStarted = true
-
 	if g.prevBeginFrameIndex != g.frameIndex {
 		if err := g.drawCommandAllocators[g.frameIndex].Reset(); err != nil {
 			return err
@@ -898,10 +686,6 @@ func (g *graphics12) Begin() error {
 // IsOccluded reports whether the screen is invisible: whether none of the windows presented at the
 // last present was visible.
 func (g *graphics12) IsOccluded() bool {
-	// graphicsInfra is nil on Xbox, where a swap chain is not used.
-	if g.graphicsInfra == nil {
-		return false
-	}
 	return g.graphicsInfra.occluded.Load()
 }
 
@@ -922,7 +706,7 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 			if !g.shouldPresent(s) {
 				continue
 			}
-			if rb, ok := s.screenImage.transiteState(_D3D12_RESOURCE_STATE_PRESENT()); ok {
+			if rb, ok := s.screenImage.transiteState(_D3D12_RESOURCE_STATE_PRESENT); ok {
 				g.drawCommandList.ResourceBarrier([]_D3D12_RESOURCE_BARRIER_Transition{rb})
 			}
 		}
@@ -947,14 +731,8 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 	g.pipelineStates.resetConstantBuffers(g.frameIndex)
 
 	if mode == graphicsdriver.FlushModePresent {
-		if microsoftgdk.IsXbox() {
-			if err := g.presentXbox(); err != nil {
-				return err
-			}
-		} else {
-			if err := g.presentDesktop(); err != nil {
-				return err
-			}
+		if err := g.presentDesktop(); err != nil {
+			return err
 		}
 	}
 
@@ -974,8 +752,6 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 
 		g.releaseResources(g.frameIndex)
 		g.resetVerticesAndIndices(g.frameIndex, false)
-
-		g.frameStarted = false
 	}
 
 	return nil
@@ -985,10 +761,6 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 func (g *graphics12) shouldPresent(s *surface12) bool {
 	if s.screenImage == nil {
 		return false
-	}
-	// Xbox has only one surface, and presents it every frame as its frame pipeline expects.
-	if microsoftgdk.IsXbox() {
-		return true
 	}
 	// A surface that was not drawn keeps showing its previous frame.
 	return s.drawn
@@ -1027,34 +799,7 @@ func (g *graphics12) presentDesktop() error {
 // resize) to finish on the GPU, so it reaches the screen immediately rather than a frame late, which
 // DirectX 12's frame pipelining would otherwise cause (#3477).
 func (g *graphics12) FinishForcedFrame() error {
-	if microsoftgdk.IsXbox() {
-		return nil
-	}
 	return g.waitForCommandQueue()
-}
-
-func (g *graphics12) presentXbox() error {
-	for _, s := range g.surfaces {
-		if !g.shouldPresent(s) {
-			continue
-		}
-		s.drawn = false
-		if err := s.presentXbox(g.commandQueue, g.framePipelineToken); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *surface12) presentXbox(commandQueue *_ID3D12CommandQueue, token _D3D12XBOX_FRAME_PIPELINE_TOKEN) error {
-	var pinner runtime.Pinner
-	pinner.Pin(&s.renderTargets[s.backBufferIndex])
-	defer pinner.Unpin()
-	return commandQueue.PresentX(1, &_D3D12XBOX_PRESENT_PLANE_PARAMETERS{
-		Token:         token,
-		ResourceCount: 1,
-		ppResources:   &s.renderTargets[s.backBufferIndex],
-	}, nil)
 }
 
 func (g *graphics12) moveToNextFrame() error {
@@ -1069,12 +814,6 @@ func (g *graphics12) moveToNextFrame() error {
 	// makes sure that the GPU finished the frame that last rendered into each surface's next back
 	// buffer, as a swap chain's back buffer is not reused until frameCount presents later.
 	g.frameIndex = (g.frameIndex + 1) % frameCount
-	if microsoftgdk.IsXbox() {
-		// On Xbox, the render targets are not a swap chain and follow the frame index.
-		for _, s := range g.surfaces {
-			s.backBufferIndex = g.frameIndex
-		}
-	}
 
 	if g.fences[g.frameIndex].GetCompletedValue() < g.fenceValues[g.frameIndex] {
 		if err := g.fences[g.frameIndex].SetEventOnCompletion(g.fenceValues[g.frameIndex], g.fenceWaitEvent); err != nil {
