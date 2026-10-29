@@ -28,7 +28,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	t.MainWithRunLoop(m)
+	t.MainInFrame(m)
 }
 
 func TestUnsyncedPixels(t *testing.T) {

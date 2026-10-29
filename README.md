@@ -1,11 +1,15 @@
 # ggfx
 
-ggfx is the rendering and windowing runtime for
-[ggui](https://github.com/ironpark/ggui). It is a fork of
+ggfx is the renderer of [ggui](https://github.com/ironpark/ggui): it draws
+images, shaders, text, vectors and SVG on the GPU and presents them on
+surfaces that a window system owns. It is a fork of
 [Ebitengine](https://ebitengine.org/) v2.10.2 for desktop and the browser
 that keeps the GPU pipeline, `text/v2` and `vector`, replaces the Kage
 shader language with WGSL compiled by [naga](https://github.com/gogpu/naga),
 and drops audio, mobile and console support.
+
+ggfx has no windows. [ggwd](ggwd) is the window system ggui uses, and it
+drives ggfx through the public renderer API in `renderer.go` alone.
 
 Shaders are documented in [docs/shaders.md](docs/shaders.md).
 
@@ -18,7 +22,7 @@ ggfx requires Go 1.27 or later, and so macOS 13 Ventura or later.
 
 - macOS: Metal, OpenGL
 - Windows: DirectX 11/12 (feature level 11.0), OpenGL
-- Linux, FreeBSD, NetBSD, OpenBSD: OpenGL (requires cgo for glfw)
+- Linux, FreeBSD, NetBSD, OpenBSD: OpenGL (ggwd requires cgo for glfw)
 - Browser: WebGL via `GOOS=js GOARCH=wasm`
 
 ## License

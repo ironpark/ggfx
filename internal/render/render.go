@@ -44,6 +44,7 @@ var (
 	stopRenderThread context.CancelFunc
 	renderThreadDone chan struct{}
 	terminateOnce    sync.Once
+	terminated       atomic.Bool
 
 	theErr atomic.Pointer[error]
 	tick   atomic.Int64
@@ -124,6 +125,7 @@ func Init(o *Options) error {
 // the commands draw to.
 func Terminate() {
 	terminateOnce.Do(func() {
+		terminated.Store(true)
 		running.Store(false)
 		graphicscommand.Terminate()
 		if stopRenderThread != nil {
@@ -131,6 +133,11 @@ func Terminate() {
 			<-renderThreadDone
 		}
 	})
+}
+
+// Terminated reports whether Terminate was called.
+func Terminated() bool {
+	return terminated.Load()
 }
 
 // SetGLContext sets the OpenGL context everything is drawn in on the desktop. It shares objects

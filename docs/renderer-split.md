@@ -2,7 +2,7 @@
 
 ggfx is to become a renderer: it draws images, shaders, text, vectors and SVG, and presents them
 on surfaces that someone else's windows own. The window system it carries today moves to a module
-of its own (working name `ggwin`), which uses ggfx's public API alone, as ggip's `ggfxinput` does.
+of its own (`ggwd`), which uses ggfx's public API alone, as ggip's `ggfxinput` does.
 ggui joins the two.
 
 ## What goes and what stays
@@ -14,7 +14,7 @@ Stays in ggfx:
 - The graphics drivers, the atlas, the command queue and the render thread.
 - A new device and surface API (below).
 
-Goes to ggwin:
+Goes to ggwd:
 
 - `Run`, `NewWindow`, `Window`, `WindowOptions`, `RunOptions` and every event type in `app.go`.
 - Keys, mouse buttons, touch, cursor, clipboard, monitor, color mode, `KeyName`.
@@ -73,17 +73,17 @@ Linux and wasm, and is a commit of its own.
 2. Done. Add the public API above to ggfx, start the render thread at `Init`, and make Metal
    take an NSView. `internal/ui` uses nothing from `internal/render` that the API does not
    expose, and no other renderer package: what is left is to spell `render.X` as `ggfx.X`.
-3. Move the window system into `ggfx/ggwin` with its own internal packages, importing nothing from
-   `ggfx/internal`. A test fails the build if it does. Rebuild `internal/testing` on the renderer
-   API: Metal renders without a surface, and OpenGL needs a context that the test harness gets
-   from ggwin, so the root package's tests run on Metal alone and ggwin runs the OpenGL ones.
-4. Move `ggfx/ggwin` to its own repository, point ggui at it, and drop `docs/window.md` and the
+3. Done. Move the window system into `ggfx/ggwd` with its own internal packages, importing
+   nothing from `ggfx/internal`; `TestNoRendererInternals` fails if it does. ggfx's tests run in
+   a frame of the renderer with no window, OpenGL on macOS in a CGL context of their own, and
+   ggwd's run in a window.
+4. Move `ggfx/ggwd` to its own repository, point ggui at it, and drop `docs/window.md` and the
    window sections of `FORK.md` from ggfx.
 
 ## Open questions
 
 - The browser has one canvas and its own frame loop through `requestAnimationFrame`; that loop
-  belongs to ggwin, and the WebGL driver's single surface stays a renderer limit.
-- `RunOptions.ColorSpace` and `GraphicsLibrary` become `InitOptions`; ggwin passes them through.
+  belongs to ggwd, and the WebGL driver's single surface stays a renderer limit.
+- `RunOptions.ColorSpace` and `GraphicsLibrary` become `InitOptions`; ggwd passes them through.
 - A live resize on macOS draws from the main thread, in the resize callback, and only GLFW's
   path was run; the NSView switch did not change it, but no resize was dragged after it.

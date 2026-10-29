@@ -247,6 +247,20 @@ lookups and the reflection. See `docs/shaders.md`.
 These change `image.go` and the shader files, so upstream commits to them
 no longer merge cleanly.
 
+## The window system moved to ggwd
+
+ggfx is a renderer. The window system, which the sections below describe as it was changed
+inside ggfx, moved to `ggwd/` and its own internal packages: `Run`, `Window`, the events, keys,
+mouse buttons, cursor, clipboard, monitors, color mode, `RunOnMainThread`, `Wake`,
+`exp/textinput`, `internal/ui`, `internal/glfw`, `internal/hook`, `internal/file`,
+`internal/colormode` and `internal/exeicon`. It keeps copies of `internal/cocoa`,
+`internal/thread`, `internal/winver`, `internal/microsoftgdk` and `internal/windowsystem`, which the
+drivers use too, and `TestNoRendererInternals` fails if it imports anything under
+`ggfx/internal`. Paths below that name those packages are now under `ggwd/`.
+
+ggfx's own tests run inside one renderer frame with no window (`internal/testing.MainInFrame`); on
+macOS OpenGL draws in a CGL context the harness makes. ggwd's tests run in a window, as ggfx's did.
+
 ## The renderer core
 
 `internal/render` holds what draws, apart from what shows it: `Image`, `Shader` and the uniform
@@ -266,7 +280,7 @@ layer's alone; GLFW's windows pass their content view.
 
 `Run`, `NewWindow`, `Window` and the event types in `app.go` are the API a
 GUI uses: any number of windows, frames on request, input as events. The
-design and the per-driver status are in [docs/window.md](docs/window.md).
+design and the per-driver status are in [ggwd/docs/window.md](ggwd/docs/window.md).
 The test suite runs on it too: `internal/testing.MainWithRunLoop` opens one
 window and runs the tests in its first frame. The legacy `Game`/`RunGame` API
 is gone from the public surface, along with the root-level functions that
@@ -315,7 +329,7 @@ both ways render the same pixels.
 
 ## Not done yet
 
-- More than one canvas on WebGL (`docs/window.md`). Metal and macOS OpenGL
+- More than one canvas on WebGL (`ggwd/docs/window.md`). Metal and macOS OpenGL
   ran several windows; DirectX 11/12 and OpenGL on Linux and Windows accept
   several surfaces but were cross-compiled only.
 - IME composition on the event path in the browser, which still uses

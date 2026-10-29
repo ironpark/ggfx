@@ -52,7 +52,7 @@ func skipTooSlowTests(t *testing.T) bool {
 
 func TestMain(m *testing.M) {
 	render.SetPanicOnErrorOnReadingPixelsForTesting(true)
-	t.MainWithRunLoop(m)
+	t.MainInFrame(m)
 }
 
 func openEbitenImage() (*ggfx.Image, image.Image, error) {

@@ -38,7 +38,7 @@ const (
 func TestMain(m *testing.M) {
 	atlas.SetImageSizeForTesting(minSourceImageSizeForTesting, minDestinationImageSizeForTesting, maxImageSizeForTesting)
 	defer atlas.ResetImageSizeForTesting()
-	t.MainWithRunLoop(m)
+	t.MainInFrame(m)
 }
 
 func quadVertices(sw, sh, x, y int, scalex float32) []float32 {

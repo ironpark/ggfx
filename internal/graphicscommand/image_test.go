@@ -39,7 +39,7 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
-	etesting.MainWithRunLoop(m)
+	etesting.MainInFrame(m)
 }
 
 func quadVertices(w, h float32) []float32 {

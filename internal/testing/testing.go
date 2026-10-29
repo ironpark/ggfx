@@ -12,51 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
 package testing
 
 import (
+	"fmt"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/ironpark/ggfx"
 )
 
-// window is the window MainWithRunLoop opens, so that a test can ask for its
-// size instead of the removed root-level ScreenSize.
-var window *ggfx.Window
-
-// Window returns the window the test run loop opened, or nil outside it.
-func Window() *ggfx.Window {
-	return window
+func init() {
+	// The renderer is initialized on the main thread, which init runs on.
+	runtime.LockOSThread()
 }
 
-// MainWithRunLoop runs m inside a ggfx event loop, which is what makes
-// (*Image).At and the rest of the graphics API available to a test. The tests
-// run in the window's first frame, between the atlas's begin and end of frame.
-func MainWithRunLoop(m *testing.M) {
-	code := 1
-	err := ggfx.Run(ggfx.HandlerFunc(func(ev ggfx.Event) error {
-		switch ev.(type) {
-		case ggfx.StartEvent:
-			w, err := ggfx.NewWindow(&ggfx.WindowOptions{
-				Title:  "ggfx tests",
-				Width:  320,
-				Height: 240,
-			})
-			if err != nil {
-				return err
-			}
-			window = w
-		case ggfx.FrameEvent:
-			code = m.Run()
-			return ggfx.Termination
-		}
-		return nil
-	}), nil)
+// MainInFrame runs m inside one frame of the renderer, with no window: that is what makes
+// (*Image).At and the rest of the graphics API available to a test. OpenGL needs a context to
+// draw in, which the test gets of its own where it can (macOS); elsewhere a test runs with the
+// driver that needs none.
+func MainInFrame(m *testing.M) {
+	code, err := runInFrame(m)
 	if err != nil {
 		panic(err)
 	}
-	if code != 0 {
-		os.Exit(code)
+	os.Exit(code)
+}
+
+func runInFrame(m *testing.M) (int, error) {
+	if err := ggfx.Init(&ggfx.InitOptions{Canvas: canvas()}); err != nil {
+		return 0, err
 	}
+	defer ggfx.Terminate()
+
+	var info ggfx.DebugInfo
+	ggfx.ReadDebugInfo(&info)
+	if info.GraphicsLibrary == ggfx.GraphicsLibraryOpenGL && runtime.GOOS != "js" {
+		c, err := newGLContext()
+		if err != nil {
+			return 0, fmt.Errorf("testing: OpenGL needs a context: %w", err)
+		}
+		ggfx.SetGLContext(c)
+	}
+
+	ggfx.AdvanceTick()
+	if err := ggfx.BeginFrame(); err != nil {
+		return 0, err
+	}
+	code := m.Run()
+	if err := ggfx.EndFrame(); err != nil {
+		return 0, err
+	}
+	if err := ggfx.Flush(false); err != nil {
+		return 0, err
+	}
+	return code, nil
 }

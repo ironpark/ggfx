@@ -1202,7 +1202,7 @@ func MaxImageSize() int {
 // For example, you should avoid to call NewImage every Update or Draw call.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
-// NewImage panics once [Run] has finished.
+// NewImage panics once [Terminate] was called.
 func NewImage(width, height int) *Image {
 	return newImage(image.Rect(0, 0, width, height), atlas.ImageTypeRegular)
 }
@@ -1233,7 +1233,7 @@ type NewImageOptions struct {
 // For example, you should avoid to call NewImageWithOptions every Update or Draw call.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
-// NewImageWithOptions panics once [Run] has finished.
+// NewImageWithOptions panics once [Terminate] was called.
 func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Image {
 	imageType := atlas.ImageTypeRegular
 	if options != nil && options.Unmanaged {
@@ -1257,8 +1257,8 @@ func screenImage(cur *Image, img *render.Image) *Image {
 }
 
 func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
-	if runEnded.Load() {
-		panic("ggfx: NewImage cannot be called after Run finishes")
+	if render.Terminated() {
+		panic("ggfx: NewImage cannot be called after Terminate")
 	}
 
 	width, height := bounds.Dx(), bounds.Dy()
@@ -1285,7 +1285,7 @@ func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
 // For example, you should avoid to call NewImageFromImage every Update or Draw call.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
-// NewImageFromImage panics once [Run] has finished.
+// NewImageFromImage panics once [Terminate] was called.
 //
 // The returned image's upper-left position is always (0, 0). The source's bounds are not respected.
 func NewImageFromImage(source image.Image) *Image {
@@ -1318,7 +1318,7 @@ type NewImageFromImageOptions struct {
 // For example, you should avoid to call NewImageFromImageWithOptions every Update or Draw call.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
-// NewImageFromImageWithOptions panics once [Run] has finished.
+// NewImageFromImageWithOptions panics once [Terminate] was called.
 func NewImageFromImageWithOptions(source image.Image, options *NewImageFromImageOptions) *Image {
 	if options == nil {
 		options = &NewImageFromImageOptions{}

@@ -12,45 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ggfx provides the graphics, windowing and input API that ggui is built on.
+// Package ggfx is a renderer: images, shaders, text through text/v2, vectors through vector and
+// SVG through svg, drawn on the GPU and presented on surfaces that a window system owns.
 //
-// An application starts with [Run], which drives a handler with events. The handler creates its
-// windows on [StartEvent] and draws on [FrameEvent]; frames are delivered on request rather than
-// on a tick.
+// ggfx has no windows. A window system initializes it with [Init], makes a [Surface] of each
+// window's native view with [NewSurface], and draws a frame by drawing to the surface's
+// [Surface.Screen] between [BeginFrame] and [EndFrame] and presenting with [Flush]. ggwd
+// (github.com/ironpark/ggfx/ggwd) is the window system ggui uses; renderer.go shows the shape of
+// a frame.
 //
-//	func main() {
-//	    var window *ggfx.Window
-//	    err := ggfx.Run(ggfx.HandlerFunc(func(ev ggfx.Event) error {
-//	        switch ev := ev.(type) {
-//	        case ggfx.StartEvent:
-//	            w, err := ggfx.NewWindow(&ggfx.WindowOptions{Title: "Title", Width: 640, Height: 480})
-//	            if err != nil {
-//	                return err
-//	            }
-//	            window = w
-//	        case ggfx.FrameEvent:
-//	            // Draw ev.Screen.
-//	        }
-//	        return nil
-//	    }), nil)
-//	    if err != nil {
-//	        log.Fatal(err)
-//	    }
-//	}
-//
-// The window model and the event contract are documented in docs/window.md.
-//
-// In the API document, 'the main thread' means the goroutine in init(), main() and their callees without 'go'
-// statement. It is assured that 'the main thread' runs on the OS main thread. There are some Ebitengine functions (e.g.,
-// AppendMonitors) that must be called on the main thread under some conditions (typically, before
-// Run is called).
+// Images can be made and drawn to at any time from any goroutine. Their draws run in a frame, and
+// reading pixels waits for one. [Init] is called on the main thread, the goroutine running main
+// on the OS main thread.
 //
 // # Environment variables
 //
-// `EBITENGINE_SCREENSHOT_KEY` environment variable specifies the key
 // `EBITENGINE_GRAPHICS_LIBRARY` environment variable specifies the graphics library.
-// If the specified graphics library is not available, Run returns an error.
-// This environment variable works when Run is called with GraphicsLibraryAuto.
+// If the specified graphics library is not available, Init returns an error.
+// This environment variable works when Init is called with GraphicsLibraryAuto.
 // This can take one of the following value:
 //
 //	"auto":         Ebitengine chooses the graphics library automatically. This is the default value.
@@ -88,19 +67,7 @@
 // `ebitenginegldebug` enables a debug mode for OpenGL. This is valid only when the graphics library is OpenGL.
 // This affects performance very much.
 //
-// `ebitenginesinglethread` disables Ebitengine's thread safety to unlock maximum performance. If you use this you will have
-// to manage threads yourself. Functions like `SetWindowSize` will no longer be concurrent-safe with this build tag.
-// They must be called from the main thread or the same goroutine as the event handler.
-// `ebitenginesinglethread` works only with desktops.
-// `ebitenginesinglethread` is deprecated; use RunOptions.SingleThread instead.
-//
 // `ggfxnowasmsimd` excludes the WebAssembly SIMD (SIMD128) instructions that speed up batches of vertices and
 // indices. A WebAssembly engine without SIMD128 support, such as Safari before 16.4, cannot load a module that
 // includes them at all. This is valid only for WebAssembly.
-//
-// `nintendosdk` is for NintendoSDK (e.g. Nintendo Switch).
-//
-// `nintendosdkprofile` enables a profiler for NintendoSDK.
-//
-// `playstation5` is for PlayStation 5.
 package ggfx

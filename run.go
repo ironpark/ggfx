@@ -16,96 +16,10 @@ package ggfx
 
 import (
 	"runtime"
-	"sync/atomic"
 
 	ecolor "github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/render"
-	"github.com/ironpark/ggfx/internal/ui"
 )
-
-// runEnded reports that [Run] returned, after which no image can be created.
-var runEnded atomic.Bool
-
-// Termination is a special error which indicates termination without error.
-var Termination = ui.RegularTermination
-
-// RunOptions are the options of [Run].
-type RunOptions struct {
-	// GraphicsLibrary is a graphics library Ebitengine will use.
-	//
-	// The default (zero) value is GraphicsLibraryAuto, which lets Ebitengine choose the graphics library.
-	GraphicsLibrary GraphicsLibrary
-
-	// InitUnfocused starts the page without taking focus. On desktops the equivalent is
-	// [WindowOptions.Unfocused], which is per window; this applies to the browser, where the
-	// decision is made before the canvas is bound.
-	//
-	// The default (zero) value is false, which means that the page takes focus.
-	InitUnfocused bool
-
-	// ScreenTransparent makes the browser's canvas composite with the page behind it. It is
-	// read at initialization, as the browser has one canvas. Desktop windows use
-	// [WindowOptions.Transparent] instead.
-	//
-	// The default (zero) value is false: the canvas is opaque.
-	ScreenTransparent bool
-
-	// SkipTaskbar indicates whether an application icon is shown on a taskbar or not. It
-	// applies to every window.
-	//
-	// SkipTaskbar is valid only on Windows.
-	//
-	// The default (zero) value is false, which means that an icon is shown on a taskbar.
-	SkipTaskbar bool
-
-	// SingleThread indicates whether the single thread mode is used explicitly or not.
-	// The single thread mode disables Ebitengine's thread safety to unlock maximum performance.
-	// If you use this you will have to manage threads yourself.
-	// Window methods will no longer be concurrent-safe in the single thread mode. They must be
-	// called from the main thread or the same goroutine as the event handler.
-	//
-	// SingleThread works only with desktops and consoles.
-	//
-	// If SingleThread is false, and if the build tag `ebitenginesinglethread` is specified,
-	// the single thread mode is used.
-	//
-	// The default (zero) value is false, which means that the single thread mode is disabled.
-	SingleThread bool
-
-	// DisableHiDPI indicates whether the rendering for HiDPI is disabled or not.
-	// If HiDPI is disabled, the device scale factor is always 1 i.e. Monitor's DeviceScaleFactor always returns 1.
-	// This is useful to get a better performance on HiDPI displays, at the expense of rendering quality.
-	//
-	// DisableHiDPI is available only on browsers.
-	//
-	// The default (zero) value is false, which means that HiDPI is enabled.
-	DisableHiDPI bool
-
-	// ColorSpace indicates the color space of the screen.
-	//
-	// ColorSpace is available only with some graphics libraries (macOS Metal and WebGL so far).
-	// Otherwise, ColorSpace is ignored.
-	//
-	// The default (zero) value is ColorSpaceDefault, which means that color space depends on the environment.
-	ColorSpace ColorSpace
-
-	// ApplePressAndHoldEnabled indicates whether the press-and-hold feature is enabled or not.
-	// If true, pressing and holding a key might show a menu to select a character glyph variant.
-	// This is useful for GUI applications, but it changes what the keyboard reports: pressing
-	// and holding Q would not repeat 'q' as [TextEvent].
-	// If false, pressing and holding a key repeats the key event.
-	//
-	// ApplePressAndHoldEnabled is available only on macOS.
-	//
-	// The default (zero) value is false, which means that the press-and-hold feature is disabled.
-	ApplePressAndHoldEnabled bool
-
-	// X11ClassName is a class name in the ICCCM WM_CLASS window property.
-	X11ClassName string
-
-	// X11InstanceName is an instance name in the ICCCM WM_CLASS window property.
-	X11InstanceName string
-}
 
 // toRenderColorSpace resolves ColorSpaceDefault to the environment's color space.
 func toRenderColorSpace(colorSpace ColorSpace) ecolor.ColorSpace {
@@ -120,80 +34,11 @@ func toRenderColorSpace(colorSpace ColorSpace) ecolor.ColorSpace {
 	return ecolor.ColorSpaceSRGB
 }
 
-func toUIRunOptions(options *RunOptions) *ui.RunOptions {
-	const (
-		defaultX11ClassName    = "Ebitengine-Application"
-		defaultX11InstanceName = "ebitengine-application"
-	)
-
-	var colorSpace ecolor.ColorSpace
-	if options != nil {
-		colorSpace = toRenderColorSpace(options.ColorSpace)
-	} else {
-		colorSpace = toRenderColorSpace(ColorSpaceDefault)
-	}
-
-	if options == nil {
-		return &ui.RunOptions{
-			ColorSpace:      colorSpace,
-			X11ClassName:    defaultX11ClassName,
-			X11InstanceName: defaultX11InstanceName,
-		}
-	}
-
-	if options.X11ClassName == "" {
-		options.X11ClassName = defaultX11ClassName
-	}
-	if options.X11InstanceName == "" {
-		options.X11InstanceName = defaultX11InstanceName
-	}
-
-	return &ui.RunOptions{
-		GraphicsLibrary:          render.GraphicsLibrary(options.GraphicsLibrary),
-		InitUnfocused:            options.InitUnfocused,
-		ScreenTransparent:        options.ScreenTransparent,
-		SkipTaskbar:              options.SkipTaskbar,
-		SingleThread:             options.SingleThread,
-		DisableHiDPI:             options.DisableHiDPI,
-		ColorSpace:               colorSpace,
-		ApplePressAndHoldEnabled: options.ApplePressAndHoldEnabled,
-		X11ClassName:             options.X11ClassName,
-		X11InstanceName:          options.X11InstanceName,
-	}
-}
-
-// AbsPather is a directory entry or a file that has a path in the real file system.
-type AbsPather interface {
-	// AbsPath returns the absolute path in the real file system.
-	AbsPath() string
-}
-
 // Tick returns the current tick count.
-// The tick count starts with 0 and is incremented by one on every iteration of the event loop,
-// by [Run] or by a window system's [AdvanceTick].
+// The tick count starts with 0 and is incremented by one on every iteration of a window system's
+// event loop, through [AdvanceTick].
 //
 // Tick is concurrent-safe.
 func Tick() int64 {
 	return render.Tick()
-}
-
-// RunOnMainThread runs the given function on the main thread.
-// RunOnMainThread executes the function synchronously and returns after the function completes.
-//
-// If RunOnMainThread is called on the main thread, RunOnMainThread blocks forever.
-//
-// RunOnMainThread might not run the function, e.g. before [Run] starts or after it ends.
-//
-// RunOnMainThread is useful to access platform-specific APIs in a safe way.
-//
-// RunOnMainThread panics if the platform doesn't support it.
-func RunOnMainThread(f func()) {
-	ui.Get().RunOnMainThread(f)
-}
-
-// Wake makes the handler receive a [WakeEvent] soon, even while every window is hidden, occluded
-// or minimized and draws no frames. It is how work handed over from another goroutine reaches
-// the handler without waiting for a window to draw. Wake can be called from any goroutine.
-func Wake() {
-	ui.Get().Wake()
 }

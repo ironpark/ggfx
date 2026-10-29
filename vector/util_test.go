@@ -26,7 +26,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	t.MainWithRunLoop(m)
+	t.MainInFrame(m)
 }
 
 // Issue #2589
