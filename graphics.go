@@ -39,7 +39,7 @@ const (
 type GraphicsLibrary int
 
 const (
-	// GraphicsLibraryAuto represents the automatic choice of graphics library by Ebitengine.
+	// GraphicsLibraryAuto lets the renderer choose the graphics library.
 	GraphicsLibraryAuto GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryAuto)
 
 	// GraphicsLibraryUnknown represents the state at which graphics library cannot be determined,
@@ -54,13 +54,6 @@ const (
 
 	// GraphicsLibraryMetal represents the graphics library Apple's Metal.
 	GraphicsLibraryMetal GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryMetal)
-
-	// GraphicsLibraryPlayStation5 represents the graphics library PlayStation 5.
-	GraphicsLibraryPlayStation5 GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryPlayStation5)
-
-	// GraphicsLibraryRemote represents a virtualization guest that forwards its graphics commands to a
-	// host process rather than rendering on a local GPU.
-	GraphicsLibraryRemote GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryRemote)
 )
 
 // String returns a string representing the graphics library.

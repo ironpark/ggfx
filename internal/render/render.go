@@ -73,7 +73,7 @@ func init() {
 // Options are what Init is given.
 type Options struct {
 	// GraphicsLibrary is the graphics library to draw with. GraphicsLibraryAuto chooses one, and
-	// the EBITENGINE_GRAPHICS_LIBRARY environment variable can name one then.
+	// the GGFX_GRAPHICS_LIBRARY environment variable can name one then.
 	GraphicsLibrary GraphicsLibrary
 
 	ColorSpace color.ColorSpace

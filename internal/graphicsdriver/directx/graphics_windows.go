@@ -15,6 +15,7 @@
 package directx
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -88,17 +89,14 @@ func NewGraphics() (graphicsdriver.Graphics, error) {
 	featureLevel := _D3D_FEATURE_LEVEL_11_0
 
 	// Parse a special environment variable for backward compatibility.
-	if env := os.Getenv("EBITENGINE_DIRECTX_FEATURE_LEVEL"); env != "" {
+	if env := cmp.Or(os.Getenv("GGFX_DIRECTX_FEATURE_LEVEL"), os.Getenv("EBITENGINE_DIRECTX_FEATURE_LEVEL")); env != "" {
 		if fl, ok := parseFeatureLevel(env); ok {
 			featureLevel = fl
 		}
 	}
 
-	env := os.Getenv("EBITENGINE_DIRECTX")
-	if env == "" {
-		// For backward compatibility, read the EBITEN_ version.
-		env = os.Getenv("EBITEN_DIRECTX")
-	}
+	// Ebitengine's names are read too, for backward compatibility.
+	env := cmp.Or(os.Getenv("GGFX_DIRECTX"), os.Getenv("EBITENGINE_DIRECTX"), os.Getenv("EBITEN_DIRECTX"))
 
 	for t := range strings.SplitSeq(env, ",") {
 		t := strings.TrimSpace(t)

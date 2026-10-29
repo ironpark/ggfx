@@ -35,7 +35,7 @@ import (
 // InitOptions are what [Init] is given.
 type InitOptions struct {
 	// GraphicsLibrary is the graphics library to draw with. GraphicsLibraryAuto, the default,
-	// chooses one, and the EBITENGINE_GRAPHICS_LIBRARY environment variable can name one then.
+	// chooses one, and the GGFX_GRAPHICS_LIBRARY environment variable can name one then.
 	GraphicsLibrary GraphicsLibrary
 
 	// ColorSpace is the color space of the screens. It is honored by Metal and WebGL.

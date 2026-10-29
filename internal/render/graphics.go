@@ -15,6 +15,7 @@
 package render
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 
@@ -25,13 +26,8 @@ import (
 // can name one, and otherwise the platform chooses.
 func newGraphicsDriver(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {
 	if lib == GraphicsLibraryAuto {
-		envName := "EBITENGINE_GRAPHICS_LIBRARY"
-		env := os.Getenv(envName)
-		if env == "" {
-			// For backward compatibility, read the EBITEN_ version.
-			envName = "EBITEN_GRAPHICS_LIBRARY"
-			env = os.Getenv(envName)
-		}
+		// Ebitengine's names are read too, for backward compatibility.
+		env := cmp.Or(os.Getenv("GGFX_GRAPHICS_LIBRARY"), os.Getenv("EBITENGINE_GRAPHICS_LIBRARY"), os.Getenv("EBITEN_GRAPHICS_LIBRARY"))
 
 		switch env {
 		case "", "auto":
@@ -70,8 +66,6 @@ const (
 	GraphicsLibraryOpenGL
 	GraphicsLibraryDirectX
 	GraphicsLibraryMetal
-	GraphicsLibraryPlayStation5
-	GraphicsLibraryRemote
 )
 
 func (g GraphicsLibrary) String() string {
@@ -86,10 +80,6 @@ func (g GraphicsLibrary) String() string {
 		return "DirectX"
 	case GraphicsLibraryMetal:
 		return "Metal"
-	case GraphicsLibraryPlayStation5:
-		return "PlayStation 5"
-	case GraphicsLibraryRemote:
-		return "Remote"
 	default:
 		return fmt.Sprintf("GraphicsLibrary(%d)", g)
 	}

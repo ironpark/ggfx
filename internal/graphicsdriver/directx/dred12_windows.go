@@ -25,7 +25,7 @@ import (
 )
 
 // Device Removed Extended Data (DRED): records auto-breadcrumbs (the GPU's command history) and the
-// page-fault address that preceded a device removal. Enabled via the EBITENGINE_DIRECTX dred token to
+// page-fault address that preceded a device removal. Enabled via the GGFX_DIRECTX dred token to
 // diagnose a DXGI_ERROR_DEVICE_REMOVED — a non-zero page-fault VA means the GPU dereferenced a bad
 // address (a bug in the recorded command stream), while no page fault points at a driver-internal
 // failure.

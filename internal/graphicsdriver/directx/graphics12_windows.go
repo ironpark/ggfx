@@ -157,7 +157,7 @@ func (g *graphics12) initializeDesktop(useWARP bool, useDebugLayer bool, useDRED
 		g.debug.EnableDebugLayer()
 	}
 
-	// EBITENGINE_DIRECTX's dred token enables Device Removed Extended Data so a device removal can be
+	// GGFX_DIRECTX's dred token enables Device Removed Extended Data so a device removal can be
 	// diagnosed (the page-fault address and the GPU's last command). It must be enabled before the
 	// device is created.
 	if useDRED {

@@ -27,18 +27,17 @@
 //
 // # Environment variables
 //
-// `EBITENGINE_GRAPHICS_LIBRARY` environment variable specifies the graphics library.
+// `GGFX_GRAPHICS_LIBRARY` environment variable specifies the graphics library.
 // If the specified graphics library is not available, Init returns an error.
 // This environment variable works when Init is called with GraphicsLibraryAuto.
 // This can take one of the following value:
 //
-//	"auto":         Ebitengine chooses the graphics library automatically. This is the default value.
-//	"opengl":       OpenGL, OpenGL ES, or WebGL.
-//	"directx":      DirectX. This works only on Windows.
-//	"metal":        Metal. This works only on macOS or iOS.
-//	"playstation5": PlayStation 5. This works only on PlayStation 5.
+//	"auto":    The renderer chooses the graphics library automatically. This is the default value.
+//	"opengl":  OpenGL, OpenGL ES, or WebGL.
+//	"directx": DirectX. This works only on Windows.
+//	"metal":   Metal. This works only on macOS or iOS.
 //
-// `EBITENGINE_DIRECTX` environment variable specifies various parameters for DirectX.
+// `GGFX_DIRECTX` environment variable specifies various parameters for DirectX.
 // You can specify multiple values separated by a comma. The default value is empty (i.e. no parameters).
 //
 //	"debug":                      Use a debug layer.
@@ -59,15 +58,20 @@
 // The option "dred" is valid only for DirectX 12 and is independent of "debug".
 // On a device removal, it reports the GPU's last command and the page-fault address via log/slog.
 //
+// Ebitengine's names, `EBITENGINE_GRAPHICS_LIBRARY` and `EBITENGINE_DIRECTX`, are read when the
+// ggfx ones are not set.
+//
 // # Build tags
 //
-// `ebitenginedebug` outputs a log of graphics commands. This is useful to know what happens in Ebitengine. In general, the
-// number of graphics commands affects the performance of your game.
+// `ggfxdebug` outputs a log of graphics commands. This is useful to know what happens in the renderer. In general, the
+// number of graphics commands affects the performance of your app.
 //
-// `ebitenginegldebug` enables a debug mode for OpenGL. This is valid only when the graphics library is OpenGL.
+// `ggfxgldebug` enables a debug mode for OpenGL. This is valid only when the graphics library is OpenGL.
 // This affects performance very much.
 //
 // `ggfxnowasmsimd` excludes the WebAssembly SIMD (SIMD128) instructions that speed up batches of vertices and
 // indices. A WebAssembly engine without SIMD128 support, such as Safari before 16.4, cannot load a module that
 // includes them at all. This is valid only for WebAssembly.
+//
+// Ebitengine's tags, `ebitenginedebug` and `ebitenginegldebug`, work too.
 package ggfx
