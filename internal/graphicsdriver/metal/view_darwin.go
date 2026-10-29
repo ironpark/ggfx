@@ -53,6 +53,10 @@ type view struct {
 	device mtl.Device
 	ml     ca.MetalLayer
 
+	// pixelFormat is the layer's pixel format, which the view sets once. A draw to the screen
+	// asks for it, and asking the layer is a message to it, allocating each time.
+	pixelFormat mtl.PixelFormat
+
 	once sync.Once
 
 	caDisplayLink    uintptr
@@ -113,7 +117,7 @@ func (v *view) setWindowState(liveResizing, fullscreen bool) {
 }
 
 func (v *view) colorPixelFormat() mtl.PixelFormat {
-	return v.ml.PixelFormat()
+	return v.pixelFormat
 }
 
 func (v *view) initialize(device mtl.Device, colorSpace color.ColorSpace) error {
@@ -130,7 +134,8 @@ func (v *view) initialize(device mtl.Device, colorSpace color.ColorSpace) error 
 	// The pixel format for a Metal layer must be MTLPixelFormatBGRA8Unorm,
 	// MTLPixelFormatBGRA8Unorm_sRGB, MTLPixelFormatRGBA16Float, MTLPixelFormatBGRA10_XR, or
 	// MTLPixelFormatBGRA10_XR_sRGB.
-	v.ml.SetPixelFormat(mtl.PixelFormatBGRA8UNorm)
+	v.pixelFormat = mtl.PixelFormatBGRA8UNorm
+	v.ml.SetPixelFormat(v.pixelFormat)
 
 	// Presents wait for the display. The layer's default might differ (#1364).
 	v.ml.SetDisplaySyncEnabled(true)
