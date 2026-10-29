@@ -283,7 +283,12 @@ both ways render the same pixels.
 - On Apple's software OpenGL renderer the batched vector fill does not match the unbatched one
   pixel for pixel (`TestFillPathBatchingIsExact`, `TestFillPathBatchingWithGeneratedPaths`), with
   antialiasing and without: the soundness argument under "Draw call cost" leans on how a GPU
-  rasterizes, which that renderer does differently. CI skips the two tests there.
+  rasterizes, which that renderer does differently. CI skips the two tests there. To do: find
+  whether a GPU's driver differs too (Mesa's llvmpipe, other vendors), and either make the
+  batching exact for any rasterizer that follows the pixel-center rules or batch only where it is.
+- To do: make an OpenGL context for the tests on Linux, with EGL's surfaceless platform
+  (`EGL_MESA_platform_surfaceless`) and Mesa's llvmpipe, in `internal/testing` beside
+  `glcontext_darwin.go`, so that CI runs the drawing tests on Linux OpenGL and OpenGL ES too.
 - `TestImageBlendFactor` makes ten thousand blend pipelines, and the CI runners' virtual Metal GPU
   fails to compile one of them now and then; CI skips it on Metal.
 - Metal's live-resize and fullscreen presentation now hangs on the window state ggwd sets, and
