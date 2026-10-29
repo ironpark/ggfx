@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/host"
 )
 
 func init() {
@@ -32,26 +33,27 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
-	if err := ggfx.Init(&ggfx.InitOptions{GraphicsLibrary: ggfx.GraphicsLibraryMetal}); err != nil {
+	if err := host.Init(&host.Options{GraphicsLibrary: ggfx.GraphicsLibraryMetal}); err != nil {
 		panic(err)
 	}
 	code := m.Run()
-	ggfx.Terminate()
+	host.Terminate()
 	os.Exit(code)
 }
 
 // frame runs f in a frame and flushes it, as a window system's loop does.
 func frame(t *testing.T, f func()) {
 	t.Helper()
-	ggfx.AdvanceTick()
-	if err := ggfx.BeginFrame(); err != nil {
+	host.AdvanceTick()
+	fr, err := host.BeginFrame()
+	if err != nil {
 		t.Fatal(err)
 	}
 	f()
-	if err := ggfx.EndFrame(); err != nil {
+	if err := fr.End(); err != nil {
 		t.Fatal(err)
 	}
-	if err := ggfx.Flush(false); err != nil {
+	if _, err := host.Flush(false); err != nil {
 		t.Fatal(err)
 	}
 }

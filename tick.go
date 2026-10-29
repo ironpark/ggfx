@@ -14,29 +14,11 @@
 
 package ggfx
 
-import (
-	"runtime"
-
-	ecolor "github.com/ironpark/ggfx/internal/color"
-	"github.com/ironpark/ggfx/internal/render"
-)
-
-// toRenderColorSpace resolves ColorSpaceDefault to the environment's color space.
-func toRenderColorSpace(colorSpace ColorSpace) ecolor.ColorSpace {
-	if colorSpace != ColorSpaceDefault {
-		return ecolor.ColorSpace(colorSpace)
-	}
-	if runtime.GOOS == "darwin" {
-		// On macOS, the default color space is Display P3.
-		// TODO: Remove this logic at v3. sRGB should be the default in the future (#3349).
-		return ecolor.ColorSpaceDisplayP3
-	}
-	return ecolor.ColorSpaceSRGB
-}
+import "github.com/ironpark/ggfx/internal/render"
 
 // Tick returns the current tick count.
 // The tick count starts with 0 and is incremented by one on every iteration of a window system's
-// event loop, through [AdvanceTick].
+// event loop, through ggfx/host's AdvanceTick.
 //
 // Tick is concurrent-safe.
 func Tick() int64 {

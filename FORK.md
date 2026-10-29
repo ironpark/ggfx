@@ -214,9 +214,12 @@ macOS OpenGL draws in a CGL context the harness makes. ggwd's tests run in a win
 `internal/render` holds what draws, apart from what shows it: `Image`, `Shader` and the uniform
 packing, the white image fills draw from, the error state, reads of pixels that wait for a frame,
 driver creation and the tick. It was the drawing half of `internal/ui`. A window system drives it
-through what `renderer.go` makes public: `Init`, `Terminate`, `NewSurface`, `Surface.Screen`,
-`BeginFrame`, `EndFrame`, `Flush` and the rest. The render thread starts at `Init`; pacing frames
-is the window system's. ggfx's own tests run inside one frame with no window
+through package `host`: `Init`, `Terminate`, `NewSurface`, `BeginFrame`, `Frame.Screen`,
+`Frame.End`, `Flush` and the rest, so that an app drawing with ggfx does not see them. A surface's
+target is typed (`NSView`, `HWND`, `GLWindow`, `Canvas`), and the WebGL driver is created for the
+canvas of the first surface, as WebGL draws to the canvas it was created for. The driver's
+particulars are one value, `CurrentDriver()`, and whether a present was occluded comes back from
+`Flush`. The render thread starts at `Init`; pacing frames is the window system's. ggfx's own tests run inside one frame with no window
 (`internal/testing.MainInFrame`); on macOS, OpenGL draws in a CGL context the harness makes. See
 `docs/renderer-split.md` for how the split went.
 

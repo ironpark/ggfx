@@ -15,14 +15,12 @@
 // Package ggfx is a renderer: images, shaders, text through text/v2, vectors through vector and
 // SVG through svg, drawn on the GPU and presented on surfaces that a window system owns.
 //
-// ggfx has no windows. A window system initializes it with [Init], makes a [Surface] of each
-// window's native view with [NewSurface], and draws a frame by drawing to the surface's
-// [Surface.Screen] between [BeginFrame] and [EndFrame] and presenting with [Flush]. ggwd
-// (github.com/ironpark/ggwd) is the window system ggui uses; renderer.go shows the shape of
-// a frame.
+// ggfx has no windows. A window system drives it through package host: it initializes the
+// renderer, makes a surface of each window's native view, and draws a frame to the surface's
+// screen and presents it. ggwd (github.com/ironpark/ggwd) is the window system ggui uses.
 //
 // Images can be made and drawn to at any time from any goroutine. Their draws run in a frame, and
-// reading pixels waits for one. [Init] is called on the main thread, the goroutine running main
+// reading pixels waits for one. host.Init is called on the main thread, the goroutine running main
 // on the OS main thread.
 //
 // # Environment variables

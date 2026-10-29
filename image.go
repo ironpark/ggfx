@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/bridge"
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
@@ -1188,7 +1189,7 @@ func MaxImageSize() int {
 // For example, you should avoid to call NewImage every Update or Draw call.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
-// NewImage panics once [Terminate] was called.
+// NewImage panics once host.Terminate was called.
 func NewImage(width, height int) *Image {
 	return newImage(image.Rect(0, 0, width, height), atlas.ImageTypeRegular)
 }
@@ -1219,7 +1220,7 @@ type NewImageOptions struct {
 // For example, you should avoid to call NewImageWithOptions every Update or Draw call.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
-// NewImageWithOptions panics once [Terminate] was called.
+// NewImageWithOptions panics once host.Terminate was called.
 func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Image {
 	imageType := atlas.ImageTypeRegular
 	if options != nil && options.Unmanaged {
@@ -1228,18 +1229,14 @@ func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Imag
 	return newImage(bounds, imageType)
 }
 
-// screenImage returns the Image for a surface's screen img: cur when it already is, and a new one
-// when the surface replaced its screen.
-func screenImage(cur *Image, img *render.Image) *Image {
-	if cur != nil && cur.image == img {
-		return cur
+// The Image of a surface's screen is made by ggfx/host, through the bridge.
+func init() {
+	bridge.ScreenImage = func(img *render.Image) any {
+		width, height := img.Size()
+		i := &Image{image: img, bounds: image.Rect(0, 0, width, height)}
+		i.addr = i
+		return i
 	}
-	width, height := img.Size()
-	i := &Image{}
-	i.image = img
-	i.bounds = image.Rect(0, 0, width, height)
-	i.addr = i
-	return i
 }
 
 func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
@@ -1271,7 +1268,7 @@ func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
 // For example, you should avoid to call NewImageFromImage every Update or Draw call.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
-// NewImageFromImage panics once [Terminate] was called.
+// NewImageFromImage panics once host.Terminate was called.
 //
 // The returned image's upper-left position is always (0, 0). The source's bounds are not respected.
 func NewImageFromImage(source image.Image) *Image {
@@ -1304,7 +1301,7 @@ type NewImageFromImageOptions struct {
 // For example, you should avoid to call NewImageFromImageWithOptions every Update or Draw call.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
-// NewImageFromImageWithOptions panics once [Terminate] was called.
+// NewImageFromImageWithOptions panics once host.Terminate was called.
 func NewImageFromImageWithOptions(source image.Image, options *NewImageFromImageOptions) *Image {
 	if options == nil {
 		options = &NewImageFromImageOptions{}

@@ -15,17 +15,28 @@
 package render
 
 import (
+	"fmt"
 	"syscall/js"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 )
 
+// newGraphicsDriverFor returns no driver for WebGL: newGraphicsDriverForSurface creates it, with
+// the canvas the first surface is made for.
 func newGraphicsDriverFor(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, error) {
 	if lib == GraphicsLibraryOpenGL {
-		return opengl.NewGraphics(o.Canvas.(js.Value), o.ColorSpace)
+		return nil, nil
 	}
 	return nil, errUnsupported(lib)
+}
+
+func newGraphicsDriverForSurface(target any, o *Options) (graphicsdriver.Graphics, error) {
+	canvas, ok := target.(js.Value)
+	if !ok {
+		return nil, fmt.Errorf("render: a WebGL surface needs a canvas but got %T", target)
+	}
+	return opengl.NewGraphics(canvas, o.ColorSpace)
 }
 
 func newAutoGraphicsDriver(o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/host"
 )
 
 func init() {
@@ -41,28 +42,32 @@ func MainInFrame(m *testing.M) {
 }
 
 func runInFrame(m *testing.M) (int, error) {
-	if err := ggfx.Init(&ggfx.InitOptions{Canvas: canvas()}); err != nil {
+	if err := host.Init(nil); err != nil {
 		return 0, err
 	}
-	defer ggfx.Terminate()
+	defer host.Terminate()
 
-	if ggfx.CurrentGraphicsLibrary() == ggfx.GraphicsLibraryOpenGL && runtime.GOOS != "js" {
+	if err := newCanvasSurface(); err != nil {
+		return 0, err
+	}
+	if host.CurrentDriver().Library == ggfx.GraphicsLibraryOpenGL && runtime.GOOS != "js" {
 		c, err := newGLContext()
 		if err != nil {
 			return 0, fmt.Errorf("testing: OpenGL needs a context: %w", err)
 		}
-		ggfx.SetGLContext(c)
+		host.SetGLContext(c)
 	}
 
-	ggfx.AdvanceTick()
-	if err := ggfx.BeginFrame(); err != nil {
+	host.AdvanceTick()
+	f, err := host.BeginFrame()
+	if err != nil {
 		return 0, err
 	}
 	code := m.Run()
-	if err := ggfx.EndFrame(); err != nil {
+	if err := f.End(); err != nil {
 		return 0, err
 	}
-	if err := ggfx.Flush(false); err != nil {
+	if _, err := host.Flush(false); err != nil {
 		return 0, err
 	}
 	return code, nil

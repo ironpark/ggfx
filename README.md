@@ -10,7 +10,7 @@ and drops audio, mobile and console support.
 
 ggfx has no windows. [ggwd](https://github.com/ironpark/ggwd) is the window
 system ggui uses, and it drives ggfx through the public renderer API in
-`renderer.go` alone.
+package `host` alone.
 
 Shaders are documented in [docs/shaders.md](docs/shaders.md).
 

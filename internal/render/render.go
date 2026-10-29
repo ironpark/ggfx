@@ -30,9 +30,13 @@ import (
 )
 
 var (
-	// driver is the graphics driver. It is set once, before any frame.
+	// driver is the graphics driver. It is set once, before any frame: by Init, or in the browser
+	// by the first NewSurface, as WebGL draws to the canvas it is created for.
 	driver  graphicsdriver.Graphics
 	library atomic.Int32
+
+	// options are what Init was given, kept for a driver NewSurface creates.
+	options Options
 
 	// state is where the renderer is in its life: before Init, running, or terminated.
 	state atomic.Int32
@@ -86,26 +90,26 @@ type Options struct {
 	// the layer's properties through it while a window is resized by the user. Nil runs the
 	// function on the calling goroutine.
 	MainThread func(func())
-
-	// Canvas is the browser's canvas, the only one WebGL draws to. It is ignored elsewhere.
-	Canvas any
 }
 
 // Init creates the graphics driver and starts the render thread. It is called once, before
 // anything is drawn: images can be made and drawn to before, but they are not rendered until a
 // frame after Init. Init must be called on the main thread.
+//
+// In the browser, the driver is created by the first NewSurface instead, for the canvas it is
+// given.
 func Init(o *Options) error {
-	if driver != nil {
+	if state.Load() != stateNew {
 		return errors.New("render: Init is called twice")
 	}
 	g, lib, err := newGraphicsDriver(o.GraphicsLibrary, o)
 	if err != nil {
 		return err
 	}
-	if r, ok := g.(interface{ SetMainThreadRunner(func(func())) }); ok && o.MainThread != nil {
-		r.SetMainThreadRunner(o.MainThread)
+	options = *o
+	if g != nil {
+		setDriver(g)
 	}
-	driver = g
 	library.Store(int32(lib))
 
 	if !o.SingleThread {
@@ -120,6 +124,14 @@ func Init(o *Options) error {
 	}
 	state.Store(stateRunning)
 	return nil
+}
+
+// setDriver makes g the graphics driver.
+func setDriver(g graphicsdriver.Graphics) {
+	if r, ok := g.(interface{ SetMainThreadRunner(func(func())) }); ok && options.MainThread != nil {
+		r.SetMainThreadRunner(options.MainThread)
+	}
+	driver = g
 }
 
 // Terminate waits for the queued graphics commands to run and stops the render thread. Nothing

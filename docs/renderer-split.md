@@ -26,38 +26,40 @@ Goes to ggwd:
 
 ## The renderer API
 
-The atlas and the command queue are process-wide, so the renderer is too. `renderer.go` has it:
+The atlas and the command queue are process-wide, so the renderer is too. Package `host` has it,
+apart from the drawing API an app uses:
 
 ```go
-func Init(o *InitOptions) error // GraphicsLibrary, ColorSpace, SingleThread, MainThread, Canvas
+func Init(o *Options) error     // GraphicsLibrary, ColorSpace, SingleThread, MainThread
 func Terminate()
 
-func CurrentGraphicsLibrary() GraphicsLibrary
+func CurrentDriver() Driver     // Library, OpenGLES (which context to create), DirectComposition
 func SetGLContext(c GLContext)  // the hidden context OpenGL draws in on the desktop
-func IsOpenGLES() bool          // which context to create for it
-func SupportsDirectComposition() bool
 
+type SurfaceTarget interface{ /* sealed */ }
 type NSView uintptr             // Metal's target; the view becomes the layer's alone
 type HWND uintptr               // DirectX's target
-type GLPresenter interface{ MakeContextCurrent() error; SwapInterval(int) error; SwapBuffers() error }
+type GLWindow struct{ Context GLPresenter } // OpenGL's on the desktop
+type Canvas js.Value            // WebGL's; the first surface creates the driver for it
 
-func NewSurface(target any, transparent bool) (*Surface, error)
-func (s *Surface) Screen(width, height int) *Image // once a frame; cleared where needed
+func NewSurface(target SurfaceTarget, transparent bool) (*Surface, error)
 func (s *Surface) FramebufferSize() (int, int, bool)
 func (s *Surface) Dispose()
 
-func BeginFrame() error         // also reports the error a read of pixels ran into
-func EndFrame() error
-func Flush(present bool) error  // runs the frames' commands, presents the drawn surfaces
-func Occluded() bool            // the last present waited for nothing
+func BeginFrame() (Frame, error) // also reports the error a read of pixels ran into
+func (f Frame) Screen(s *Surface, width, height int) *ggfx.Image // cleared where needed
+func (f Frame) End() error
+func Flush(present bool) (FlushResult, error) // runs the frames' commands, presents; Occluded
 func FinishForcedFrame() error  // after a frame drawn during a live resize
 func AdvanceTick()
 ```
 
 Pacing, occlusion, live resize and which windows draw are the window system's: the frame pacer,
 which tells a present that waits for the display from one that does not, moved back to
-`internal/ui` on top of `Flush` and `Occluded`. The GL context is set after `Init` rather than
-passed to it, because which context to create depends on the driver `Init` chose (`IsOpenGLES`).
+`internal/ui` on top of `Flush` and its `Occluded`. The GL context is set after `Init` rather
+than passed to it, because which context to create depends on the driver `Init` chose
+(`Driver.OpenGLES`). The API was first in ggfx itself, and moved to `host` once ggwd was out, so
+that an app drawing with ggfx does not see it.
 
 `internal/rendertest` drives this API with no window, on Metal, which renders without a surface.
 

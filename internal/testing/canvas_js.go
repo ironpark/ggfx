@@ -14,11 +14,17 @@
 
 package testing
 
-import "syscall/js"
+import (
+	"syscall/js"
 
-// canvas returns a new canvas in the page, which WebGL draws the tests to.
-func canvas() any {
+	"github.com/ironpark/ggfx/host"
+)
+
+// newCanvasSurface makes a surface of a new canvas in the page, for which the WebGL driver is
+// created and which the tests draw to.
+func newCanvasSurface() error {
 	c := js.Global().Get("document").Call("createElement", "canvas")
 	js.Global().Get("document").Get("body").Call("appendChild", c)
-	return c
+	_, err := host.NewSurface(host.Canvas(c), false)
+	return err
 }

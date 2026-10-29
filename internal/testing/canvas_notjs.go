@@ -16,7 +16,7 @@
 
 package testing
 
-// canvas returns nothing: only the browser draws to a canvas.
-func canvas() any {
+// newCanvasSurface does nothing: only the browser draws to a canvas.
+func newCanvasSurface() error {
 	return nil
 }

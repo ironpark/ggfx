@@ -15,16 +15,11 @@
 package render
 
 import (
+	"errors"
+
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
-
-// NSView is an NSView pointer, what a Metal surface presents to. The view renders the surface and
-// nothing else: the surface becomes its layer.
-type NSView = graphicsdriver.NSView
-
-// HWND is a Win32 window handle, what a DirectX surface presents to.
-type HWND = graphicsdriver.HWND
 
 // Surface is a presentation target: a window's layer or swap chain, or its OpenGL context.
 type Surface struct {
@@ -34,9 +29,20 @@ type Surface struct {
 
 // NewSurface makes a surface for target: an NSView for Metal, an HWND for DirectX, the window's
 // own context for OpenGL on the desktop, which has MakeContextCurrent, SwapInterval and
-// SwapBuffers, and the canvas Init was given in the browser. transparent asks for a surface that
-// composites with what is behind it. NewSurface must be called on the main thread, after Init.
+// SwapBuffers, and the canvas, a js.Value, in the browser, where the first surface creates the
+// driver. transparent asks for a surface that composites with what is behind it. NewSurface must
+// be called on the main thread, after Init.
 func NewSurface(target any, transparent bool) (*Surface, error) {
+	if state.Load() != stateRunning {
+		return nil, errors.New("render: NewSurface is called before Init or after Terminate")
+	}
+	if driver == nil {
+		g, err := newGraphicsDriverForSurface(target, &options)
+		if err != nil {
+			return nil, err
+		}
+		setDriver(g)
+	}
 	s, err := driver.NewSurface(target, transparent)
 	if err != nil {
 		return nil, err
