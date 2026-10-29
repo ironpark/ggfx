@@ -859,7 +859,7 @@ func (cq CommandQueue) Release() {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandqueue/1508686-commandbuffer?language=objc.
 func (cq CommandQueue) CommandBuffer() CommandBuffer {
-	return CommandBuffer{cq.commandQueue.Send(sel_commandBuffer)}
+	return CommandBuffer{objc.ID(cocoa.MsgSend0(cq.commandQueue, sel_commandBuffer))}
 }
 
 // CommandBuffer is a container that stores encoded commands
@@ -871,32 +871,32 @@ type CommandBuffer struct {
 }
 
 func (cb CommandBuffer) Retain() {
-	cb.commandBuffer.Send(sel_retain)
+	cocoa.MsgSend0(cb.commandBuffer, sel_retain)
 }
 
 func (cb CommandBuffer) Release() {
-	cb.commandBuffer.Send(sel_release)
+	cocoa.MsgSend0(cb.commandBuffer, sel_release)
 }
 
 // Status returns the current stage in the lifetime of the command buffer.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1443048-status?language=objc.
 func (cb CommandBuffer) Status() CommandBufferStatus {
-	return CommandBufferStatus(cb.commandBuffer.Send(sel_status))
+	return CommandBufferStatus(cocoa.MsgSend0(cb.commandBuffer, sel_status))
 }
 
 // PresentDrawable registers a drawable presentation to occur as soon as possible.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1443029-presentdrawable?language=objc.
 func (cb CommandBuffer) PresentDrawable(d Drawable) {
-	msgSend(cb.commandBuffer, sel_presentDrawable, uintptr(d.Drawable()))
+	cocoa.MsgSend1(cb.commandBuffer, sel_presentDrawable, uintptr(d.Drawable()))
 }
 
 // Commit commits this command buffer for execution as soon as possible.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1443003-commit?language=objc.
 func (cb CommandBuffer) Commit() {
-	msgSend(cb.commandBuffer, sel_commit)
+	cocoa.MsgSend0(cb.commandBuffer, sel_commit)
 }
 
 // WaitUntilCompleted waits for the execution of this command buffer to complete.
@@ -917,18 +917,23 @@ func (cb CommandBuffer) WaitUntilScheduled() {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1442999-rendercommandencoderwithdescript?language=objc.
 func (cb CommandBuffer) RenderCommandEncoderWithDescriptor(rpd RenderPassDescriptor) RenderCommandEncoder {
-	var renderPassDescriptor = objc.ID(class_MTLRenderPassDescriptor).Send(sel_new)
-	var colorAttachments0 = renderPassDescriptor.Send(sel_colorAttachments).Send(sel_objectAtIndexedSubscript, 0)
-	colorAttachments0.Send(sel_setLoadAction, int(rpd.ColorAttachments[0].LoadAction))
-	colorAttachments0.Send(sel_setStoreAction, int(rpd.ColorAttachments[0].StoreAction))
-	colorAttachments0.Send(sel_setTexture, rpd.ColorAttachments[0].Texture.texture)
-	colorAttachments0.Send(sel_setClearColor, rpd.ColorAttachments[0].ClearColor)
-	var stencilAttachment = renderPassDescriptor.Send(sel_stencilAttachment)
-	stencilAttachment.Send(sel_setLoadAction, int(rpd.StencilAttachment.LoadAction))
-	stencilAttachment.Send(sel_setStoreAction, int(rpd.StencilAttachment.StoreAction))
-	stencilAttachment.Send(sel_setTexture, rpd.StencilAttachment.Texture.texture)
-	var rce = cb.commandBuffer.Send(sel_renderCommandEncoderWithDescriptor, renderPassDescriptor)
-	renderPassDescriptor.Send(sel_release)
+	send0 := func(id objc.ID, sel objc.SEL) objc.ID { return objc.ID(cocoa.MsgSend0(id, sel)) }
+	send1 := func(id objc.ID, sel objc.SEL, a uintptr) { cocoa.MsgSend1(id, sel, a) }
+	var renderPassDescriptor = send0(objc.ID(class_MTLRenderPassDescriptor), sel_new)
+	var colorAttachments0 = objc.ID(cocoa.MsgSend1(send0(renderPassDescriptor, sel_colorAttachments), sel_objectAtIndexedSubscript, 0))
+	send1(colorAttachments0, sel_setLoadAction, uintptr(rpd.ColorAttachments[0].LoadAction))
+	send1(colorAttachments0, sel_setStoreAction, uintptr(rpd.ColorAttachments[0].StoreAction))
+	send1(colorAttachments0, sel_setTexture, uintptr(rpd.ColorAttachments[0].Texture.texture))
+	if rpd.ColorAttachments[0].LoadAction == LoadActionClear {
+		// The clear color is four doubles, which MsgSend cannot pass. It matters only to a clear.
+		colorAttachments0.Send(sel_setClearColor, rpd.ColorAttachments[0].ClearColor)
+	}
+	var stencilAttachment = send0(renderPassDescriptor, sel_stencilAttachment)
+	send1(stencilAttachment, sel_setLoadAction, uintptr(rpd.StencilAttachment.LoadAction))
+	send1(stencilAttachment, sel_setStoreAction, uintptr(rpd.StencilAttachment.StoreAction))
+	send1(stencilAttachment, sel_setTexture, uintptr(rpd.StencilAttachment.Texture.texture))
+	var rce = objc.ID(cocoa.MsgSend1(cb.commandBuffer, sel_renderCommandEncoderWithDescriptor, uintptr(renderPassDescriptor)))
+	send0(renderPassDescriptor, sel_release)
 	return RenderCommandEncoder{CommandEncoder{rce}}
 }
 
@@ -937,7 +942,7 @@ func (cb CommandBuffer) RenderCommandEncoderWithDescriptor(rpd RenderPassDescrip
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1443001-makeblitcommandencoder?language=objc.
 func (cb CommandBuffer) BlitCommandEncoder() BlitCommandEncoder {
-	ce := cb.commandBuffer.Send(sel_blitCommandEncoder)
+	ce := objc.ID(cocoa.MsgSend0(cb.commandBuffer, sel_blitCommandEncoder))
 	return BlitCommandEncoder{CommandEncoder{ce}}
 }
 
@@ -953,7 +958,7 @@ type CommandEncoder struct {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandencoder/1458038-endencoding?language=objc.
 func (ce CommandEncoder) EndEncoding() {
-	msgSend(ce.commandEncoder, sel_endEncoding)
+	cocoa.MsgSend0(ce.commandEncoder, sel_endEncoding)
 }
 
 // RenderCommandEncoder is an encoder that specifies graphics-rendering commands
@@ -972,7 +977,7 @@ func (rce RenderCommandEncoder) Release() {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1515811-setrenderpipelinestate?language=objc.
 func (rce RenderCommandEncoder) SetRenderPipelineState(rps RenderPipelineState) {
-	msgSend(rce.commandEncoder, sel_setRenderPipelineState, uintptr(rps.renderPipelineState))
+	cocoa.MsgSend1(rce.commandEncoder, sel_setRenderPipelineState, uintptr(rps.renderPipelineState))
 }
 
 // SetVertexBuffer sets a buffer for the vertex shader function at an index
@@ -980,25 +985,25 @@ func (rce RenderCommandEncoder) SetRenderPipelineState(rps RenderPipelineState) 
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1515829-setvertexbuffer?language=objc.
 func (rce RenderCommandEncoder) SetVertexBuffer(buf Buffer, offset, index int) {
-	msgSend(rce.commandEncoder, sel_setVertexBuffer_offset_atIndex, uintptr(buf.buffer), uintptr(offset), uintptr(index))
+	cocoa.MsgSend3(rce.commandEncoder, sel_setVertexBuffer_offset_atIndex, uintptr(buf.buffer), uintptr(offset), uintptr(index))
 }
 
 // SetVertexBytes sets a block of data for the vertex function.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1515846-setvertexbytes?language=objc.
 func (rce RenderCommandEncoder) SetVertexBytes(bytes unsafe.Pointer, length uintptr, index int) {
-	msgSend(rce.commandEncoder, sel_setVertexBytes_length_atIndex, uintptr(bytes), length, uintptr(index))
+	cocoa.MsgSend3(rce.commandEncoder, sel_setVertexBytes_length_atIndex, uintptr(bytes), length, uintptr(index))
 }
 
 func (rce RenderCommandEncoder) SetFragmentBytes(bytes unsafe.Pointer, length uintptr, index int) {
-	msgSend(rce.commandEncoder, sel_setFragmentBytes_length_atIndex, uintptr(bytes), length, uintptr(index))
+	cocoa.MsgSend3(rce.commandEncoder, sel_setFragmentBytes_length_atIndex, uintptr(bytes), length, uintptr(index))
 }
 
 // SetFragmentTexture sets a texture for the fragment function at an index in the texture argument table.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1515390-setfragmenttexture?language=objc.
 func (rce RenderCommandEncoder) SetFragmentTexture(texture Texture, index int) {
-	msgSend(rce.commandEncoder, sel_setFragmentTexture_atIndex, uintptr(texture.texture), uintptr(index))
+	cocoa.MsgSend2(rce.commandEncoder, sel_setFragmentTexture_atIndex, uintptr(texture.texture), uintptr(index))
 }
 
 func (rce RenderCommandEncoder) SetBlendColor(red, green, blue, alpha float32) {
@@ -1009,7 +1014,7 @@ func (rce RenderCommandEncoder) SetBlendColor(red, green, blue, alpha float32) {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1516119-setdepthstencilstate?language=objc.
 func (rce RenderCommandEncoder) SetDepthStencilState(depthStencilState DepthStencilState) {
-	msgSend(rce.commandEncoder, sel_setDepthStencilState, uintptr(depthStencilState.depthStencilState))
+	cocoa.MsgSend1(rce.commandEncoder, sel_setDepthStencilState, uintptr(depthStencilState.depthStencilState))
 }
 
 // DrawPrimitives renders one instance of primitives using vertex data
@@ -1017,14 +1022,14 @@ func (rce RenderCommandEncoder) SetDepthStencilState(depthStencilState DepthSten
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1516326-drawprimitives?language=objc.
 func (rce RenderCommandEncoder) DrawPrimitives(typ PrimitiveType, vertexStart, vertexCount int) {
-	msgSend(rce.commandEncoder, sel_drawPrimitives_vertexStart_vertexCount, uintptr(typ), uintptr(vertexStart), uintptr(vertexCount))
+	cocoa.MsgSend3(rce.commandEncoder, sel_drawPrimitives_vertexStart_vertexCount, uintptr(typ), uintptr(vertexStart), uintptr(vertexCount))
 }
 
 // DrawIndexedPrimitives encodes a command to render one instance of primitives using an index list specified in a buffer.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1515542-drawindexedprimitives
 func (rce RenderCommandEncoder) DrawIndexedPrimitives(typ PrimitiveType, indexCount int, indexType IndexType, indexBuffer Buffer, indexBufferOffset int) {
-	msgSend(rce.commandEncoder,
+	cocoa.MsgSend5(rce.commandEncoder,
 		sel_drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset,
 		uintptr(typ), uintptr(indexCount), uintptr(indexType), uintptr(indexBuffer.buffer), uintptr(indexBufferOffset))
 }
@@ -1110,7 +1115,7 @@ func (t Texture) resource() unsafe.Pointer {
 }
 
 func (t Texture) Release() {
-	t.texture.Send(sel_release)
+	cocoa.MsgSend0(t.texture, sel_release)
 }
 
 // checkPixelsForTransfer returns an error unless pixels is large enough for transferring region with bytesPerRow.
@@ -1185,26 +1190,26 @@ func (b Buffer) resource() unsafe.Pointer {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlbuffer/1515373-length?language=objc.
 func (b Buffer) Length() uintptr {
-	return uintptr(b.buffer.Send(sel_length))
+	return cocoa.MsgSend0(b.buffer, sel_length)
 }
 
 func (b Buffer) CopyToContents(data unsafe.Pointer, lengthInBytes uintptr) {
 	// The buffer's contents are not Go memory; convert as Device does.
-	r := msgSend(b.buffer, sel_contents)
+	r := cocoa.MsgSend0(b.buffer, sel_contents)
 	contents := *(*unsafe.Pointer)(unsafe.Pointer(&r))
 	copy(unsafe.Slice((*byte)(contents), lengthInBytes), unsafe.Slice((*byte)(data), lengthInBytes))
 	if runtime.GOOS != "ios" {
 		// The argument is an NSRange, which is passed in two integer registers.
-		msgSend(b.buffer, sel_didModifyRange, 0, lengthInBytes)
+		cocoa.MsgSend2(b.buffer, sel_didModifyRange, 0, lengthInBytes)
 	}
 }
 
 func (b Buffer) Retain() {
-	b.buffer.Send(sel_retain)
+	cocoa.MsgSend0(b.buffer, sel_retain)
 }
 
 func (b Buffer) Release() {
-	b.buffer.Send(sel_release)
+	cocoa.MsgSend0(b.buffer, sel_release)
 }
 
 // Function represents a programmable graphics or compute function executed by the GPU.

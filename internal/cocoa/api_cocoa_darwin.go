@@ -108,11 +108,11 @@ type NSAutoreleasePool struct {
 }
 
 func NSAutoreleasePool_new() NSAutoreleasePool {
-	return NSAutoreleasePool{objc.ID(class_NSAutoreleasePool).Send(sel_new)}
+	return NSAutoreleasePool{objc.ID(MsgSend0(objc.ID(class_NSAutoreleasePool), sel_new))}
 }
 
 func (p NSAutoreleasePool) Release() {
-	p.Send(sel_release)
+	MsgSend0(p.ID, sel_release)
 }
 
 type NSString struct {

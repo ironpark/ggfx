@@ -16,6 +16,8 @@ package mtl
 
 import (
 	"unsafe"
+
+	"github.com/ironpark/ggfx/internal/cocoa"
 )
 
 // On arm64, a struct larger than 16 bytes that is not a homogeneous aggregate of at most four
@@ -26,12 +28,12 @@ import (
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1515527-setviewport?language=objc.
 func (rce RenderCommandEncoder) SetViewport(viewport Viewport) {
-	msgSend(rce.commandEncoder, sel_setViewport, uintptr(unsafe.Pointer(&viewport)))
+	cocoa.MsgSend1(rce.commandEncoder, sel_setViewport, uintptr(unsafe.Pointer(&viewport)))
 }
 
 // SetScissorRect sets the scissor rectangle for a fragment scissor test.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlrendercommandencoder/1515583-setscissorrect?language=objc.
 func (rce RenderCommandEncoder) SetScissorRect(scissorRect ScissorRect) {
-	msgSend(rce.commandEncoder, sel_setScissorRect, uintptr(unsafe.Pointer(&scissorRect)))
+	cocoa.MsgSend1(rce.commandEncoder, sel_setScissorRect, uintptr(unsafe.Pointer(&scissorRect)))
 }

@@ -14,7 +14,7 @@
 
 package mtl
 
-// On amd64, Viewport and ScissorRect are passed on the stack, which msgSend cannot do, so they
+// On amd64, Viewport and ScissorRect are passed on the stack, which MsgSend cannot do, so they
 // go through objc.ID.Send.
 
 // SetViewport sets the viewport used for transformations and clipping.
