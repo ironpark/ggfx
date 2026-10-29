@@ -3,7 +3,6 @@ module github.com/ironpark/ggfx
 go 1.27.0
 
 require (
-	github.com/ebitengine/hideconsole v1.0.0
 	github.com/ebitengine/purego v0.11.0
 	github.com/go-text/typesetting v0.3.5
 	github.com/gogpu/naga v0.19.0

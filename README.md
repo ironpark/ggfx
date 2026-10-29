@@ -8,8 +8,9 @@ that keeps the GPU pipeline, `text/v2` and `vector`, replaces the Kage
 shader language with WGSL compiled by [naga](https://github.com/gogpu/naga),
 and drops audio, mobile and console support.
 
-ggfx has no windows. [ggwd](ggwd) is the window system ggui uses, and it
-drives ggfx through the public renderer API in `renderer.go` alone.
+ggfx has no windows. [ggwd](https://github.com/ironpark/ggwd) is the window
+system ggui uses, and it drives ggfx through the public renderer API in
+`renderer.go` alone.
 
 Shaders are documented in [docs/shaders.md](docs/shaders.md).
 

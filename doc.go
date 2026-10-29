@@ -18,7 +18,7 @@
 // ggfx has no windows. A window system initializes it with [Init], makes a [Surface] of each
 // window's native view with [NewSurface], and draws a frame by drawing to the surface's
 // [Surface.Screen] between [BeginFrame] and [EndFrame] and presenting with [Flush]. ggwd
-// (github.com/ironpark/ggfx/ggwd) is the window system ggui uses; renderer.go shows the shape of
+// (github.com/ironpark/ggwd) is the window system ggui uses; renderer.go shows the shape of
 // a frame.
 //
 // Images can be made and drawn to at any time from any goroutine. Their draws run in a frame, and

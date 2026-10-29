@@ -47,58 +47,6 @@ shader contract. What changed for the drivers:
 - `vector/stencilshader.go` and `stencilbuffer.go` changed with it, so those
   files no longer merge cleanly from upstream.
 
-## A hidden window renders
-
-`shouldPresentFrame` returns false both for a window the OS hid, by occluding or
-iconifying it, and for a window the app asked to keep hidden. Upstream skipped
-the frame in both cases, which made `WindowOptions.Hidden` a window that never
-draws. The two are now separate: a hidden-on-purpose window runs its frames and
-skips the buffer swap alone, so it is a rendering target for a screenshot dumper
-that should not show anything. The loop skips a frame that cannot render, and
-`renderFrame` reports only whether the frame ran; the loop presents it when the
-window can show it.
-An occluded window still skips the frame, which is what keeps the loop off the
-GPU when nothing can be seen.
-
-## Every change of size is a ResizeEvent
-
-Upstream reported a resize only from the default framebuffer-size callback, which is swapped
-out while a resize the app asked for waits for the framebuffer, and which ignores a window in
-fullscreen. Such a resize reached the app as no event, and its frame was drawn at the old size.
-Each loop iteration now compares the window's size and scale with what it last reported
-(`reportSize`), and so does the end of every wait for the framebuffer: a difference is a
-`ResizeEvent` and a frame request. The framebuffer is compared too, since on macOS it follows the
-window a little later. A size that changes while events are dispatched makes the size gathered
-for that iteration's frame stale, so the frame waits for the next iteration instead of being drawn
-at the old size and using up the request.
-
-A `WindowStateEvent` reports a window minimized, maximized, made fullscreen or restored, whoever
-did it. Each loop iteration compares the state with the one last reported, as it does the size,
-and so do GLFW's iconify and maximize callbacks: a platform reports the end of minimizing there,
-and nothing may wake the loop after it. The browser reports fullscreen alone.
-
-`MouseButtonEvent` and `ScrollEvent` carry the modifier keys held at the event, which GLFW passes
-to the button callback and which the scroll callback now gets too (from the `NSEvent`,
-`GetKeyState` or the X button state). An app that tracked the modifiers from key events missed a
-modifier pressed while another window had the focus. `ScrollEvent` is in lines on every platform:
-the browser's deltas, which upstream passed through in whatever unit `deltaMode` named, count 20
-pixels or the canvas's height a line.
-
-## X11 composes on the event path
-
-An X11 window reports its on-the-spot preedit as `CompositionEvent`, as macOS and Windows
-report their marked text, and its committed text arrives as `TextEvent` through the character
-callback as before. `SetTextInputEnabled` gives the input context the window's key presses or
-takes them back (`XSetICFocus`/`XUnsetICFocus`, resetting the composition), and
-`SetTextInputRect` sets its spot location under the caret. While text input is enabled, a key
-press the input method filters waits for it to decline the key, which `exp/textinput` used to
-switch on for its sessions alone. `exp/textinput`'s X11 backend still works, and its handlers
-take precedence where they are set.
-
-`Wake` queues a `WakeEvent`, which is for no window and is dispatched whether or not any window
-draws, so that work handed over from another goroutine reaches the handler while every window is
-hidden or covered.
-
 ## What was removed and why
 
 ggui targets desktop and the browser and uses a small part of the engine: images and
@@ -227,9 +175,8 @@ kept close to upstream: `internal/graphicsdriver` (except the shader files),
 `fill.go` and `atlas.go`). The oksvg fork moved from `text/v2/internal/oksvg` to
 `internal/oksvg`, so that the `svg` package can draw SVG documents with it; a commit to it
 needs its paths rewritten. The Metal driver's per-draw calls also diverge;
-see "Draw call cost" below. The shader stack, the
-windowing and the run loop (`internal/ui`, `run.go`, `window.go`,
-`input.go`) diverge and are not expected to merge.
+see "Draw call cost" below. The shader stack and `internal/render` diverge and are not
+expected to merge; the windowing and the run loop are ggwd's.
 
 ## Generic draw methods and uniform blocks
 
@@ -249,14 +196,15 @@ no longer merge cleanly.
 
 ## The window system moved to ggwd
 
-ggfx is a renderer. The window system, which the sections below describe as it was changed
-inside ggfx, moved to `ggwd/` and its own internal packages: `Run`, `Window`, the events, keys,
-mouse buttons, cursor, clipboard, monitors, color mode, `RunOnMainThread`, `Wake`,
-`exp/textinput`, `internal/ui`, `internal/glfw`, `internal/hook`, `internal/file`,
-`internal/colormode` and `internal/exeicon`. It keeps copies of `internal/cocoa`,
-`internal/thread`, `internal/winver`, `internal/microsoftgdk` and `internal/windowsystem`, which the
-drivers use too, and `TestNoRendererInternals` fails if it imports anything under
-`ggfx/internal`. Paths below that name those packages are now under `ggwd/`.
+ggfx is a renderer. The window system moved to its own repository,
+[ggwd](https://github.com/ironpark/ggwd): `Run`, `Window`, the events, keys, mouse buttons,
+cursor, clipboard, monitors, color mode, `RunOnMainThread`, `Wake`, `exp/textinput`,
+`internal/ui`, `internal/glfw`, `internal/hook`, `internal/file`, `internal/colormode` and
+`internal/exeicon`. It keeps copies of `internal/cocoa`, `internal/thread`, `internal/winver`,
+`internal/microsoftgdk` and `internal/windowsystem`, which the drivers use too, and uses ggfx
+through its public API alone, as Go's internal rule makes it. Its FORK.md carries what was
+changed in the window system against upstream; the removals below that name its packages
+happened before the move. Upstream commits to `internal/ui` and `internal/glfw` go to ggwd.
 
 ggfx's own tests run inside one renderer frame with no window (`internal/testing.MainInFrame`); on
 macOS OpenGL draws in a CGL context the harness makes. ggwd's tests run in a window, as ggfx's did.
@@ -265,35 +213,16 @@ macOS OpenGL draws in a CGL context the harness makes. ggwd's tests run in a win
 
 `internal/render` holds what draws, apart from what shows it: `Image`, `Shader` and the uniform
 packing, the white image fills draw from, the error state, reads of pixels that wait for a frame,
-driver creation, the frame pacer and the tick. It was the drawing half of `internal/ui`, which now
-drives it and keeps the windows, the events and the loop, through what `renderer.go` makes
-public: `Init`, `Terminate`, `NewSurface`, `Surface.Screen`, `BeginFrame`, `EndFrame`, `Flush`
-and the rest. The render thread starts at `Init` rather than with the loop, and the frame pacer
-stays with the loop. This is the way to moving the window system out of ggfx; see
-`docs/renderer-split.md`.
+driver creation and the tick. It was the drawing half of `internal/ui`. A window system drives it
+through what `renderer.go` makes public: `Init`, `Terminate`, `NewSurface`, `Surface.Screen`,
+`BeginFrame`, `EndFrame`, `Flush` and the rest. The render thread starts at `Init`; pacing frames
+is the window system's. ggfx's own tests run inside one frame with no window
+(`internal/testing.MainInFrame`); on macOS, OpenGL draws in a CGL context the harness makes. See
+`docs/renderer-split.md` for how the split went.
 
 A Metal surface is made for an NSView rather than an NSWindow, and the window is asked of the view
 whenever it is needed, for whether it is in a live resize or fullscreen. The view becomes the
 layer's alone; GLFW's windows pass their content view.
-
-## Windows and the event loop
-
-`Run`, `NewWindow`, `Window` and the event types in `app.go` are the API a
-GUI uses: any number of windows, frames on request, input as events. The
-design and the per-driver status are in [ggwd/docs/window.md](ggwd/docs/window.md).
-The test suite runs on it too: `internal/testing.MainWithRunLoop` opens one
-window and runs the tests in its first frame. The legacy `Game`/`RunGame` API
-is gone from the public surface, along with the root-level functions that
-addressed the game's primary window; `*Window` carries them per window.
-
-`RunOnMainThread` wakes the loop before it queues the function. The loop sleeps in
-`WaitEvents` on the main thread when no window wants a frame, and the main thread serves no
-call while it waits, so a call from another goroutine used to wait for the next OS event.
-
-On macOS, `RunOnMainThread` runs each function inside an autorelease pool
-of its own. The main thread's loop has no pool around the functions it is
-handed, so without one every object they autoreleased lived as long as the
-process.
 
 ## Draw call merging
 
@@ -329,32 +258,16 @@ both ways render the same pixels.
 
 ## Not done yet
 
-- More than one canvas on WebGL (`ggwd/docs/window.md`). Metal and macOS OpenGL
+- More than one canvas on WebGL (ggwd's `docs/window.md`). Metal and macOS OpenGL
   ran several windows; DirectX 11/12 and OpenGL on Linux and Windows accept
   several surfaces but were cross-compiled only.
-- IME composition on the event path in the browser, which still uses
-  `exp/textinput` for it. Once it has one, `exp/textinput` can go: the
-  Composer and its sessions are UI-level and live in ggui.
 - Only macOS Metal and OpenGL ran the test suite after the shader change;
   DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
   to need shader model 5.0 without register spaces, but no D3D compiler or
   debug layer has seen it.
-- Runtime validation of Windows native hooks (OLE drag-over, IMM composition,
-  WM_GETOBJECT); they are implemented and cross-built. macOS native hooks have
-  a two-window smoke test in `examples/nativehooks`.
 - The drivers' vsync-off paths are unreachable since `SetVsyncEnabled` went:
   Metal's `vsyncDisabled` and the display-link branches that read it, and the
   tearing branch of DirectX's `present`. The Metal branches are woven into the
   live-resize handling, which cannot be exercised here, so they were left.
 - DirectX's refusal of a transparent surface is returned but never seen here;
   only Metal and OpenGL ran a transparent window.
-- A rendering target with no window at all. OpenGL draws in a hidden window's
-  context but presents through each window's, so a driver without one is not
-  reachable; `WindowOptions.Hidden` is the way to render without showing
-  anything.
-- X11's input method was only checked by injecting the preedit into the window:
-  no ibus or fcitx ran against it.
-- The `!android && !ios && !js && !nintendosdk && !playstation5` build
-  constraint is still spelled out across `internal/ui`, where `!js` would do.
-- The deprecated v2.1 key aliases (`KeyDown`, `Key0`, ...) that `genkeys.go`
-  emits into `keys.go`.

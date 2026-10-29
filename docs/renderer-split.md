@@ -2,7 +2,7 @@
 
 ggfx is to become a renderer: it draws images, shaders, text, vectors and SVG, and presents them
 on surfaces that someone else's windows own. The window system it carries today moves to a module
-of its own (`ggwd`), which uses ggfx's public API alone, as ggip's `ggfxinput` does.
+of its own ([ggwd](https://github.com/ironpark/ggwd)), which uses ggfx's public API alone, as ggip's `ggfxinput` does.
 ggui joins the two.
 
 ## What goes and what stays
@@ -78,8 +78,10 @@ Linux and wasm, and is a commit of its own.
    nothing from `ggfx/internal`; `TestNoRendererInternals` fails if it does. ggfx's tests run in
    a frame of the renderer with no window, OpenGL on macOS in a CGL context of their own, and
    ggwd's run in a window.
-4. Move `ggfx/ggwd` to its own repository, point ggui at it, and drop `docs/window.md` and the
-   window sections of `FORK.md` from ggfx.
+4. Done. Move `ggfx/ggwd` to its own repository, github.com/ironpark/ggwd, with its history
+   since the move; point ggui and ggip's ggfxinput at it, and move `docs/window.md` and the window
+   sections of `FORK.md` there. Go's internal rule now keeps ggwd off ggfx's internals, so the
+   import test went.
 
 ## Open questions
 

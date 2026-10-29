@@ -20,7 +20,7 @@ import (
 
 // This file is the renderer's API for a window system: it initializes the renderer, makes
 // surfaces of the windows' native views, and draws and presents frames on them. ggwd
-// (github.com/ironpark/ggfx/ggwd) is such a window system.
+// (github.com/ironpark/ggwd) is such a window system.
 //
 // A frame of a window system's loop goes:
 //
