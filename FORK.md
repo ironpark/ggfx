@@ -200,10 +200,11 @@ ggfx is a renderer. The window system moved to its own repository,
 [ggwd](https://github.com/ironpark/ggwd): `Run`, `Window`, the events, keys, mouse buttons,
 cursor, clipboard, monitors, color mode, `RunOnMainThread`, `Wake`, `exp/textinput`,
 `internal/ui`, `internal/glfw`, `internal/hook`, `internal/file`, `internal/colormode` and
-`internal/exeicon`. It keeps copies of `internal/cocoa`, `internal/thread` and `internal/winver`,
-which the drivers use too, and has `internal/microsoftgdk` and `internal/windowsystem` to itself:
-the renderer dropped the Xbox paths, and the OpenGL loader on Linux and the BSDs tries OpenGL ES
-and then OpenGL whether or not a display server is up. It uses ggfx through its public API alone, as Go's internal rule makes it. Its FORK.md carries what was
+`internal/exeicon`. It keeps copies of `internal/thread` and `internal/winver`, which the drivers
+use too, and has `internal/cocoa`, `internal/microsoftgdk` and `internal/windowsystem` to itself:
+ggfx's `internal/cocoa` is cut down to what the Metal driver calls, the renderer dropped the Xbox
+paths, and the OpenGL loader on Linux and the BSDs tries OpenGL ES and then OpenGL whether or not
+a display server is up. It uses ggfx through its public API alone, as Go's internal rule makes it. Its FORK.md carries what was
 changed in the window system against upstream; the removals below that name its packages
 happened before the move. Upstream commits to `internal/ui` and `internal/glfw` go to ggwd.
 
