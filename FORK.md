@@ -227,9 +227,16 @@ particulars are one value, `CurrentDriver()`, and whether a present was occluded
 (`internal/testing.MainInFrame`); on macOS, OpenGL draws in a CGL context the harness makes. See
 `docs/renderer-split.md` for how the split went.
 
-A Metal surface is made for an NSView rather than an NSWindow, and the window is asked of the view
-whenever it is needed, for whether it is in a live resize or fullscreen. The view becomes the
-layer's alone; GLFW's windows pass their content view.
+A Metal surface is made for an NSView rather than an NSWindow, and the driver asks nothing of the
+view's window: the window system tells the surface whether the window is in a live resize or
+fullscreen, with `host.Surface.SetWindowState` before each frame, and the frame's `Begin` takes it
+where it used to ask AppKit. The view becomes the layer's alone; GLFW's windows pass their content
+view.
+
+The drivers' vsync-off paths went once nothing could turn vsync off: Metal's `vsyncDisabled`, the
+frame skip and display-link branches that read it, and the tearing branch of DirectX's `present`.
+DirectX still makes its swap chains with `DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING` where it is
+supported.
 
 ## Draw call merging
 
@@ -272,9 +279,8 @@ both ways render the same pixels.
   DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
   to need shader model 5.0 without register spaces, but no D3D compiler or
   debug layer has seen it.
-- The drivers' vsync-off paths are unreachable since `SetVsyncEnabled` went:
-  Metal's `vsyncDisabled` and the display-link branches that read it, and the
-  tearing branch of DirectX's `present`. The Metal branches are woven into the
-  live-resize handling, which cannot be exercised here, so they were left.
+- Metal's live-resize and fullscreen presentation now hangs on the window state ggwd sets, and
+  no resize was dragged nor fullscreen entered since; the path is the one AppKit's answers took
+  before, at the frame's start rather than at each query.
 - DirectX's refusal of a transparent surface is returned but never seen here;
   only Metal and OpenGL ran a transparent window.

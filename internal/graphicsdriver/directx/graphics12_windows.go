@@ -774,7 +774,7 @@ func (g *graphics12) presentDesktop() error {
 		}
 		swapChains = append(swapChains, s.swapChain)
 	}
-	err := g.graphicsInfra.present(swapChains, true)
+	err := g.graphicsInfra.present(swapChains)
 	clear(swapChains)
 	g.tmpSwapChains = swapChains[:0]
 	if err != nil {

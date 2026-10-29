@@ -44,6 +44,7 @@ type Canvas js.Value            // WebGL's; the first surface creates the driver
 
 func NewSurface(target SurfaceTarget, transparent bool) (*Surface, error)
 func (s *Surface) FramebufferSize() (int, int, bool)
+func (s *Surface) SetWindowState(state WindowState) // LiveResizing, Fullscreen; Metal asks
 func (s *Surface) Dispose()
 
 func BeginFrame() (Frame, error) // also reports the error a read of pixels ran into
@@ -89,6 +90,10 @@ Linux and wasm, and is a commit of its own.
 6. Done. Drop what the renderer kept for windows and consoles it no longer has:
    `internal/microsoftgdk` and the DirectX 12 driver's Xbox paths, and `internal/windowsystem`,
    which only decided whether the Linux OpenGL loader tried OpenGL as well as OpenGL ES.
+7. Done. Stop the Metal driver asking AppKit about the window: `host.Surface.SetWindowState`
+   carries whether it is in a live resize or fullscreen, which ggwd reads on the main thread
+   before each frame, and the forced frame of a resize. The vsync-off paths in Metal and
+   DirectX, which nothing reached, went with it.
 
 ## Open questions
 

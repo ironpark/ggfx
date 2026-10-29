@@ -76,6 +76,25 @@ func (s *Surface) FramebufferSize() (width, height int, ok bool) {
 	return s.surface.FramebufferSize()
 }
 
+// WindowState is what a surface's window is doing, which decides how Metal presents to it.
+type WindowState struct {
+	// LiveResizing is set while the user resizes the window, as NSView's inLiveResize reports it.
+	// Metal then sizes its layer and presents on the main thread, through [Options.MainThread], so
+	// that the new frame shows in the same Core Animation transaction as the new window size.
+	LiveResizing bool
+
+	// Fullscreen is set while the window is in macOS's fullscreen mode. Metal then presents to the
+	// display directly rather than in step with Core Animation transactions.
+	Fullscreen bool
+}
+
+// SetWindowState tells s what its window is doing. A window system sets it before each frame
+// drawn to s, on the goroutine that begins the frame; a surface whose state was never set is a
+// window at rest. Only Metal asks.
+func (s *Surface) SetWindowState(state WindowState) {
+	s.surface.SetWindowState(state.LiveResizing, state.Fullscreen)
+}
+
 // Dispose deallocates the screen and releases s after the commands queued before it. A window
 // system disposes a window's surface before it destroys the window.
 func (s *Surface) Dispose() {

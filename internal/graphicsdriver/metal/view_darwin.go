@@ -35,16 +35,15 @@ import (
 const maximumDrawableCount = 3
 
 type view struct {
-	// nsView is the NSView whose layer this view is, on macOS.
-	nsView uintptr
+	// windowLiveResizing and windowFullscreen are what the window system last told of the view's
+	// window: whether the user is resizing it, and whether it is in the fullscreen mode. They are
+	// written on the window system's goroutine and taken at updatePresentationState.
+	windowLiveResizing atomic.Bool
+	windowFullscreen   atomic.Bool
 
-	// vsyncDisabled reports whether vsync is disabled.
-	// This can be read from the thread for CAMetalDisplayLink, while the other members are used only on the rendering thread.
-	vsyncDisabled atomic.Bool
-
-	// liveResizing reports whether the window is being resized by the user on macOS.
-	// This is written on the rendering thread, and can be read from the thread for CAMetalDisplayLink.
-	// This is always false on iOS.
+	// liveResizing reports whether the window is being resized by the user on macOS, as of the
+	// current frame. This is written on the rendering thread, and can be read from the thread for
+	// CAMetalDisplayLink. This is always false on iOS.
 	liveResizing atomic.Bool
 
 	// released reports whether the view was released. The display link is then invalidated and
@@ -60,9 +59,8 @@ type view struct {
 	metalDisplayLink uintptr
 
 	// queuedPresents is the number of drawables that are queued for presentation and not presented yet.
-	// While vsync is disabled on macOS, this is used to skip a frame instead of blocking until a
-	// drawable is available (see nextDrawable). This is also used to wait for all the queued
-	// presentations before switching to transaction-synced presentation (see updatePresentsWithTransaction).
+	// This is used to wait for all the queued presentations before switching to transaction-synced
+	// presentation (see updatePresentationState).
 	// queuedPresents is incremented on the rendering thread and decremented on Metal's presentation thread.
 	queuedPresents atomic.Int32
 
@@ -73,9 +71,6 @@ type view struct {
 
 	// presentedHandlerOnce guards the creation of presentedHandler.
 	presentedHandlerOnce sync.Once
-
-	// lastPresentTime is the last time when a drawable presentation was registered on a command buffer.
-	lastPresentTime time.Time
 
 	// presentsWithTransaction is the last value set for the layer's presentsWithTransaction property.
 	// This is true only while the window is being resized by the user on macOS, and always false on iOS.
@@ -111,17 +106,10 @@ func (v *view) getMTLDevice() mtl.Device {
 	return v.device
 }
 
-func (v *view) setDisplaySyncEnabled(enabled bool) {
-	if !v.vsyncDisabled.Load() == enabled {
-		return
-	}
-	v.forceSetDisplaySyncEnabled(enabled)
-}
-
-func (v *view) forceSetDisplaySyncEnabled(enabled bool) {
-	v.ml.SetDisplaySyncEnabled(enabled)
-	v.vsyncDisabled.Store(!enabled)
-	v.updateMetalDisplayLink()
+// setWindowState records what the view's window is doing, for the next frame to take.
+func (v *view) setWindowState(liveResizing, fullscreen bool) {
+	v.windowLiveResizing.Store(liveResizing)
+	v.windowFullscreen.Store(fullscreen)
 }
 
 func (v *view) colorPixelFormat() mtl.PixelFormat {
@@ -144,8 +132,8 @@ func (v *view) initialize(device mtl.Device, colorSpace color.ColorSpace) error 
 	// MTLPixelFormatBGRA10_XR_sRGB.
 	v.ml.SetPixelFormat(mtl.PixelFormatBGRA8UNorm)
 
-	// The vsync state might be reset. Set the state again (#1364).
-	v.forceSetDisplaySyncEnabled(!v.vsyncDisabled.Load())
+	// Presents wait for the display. The layer's default might differ (#1364).
+	v.ml.SetDisplaySyncEnabled(true)
 	v.ml.SetFramebufferOnly(true)
 
 	// presentsWithTransaction is disabled at first, and updated at every frame on macOS

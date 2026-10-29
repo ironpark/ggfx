@@ -304,7 +304,7 @@ func (g *graphics11) End(mode graphicsdriver.FlushMode) error {
 		swapChains = append(swapChains, s.swapChain)
 		s.drawn = false
 	}
-	err := g.graphicsInfra.present(swapChains, true)
+	err := g.graphicsInfra.present(swapChains)
 	clear(swapChains)
 	g.tmpSwapChains = swapChains[:0]
 	if err != nil {

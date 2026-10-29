@@ -152,7 +152,6 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 		return nil, err
 	}
 	s.view.ml.SetOpaque(!transparent)
-	s.view.setDisplaySyncEnabled(true)
 	s.view.setNSView(uintptr(nsView))
 	g.surfaces = append(g.surfaces, s)
 	return s, nil
@@ -171,6 +170,12 @@ func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error
 	}
 	g.addImage(i)
 	return i, nil
+}
+
+// SetWindowState tells the surface what its window is doing: whether the user is resizing it, and
+// whether it is in the fullscreen mode. The next frame takes it.
+func (s *Surface) SetWindowState(liveResizing, fullscreen bool) {
+	s.view.setWindowState(liveResizing, fullscreen)
 }
 
 func (s *Surface) Dispose() {

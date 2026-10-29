@@ -17,8 +17,6 @@
 package metal
 
 import (
-	"time"
-
 	"github.com/ebitengine/purego/objc"
 
 	"github.com/ironpark/ggfx/internal/cocoa"
@@ -31,7 +29,6 @@ const kCVReturnSuccess = 0
 // setNSView makes the layer the layer of nsView, which renders it and nothing else. It is called
 // once, on the main thread.
 func (v *view) setNSView(nsView uintptr) {
-	v.nsView = nsView
 	view := cocoa.NSView{ID: objc.ID(nsView)}
 	view.SetLayer(uintptr(v.ml.Layer()))
 	view.SetWantsLayer(true)
@@ -74,9 +71,6 @@ func (v *view) waitForDisplayLinkOutputCallback() {
 	if v.caDisplayLink == 0 {
 		return
 	}
-	if v.vsyncDisabled.Load() {
-		return
-	}
 	v.fence.wait()
 }
 
@@ -111,7 +105,7 @@ func (v *view) applyDrawableSizeIfNeeded() {
 	set := func() {
 		v.ml.SetDrawableSize(v.drawableWidth, v.drawableHeight)
 	}
-	if v.runOnMainThread != nil && v.inLiveResize() {
+	if v.runOnMainThread != nil && v.liveResizing.Load() {
 		v.runOnMainThread(set)
 	} else {
 		set()
@@ -119,27 +113,6 @@ func (v *view) applyDrawableSizeIfNeeded() {
 
 	// The display link waits for a drawable size (see updateMetalDisplayLink).
 	v.updateMetalDisplayLink()
-}
-
-// inLiveResize reports whether the view is being resized by the user, with its window.
-func (v *view) inLiveResize() bool {
-	if v.nsView == 0 {
-		return false
-	}
-	return cocoa.NSView{ID: objc.ID(v.nsView)}.InLiveResize()
-}
-
-// isFullscreen reports whether the view's window is in the fullscreen mode. A view in no window is
-// not. The window is asked for every time, as the view can move to another one.
-func (v *view) isFullscreen() bool {
-	if v.nsView == 0 {
-		return false
-	}
-	w := cocoa.NSView{ID: objc.ID(v.nsView)}.Window()
-	if w.ID == 0 {
-		return false
-	}
-	return w.StyleMask()&cocoa.NSWindowStyleMaskFullScreen != 0
 }
 
 // shouldPresentWithTransaction reports whether a drawable must be presented in sync with
@@ -151,8 +124,6 @@ func (v *view) shouldPresentWithTransaction() bool {
 // presentDrawableWithTransaction presents the drawable in sync with Core Animation transactions.
 // This must be called after the command buffer is committed.
 func (v *view) presentDrawableWithTransaction(cb mtl.CommandBuffer, d ca.MetalDrawable) {
-	v.lastPresentTime = time.Now()
-
 	// While the window is being resized by the user, present on the main thread. The window
 	// bounds change belongs to the main thread's implicit transaction, and presenting there puts
 	// the new layer content in the same transaction, so the new content and the new bounds are
@@ -187,10 +158,9 @@ func (v *view) presentDrawableWithTransaction(cb mtl.CommandBuffer, d ca.MetalDr
 
 // presentDrawable registers the drawable presentation on the command buffer.
 func (v *view) presentDrawable(cb mtl.CommandBuffer, d ca.MetalDrawable) {
-	// Track the number of drawables queued for presentation. While vsync is disabled, nextDrawable
-	// uses the count to skip a frame instead of blocking until a drawable is available.
-	// updatePresentationState uses the count to wait until all the queued presentations
-	// finish before switching to transaction-synced presentation.
+	// Track the number of drawables queued for presentation. updatePresentationState uses the
+	// count to wait until all the queued presentations finish before switching to
+	// transaction-synced presentation.
 	v.presentedHandlerOnce.Do(func() {
 		// addPresentedHandler is available as of macOS 10.15.4.
 		if !d.CanAddPresentedHandler() {
@@ -204,6 +174,5 @@ func (v *view) presentDrawable(cb mtl.CommandBuffer, d ca.MetalDrawable) {
 		v.queuedPresents.Add(1)
 		d.AddPresentedHandler(v.presentedHandler)
 	}
-	v.lastPresentTime = time.Now()
 	cb.PresentDrawable(d)
 }

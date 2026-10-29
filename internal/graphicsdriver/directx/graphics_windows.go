@@ -558,8 +558,8 @@ func (s *swapChain) currentBackBufferIndex() (int, error) {
 }
 
 // present presents the swap chain. waitForVsync reports whether the present waits for the vertical
-// blank when vsyncEnabled is true. present reports whether the swap chain was visible.
-func (s *swapChain) present(vsyncEnabled bool, waitForVsync bool) (bool, error) {
+// blank. present reports whether the swap chain was visible.
+func (s *swapChain) present(waitForVsync bool) (bool, error) {
 	if s.swapChain == nil {
 		return false, fmt.Errorf("directx: swap chain must be initialized at present, but is not")
 	}
@@ -571,12 +571,8 @@ func (s *swapChain) present(vsyncEnabled bool, waitForVsync bool) (bool, error) 
 		flags |= _DXGI_PRESENT_TEST
 	} else {
 		// Do actual rendering only when the screen is visible.
-		if vsyncEnabled {
-			if waitForVsync {
-				syncInterval = 1
-			}
-		} else if s.infra.allowTearing {
-			flags |= _DXGI_PRESENT_ALLOW_TEARING
+		if waitForVsync {
+			syncInterval = 1
 		}
 	}
 
@@ -601,12 +597,12 @@ func (s *swapChain) getBuffer(buffer uint32, riid *windows.GUID) (unsafe.Pointer
 // would wait for one vertical blank per window and divide the frame rate by the number of windows.
 // A flip model swap chain presented with the sync interval 0 still does not tear without
 // DXGI_PRESENT_ALLOW_TEARING: the compositor shows its latest frame at the next vertical blank.
-func (g *graphicsInfra) present(swapChains []*swapChain, vsyncEnabled bool) error {
+func (g *graphicsInfra) present(swapChains []*swapChain) error {
 	occluded := true
 	var waited bool
 	for _, s := range swapChains {
 		wasOccluded := s.occluded
-		visible, err := s.present(vsyncEnabled, !waited)
+		visible, err := s.present(!waited)
 		if err != nil {
 			return err
 		}
@@ -614,7 +610,7 @@ func (g *graphicsInfra) present(swapChains []*swapChain, vsyncEnabled bool) erro
 			occluded = false
 		}
 		// An occluded swap chain is only tested and does not wait, so the next one takes the wait.
-		if vsyncEnabled && !wasOccluded {
+		if !wasOccluded {
 			waited = true
 		}
 	}
