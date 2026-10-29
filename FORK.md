@@ -276,10 +276,16 @@ both ways render the same pixels.
 - More than one canvas on WebGL (ggwd's `docs/window.md`). Metal and macOS OpenGL
   ran several windows; DirectX 11/12 and OpenGL on Linux and Windows accept
   several surfaces but were cross-compiled only.
-- Only macOS Metal and OpenGL ran the test suite after the shader change;
-  DirectX 11/12 and WebGL were cross-compiled only. naga's HLSL was checked
-  to need shader model 5.0 without register spaces, but no D3D compiler or
-  debug layer has seen it.
+- CI (`.github/workflows/test.yml`) runs the suite with no window on macOS Metal, on macOS
+  OpenGL through Apple's software renderer, and on DirectX 11 and 12 through WARP, so naga's HLSL
+  has been compiled and drawn with; no GPU's DirectX driver nor the debug layer has seen it, and
+  WebGL and Linux OpenGL are built only, the harness having no context for them.
+- On Apple's software OpenGL renderer the batched vector fill does not match the unbatched one
+  pixel for pixel (`TestFillPathBatchingIsExact`, `TestFillPathBatchingWithGeneratedPaths`), with
+  antialiasing and without: the soundness argument under "Draw call cost" leans on how a GPU
+  rasterizes, which that renderer does differently. CI skips the two tests there.
+- `TestImageBlendFactor` makes ten thousand blend pipelines, and the CI runners' virtual Metal GPU
+  fails to compile one of them now and then; CI skips it on Metal.
 - Metal's live-resize and fullscreen presentation now hangs on the window state ggwd sets, and
   no resize was dragged nor fullscreen entered since; the path is the one AppKit's answers took
   before, at the frame's start rather than at each query.
