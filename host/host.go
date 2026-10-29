@@ -25,6 +25,41 @@
 //	if err := f.End(); err != nil { ... }
 //	// BeginFrame to End again for every other surface.
 //	result, err := host.Flush(true)
+//
+// # Environment variables
+//
+// `GGFX_GRAPHICS_LIBRARY` environment variable specifies the graphics library.
+// If the specified graphics library is not available, [Init] returns an error.
+// This environment variable works when Init is called with [GraphicsLibraryAuto].
+// This can take one of the following value:
+//
+//	"auto":    The renderer chooses the graphics library automatically. This is the default value.
+//	"opengl":  OpenGL, OpenGL ES, or WebGL.
+//	"directx": DirectX. This works only on Windows.
+//	"metal":   Metal. This works only on macOS.
+//
+// `GGFX_DIRECTX` environment variable specifies various parameters for DirectX.
+// You can specify multiple values separated by a comma. The default value is empty (i.e. no parameters).
+//
+//	"debug":                      Use a debug layer.
+//	"dred":                       Enable Device Removed Extended Data to diagnose a device removal. This is for DirectX 12.
+//	"warp":                       Use WARP (i.e. software rendering).
+//	"version=VERSION":            Specify a DirectX version (e.g. 11).
+//	"featurelevel=FEATURE_LEVEL": Specify a feature level (e.g. 11_0). This is for DirectX 12.
+//
+// The options taking arguments are exclusive, and if multiples are specified, the lastly specified value is adopted.
+//
+// The possible values for the option "version" are "11" and "12".
+// If the version is not specified, the default version 11 is adopted.
+//
+// The option "featurelevel" is valid only for DirectX 12.
+// The possible values are "11_0", "11_1", "12_0", "12_1", and "12_2". The default value is "11_0".
+//
+// The option "dred" is valid only for DirectX 12 and is independent of "debug".
+// On a device removal, it reports the GPU's last command and the page-fault address via log/slog.
+//
+// Ebitengine's names, `EBITENGINE_GRAPHICS_LIBRARY` and `EBITENGINE_DIRECTX`, are read when the
+// ggfx ones are not set.
 package host
 
 import (
@@ -40,10 +75,10 @@ import (
 type Options struct {
 	// GraphicsLibrary is the graphics library to draw with. GraphicsLibraryAuto, the default,
 	// chooses one, and the GGFX_GRAPHICS_LIBRARY environment variable can name one then.
-	GraphicsLibrary ggfx.GraphicsLibrary
+	GraphicsLibrary GraphicsLibrary
 
 	// ColorSpace is the color space of the screens. It is honored by Metal and WebGL.
-	ColorSpace ggfx.ColorSpace
+	ColorSpace ColorSpace
 
 	// SingleThread runs the graphics commands on the goroutine that flushes them, instead of on
 	// a thread of the renderer's own. The browser always runs them so.
@@ -72,8 +107,8 @@ func Init(options *Options) error {
 }
 
 // toRenderColorSpace resolves ColorSpaceDefault to the environment's color space.
-func toRenderColorSpace(colorSpace ggfx.ColorSpace) ecolor.ColorSpace {
-	if colorSpace != ggfx.ColorSpaceDefault {
+func toRenderColorSpace(colorSpace ColorSpace) ecolor.ColorSpace {
+	if colorSpace != ColorSpaceDefault {
 		return ecolor.ColorSpace(colorSpace)
 	}
 	if runtime.GOOS == "darwin" {
@@ -95,7 +130,7 @@ func Terminate() {
 // its windows.
 type Driver struct {
 	// Library is the graphics library, or GraphicsLibraryUnknown before Init.
-	Library ggfx.GraphicsLibrary
+	Library GraphicsLibrary
 
 	// OpenGLES reports whether the OpenGL driver draws with OpenGL ES, which decides the contexts
 	// a window system creates for it.
@@ -110,7 +145,7 @@ type Driver struct {
 // CurrentDriver describes the graphics driver.
 func CurrentDriver() Driver {
 	return Driver{
-		Library:           ggfx.GraphicsLibrary(render.Library()),
+		Library:           GraphicsLibrary(render.Library()),
 		OpenGLES:          render.IsOpenGLES(),
 		DirectComposition: render.SupportsDirectComposition(),
 	}

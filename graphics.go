@@ -17,7 +17,6 @@ package ggfx
 import (
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/builtinshader"
-	"github.com/ironpark/ggfx/internal/render"
 )
 
 // Filter represents the type of texture filter to be used when an image is magnified or minified.
@@ -35,63 +34,18 @@ const (
 	FilterPixelated Filter = Filter(builtinshader.FilterPixelated)
 )
 
-// GraphicsLibrary represents graphics libraries supported by the engine.
-type GraphicsLibrary int
-
-const (
-	// GraphicsLibraryAuto lets the renderer choose the graphics library.
-	GraphicsLibraryAuto GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryAuto)
-
-	// GraphicsLibraryUnknown represents the state at which graphics library cannot be determined,
-	// e.g. hasn't loaded yet or failed to initialize.
-	GraphicsLibraryUnknown GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryUnknown)
-
-	// GraphicsLibraryOpenGL represents the graphics library OpenGL.
-	GraphicsLibraryOpenGL GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryOpenGL)
-
-	// GraphicsLibraryDirectX represents the graphics library Microsoft DirectX.
-	GraphicsLibraryDirectX GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryDirectX)
-
-	// GraphicsLibraryMetal represents the graphics library Apple's Metal.
-	GraphicsLibraryMetal GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryMetal)
-)
-
-// String returns a string representing the graphics library.
-func (g GraphicsLibrary) String() string {
-	return render.GraphicsLibrary(g).String()
-}
-
-// Ensures GraphicsLibraryAuto is zero (the default value for RunOptions).
-var _ [GraphicsLibraryAuto]int = [0]int{}
-
 // DebugInfo is a struct to store debug info about the graphics.
+//
+// The graphics library in use is a window system's to know, through ggfx/host's CurrentDriver.
 type DebugInfo struct {
-	// GraphicsLibrary represents the graphics library currently in use.
-	GraphicsLibrary GraphicsLibrary
-
 	// TotalGPUImageMemoryUsageInBytes is the total image memory usage for GPU in bytes.
 	// TotalGPUImageMemoryUsageInBytes is approximately the total memory usage for GPU.
 	TotalGPUImageMemoryUsageInBytes int64
 }
 
-// ReadDebugInfo writes debug info (e.g. current graphics library) into a provided struct.
+// ReadDebugInfo writes debug info (e.g. the GPU memory used by images) into a provided struct.
 //
 // ReadDebugInfo is concurrent-safe.
 func ReadDebugInfo(d *DebugInfo) {
-	d.GraphicsLibrary = GraphicsLibrary(render.Library())
 	d.TotalGPUImageMemoryUsageInBytes = atlas.TotalGPUImageMemoryUsageInBytes()
 }
-
-// ColorSpace represents the color space of the screen.
-type ColorSpace int
-
-const (
-	// ColorSpaceDefault represents the default color space.
-	ColorSpaceDefault ColorSpace = iota
-
-	// ColorSpaceSRGB represents the sRGB color space (https://en.wikipedia.org/wiki/SRGB).
-	ColorSpaceSRGB
-
-	// ColorSpaceDisplayP3 represents the Display P3 color space (https://en.wikipedia.org/wiki/DCI-P3).
-	ColorSpaceDisplayP3
-)

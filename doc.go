@@ -21,42 +21,8 @@
 //
 // Images can be made and drawn to at any time from any goroutine. Their draws run in a frame, and
 // reading pixels waits for one. host.Init is called on the main thread, the goroutine running main
-// on the OS main thread.
-//
-// # Environment variables
-//
-// `GGFX_GRAPHICS_LIBRARY` environment variable specifies the graphics library.
-// If the specified graphics library is not available, Init returns an error.
-// This environment variable works when Init is called with GraphicsLibraryAuto.
-// This can take one of the following value:
-//
-//	"auto":    The renderer chooses the graphics library automatically. This is the default value.
-//	"opengl":  OpenGL, OpenGL ES, or WebGL.
-//	"directx": DirectX. This works only on Windows.
-//	"metal":   Metal. This works only on macOS or iOS.
-//
-// `GGFX_DIRECTX` environment variable specifies various parameters for DirectX.
-// You can specify multiple values separated by a comma. The default value is empty (i.e. no parameters).
-//
-//	"debug":                      Use a debug layer.
-//	"dred":                       Enable Device Removed Extended Data to diagnose a device removal. This is for DirectX 12.
-//	"warp":                       Use WARP (i.e. software rendering).
-//	"version=VERSION":            Specify a DirectX version (e.g. 11).
-//	"featurelevel=FEATURE_LEVEL": Specify a feature level (e.g. 11_0). This is for DirectX 12.
-//
-// The options taking arguments are exclusive, and if multiples are specified, the lastly specified value is adopted.
-//
-// The possible values for the option "version" are "11" and "12".
-// If the version is not specified, the default version 11 is adopted.
-//
-// The option "featurelevel" is valid only for DirectX 12.
-// The possible values are "11_0", "11_1", "12_0", "12_1", and "12_2". The default value is "11_0".
-//
-// The option "dred" is valid only for DirectX 12 and is independent of "debug".
-// On a device removal, it reports the GPU's last command and the page-fault address via log/slog.
-//
-// Ebitengine's names, `EBITENGINE_GRAPHICS_LIBRARY` and `EBITENGINE_DIRECTX`, are read when the
-// ggfx ones are not set.
+// on the OS main thread. The graphics library, the color space and the environment variables
+// that choose them are host's.
 //
 // # Build tags
 //

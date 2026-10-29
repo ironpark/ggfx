@@ -34,7 +34,7 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
-	if err := host.Init(&host.Options{GraphicsLibrary: ggfx.GraphicsLibraryMetal}); err != nil {
+	if err := host.Init(&host.Options{GraphicsLibrary: host.GraphicsLibraryMetal}); err != nil {
 		panic(err)
 	}
 	code := m.Run()

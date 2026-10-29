@@ -94,11 +94,14 @@ Linux and wasm, and is a commit of its own.
    carries whether it is in a live resize or fullscreen, which ggwd reads on the main thread
    before each frame, and the forced frame of a resize. The vsync-off paths in Metal and
    DirectX, which nothing reached, went with it.
+8. Done. Move `GraphicsLibrary` and `ColorSpace` from ggfx to `host`, with the environment
+   variables that choose them: only `Init` and `CurrentDriver` take them, so what is left in
+   ggfx is drawing. `DebugInfo` lost its `GraphicsLibrary`, which `CurrentDriver` reports.
+   ggwd's `RunOptions` take the `host` types and pass them through.
 
 ## Open questions
 
 - The browser has one canvas and its own frame loop through `requestAnimationFrame`; that loop
   belongs to ggwd, and the WebGL driver's single surface stays a renderer limit.
-- `RunOptions.ColorSpace` and `GraphicsLibrary` become `InitOptions`; ggwd passes them through.
 - A live resize on macOS draws from the main thread, in the resize callback, and only GLFW's
   path was run; the NSView switch did not change it, but no resize was dragged after it.

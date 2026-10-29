@@ -20,7 +20,6 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/host"
 )
 
@@ -50,7 +49,7 @@ func runInFrame(m *testing.M) (int, error) {
 	if err := newCanvasSurface(); err != nil {
 		return 0, err
 	}
-	if host.CurrentDriver().Library == ggfx.GraphicsLibraryOpenGL && runtime.GOOS != "js" {
+	if host.CurrentDriver().Library == host.GraphicsLibraryOpenGL && runtime.GOOS != "js" {
 		c, err := newGLContext()
 		if err != nil {
 			return 0, fmt.Errorf("testing: OpenGL needs a context: %w", err)
