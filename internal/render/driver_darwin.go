@@ -17,47 +17,31 @@
 package render
 
 import (
-	"errors"
 	"fmt"
 
-	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 )
 
-type graphicsDriverCreatorImpl struct {
-	colorSpace color.ColorSpace
+func newGraphicsDriverFor(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, error) {
+	switch lib {
+	case GraphicsLibraryMetal:
+		return metal.NewGraphics(o.ColorSpace)
+	case GraphicsLibraryOpenGL:
+		return opengl.NewGraphics()
+	}
+	return nil, errUnsupported(lib)
 }
 
-func (g *graphicsDriverCreatorImpl) newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error) {
-	m, err1 := g.newMetal()
+func newAutoGraphicsDriver(o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {
+	m, err1 := newGraphicsDriverFor(GraphicsLibraryMetal, o)
 	if err1 == nil {
 		return m, GraphicsLibraryMetal, nil
 	}
-	o, err2 := g.newOpenGL()
+	g, err2 := newGraphicsDriverFor(GraphicsLibraryOpenGL, o)
 	if err2 == nil {
-		return o, GraphicsLibraryOpenGL, nil
+		return g, GraphicsLibraryOpenGL, nil
 	}
 	return nil, GraphicsLibraryUnknown, fmt.Errorf("render: failed to choose graphics drivers: Metal: %v, OpenGL: %v", err1, err2)
-}
-
-func (*graphicsDriverCreatorImpl) newOpenGL() (graphicsdriver.Graphics, error) {
-	return opengl.NewGraphics()
-}
-
-func (*graphicsDriverCreatorImpl) newDirectX() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("render: DirectX is not supported in this environment")
-}
-
-func (g *graphicsDriverCreatorImpl) newMetal() (graphicsdriver.Graphics, error) {
-	return metal.NewGraphics(g.colorSpace)
-}
-
-func (*graphicsDriverCreatorImpl) newPlayStation5() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("render: PlayStation 5 is not supported in this environment")
-}
-
-func newGraphicsDriverCreator(colorSpace color.ColorSpace, canvas any) graphicsDriverCreator {
-	return &graphicsDriverCreatorImpl{colorSpace: colorSpace}
 }

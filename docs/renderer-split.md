@@ -32,6 +32,7 @@ The atlas and the command queue are process-wide, so the renderer is too. `rende
 func Init(o *InitOptions) error // GraphicsLibrary, ColorSpace, SingleThread, MainThread, Canvas
 func Terminate()
 
+func CurrentGraphicsLibrary() GraphicsLibrary
 func SetGLContext(c GLContext)  // the hidden context OpenGL draws in on the desktop
 func IsOpenGLES() bool          // which context to create for it
 func SupportsDirectComposition() bool

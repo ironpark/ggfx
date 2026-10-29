@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 package testing
 
 import "syscall/js"
@@ -22,8 +21,4 @@ func canvas() any {
 	c := js.Global().Get("document").Call("createElement", "canvas")
 	js.Global().Get("document").Get("body").Call("appendChild", c)
 	return c
-}
-
-func newGLContext() (interface{ MakeContextCurrent() error }, error) {
-	panic("testing: not reached")
 }

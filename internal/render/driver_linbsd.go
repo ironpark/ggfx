@@ -17,38 +17,18 @@
 package render
 
 import (
-	"errors"
-
-	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 )
 
-type graphicsDriverCreatorImpl struct {
-	colorSpace color.ColorSpace
+func newGraphicsDriverFor(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, error) {
+	if lib == GraphicsLibraryOpenGL {
+		return opengl.NewGraphics()
+	}
+	return nil, errUnsupported(lib)
 }
 
-func (g *graphicsDriverCreatorImpl) newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error) {
-	graphics, err := g.newOpenGL()
-	return graphics, GraphicsLibraryOpenGL, err
-}
-
-func (*graphicsDriverCreatorImpl) newOpenGL() (graphicsdriver.Graphics, error) {
-	return opengl.NewGraphics()
-}
-
-func (*graphicsDriverCreatorImpl) newDirectX() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("render: DirectX is not supported in this environment")
-}
-
-func (*graphicsDriverCreatorImpl) newMetal() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("render: Metal is not supported in this environment")
-}
-
-func (*graphicsDriverCreatorImpl) newPlayStation5() (graphicsdriver.Graphics, error) {
-	return nil, errors.New("render: PlayStation 5 is not supported in this environment")
-}
-
-func newGraphicsDriverCreator(colorSpace color.ColorSpace, canvas any) graphicsDriverCreator {
-	return &graphicsDriverCreatorImpl{colorSpace: colorSpace}
+func newAutoGraphicsDriver(o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {
+	g, err := newGraphicsDriverFor(GraphicsLibraryOpenGL, o)
+	return g, GraphicsLibraryOpenGL, err
 }

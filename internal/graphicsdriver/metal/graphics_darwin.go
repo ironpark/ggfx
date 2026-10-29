@@ -649,10 +649,6 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 
 	dst := g.images[dstID]
 
-	if dst.screen {
-		dst.surface.view.update()
-	}
-
 	var srcs [graphics.ShaderSrcImageCount]*Image
 	for i, srcID := range srcIDs {
 		srcs[i] = g.images[srcID]

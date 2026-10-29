@@ -21,16 +21,10 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
-type graphicsDriverCreator interface {
-	newAuto() (graphicsdriver.Graphics, GraphicsLibrary, error)
-	newOpenGL() (graphicsdriver.Graphics, error)
-	newDirectX() (graphicsdriver.Graphics, error)
-	newMetal() (graphicsdriver.Graphics, error)
-	newPlayStation5() (graphicsdriver.Graphics, error)
-}
-
-func newGraphicsDriver(creator graphicsDriverCreator, graphicsLibrary GraphicsLibrary) (graphicsdriver.Graphics, GraphicsLibrary, error) {
-	if graphicsLibrary == GraphicsLibraryAuto {
+// newGraphicsDriver creates the driver for lib. For GraphicsLibraryAuto, the environment variable
+// can name one, and otherwise the platform chooses.
+func newGraphicsDriver(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {
+	if lib == GraphicsLibraryAuto {
 		envName := "EBITENGINE_GRAPHICS_LIBRARY"
 		env := os.Getenv(envName)
 		if env == "" {
@@ -43,55 +37,29 @@ func newGraphicsDriver(creator graphicsDriverCreator, graphicsLibrary GraphicsLi
 		case "", "auto":
 			// Keep the automatic choosing.
 		case "opengl":
-			graphicsLibrary = GraphicsLibraryOpenGL
+			lib = GraphicsLibraryOpenGL
 		case "directx":
-			graphicsLibrary = GraphicsLibraryDirectX
+			lib = GraphicsLibraryDirectX
 		case "metal":
-			graphicsLibrary = GraphicsLibraryMetal
-		case "playstation5":
-			graphicsLibrary = GraphicsLibraryPlayStation5
+			lib = GraphicsLibraryMetal
 		default:
 			return nil, 0, fmt.Errorf("render: an unsupported graphics library is specified by the environment variable: %s", env)
 		}
 	}
 
-	switch graphicsLibrary {
-	case GraphicsLibraryAuto:
-		g, lib, err := creator.newAuto()
-		if err != nil {
-			return nil, 0, err
-		}
-		if g == nil {
-			return nil, 0, fmt.Errorf("render: no graphics library is available")
-		}
-		return g, lib, nil
-	case GraphicsLibraryOpenGL:
-		g, err := creator.newOpenGL()
-		if err != nil {
-			return nil, 0, err
-		}
-		return g, GraphicsLibraryOpenGL, nil
-	case GraphicsLibraryDirectX:
-		g, err := creator.newDirectX()
-		if err != nil {
-			return nil, 0, err
-		}
-		return g, GraphicsLibraryDirectX, nil
-	case GraphicsLibraryMetal:
-		g, err := creator.newMetal()
-		if err != nil {
-			return nil, 0, err
-		}
-		return g, GraphicsLibraryMetal, nil
-	case GraphicsLibraryPlayStation5:
-		g, err := creator.newPlayStation5()
-		if err != nil {
-			return nil, 0, err
-		}
-		return g, GraphicsLibraryPlayStation5, nil
-	default:
-		return nil, 0, fmt.Errorf("render: an unsupported graphics library is specified: %d", graphicsLibrary)
+	if lib == GraphicsLibraryAuto {
+		return newAutoGraphicsDriver(o)
 	}
+	g, err := newGraphicsDriverFor(lib, o)
+	if err != nil {
+		return nil, 0, err
+	}
+	return g, lib, nil
+}
+
+// errUnsupported is the error for a graphics library the platform does not have.
+func errUnsupported(lib GraphicsLibrary) error {
+	return fmt.Errorf("render: %s is not supported in this environment", lib)
 }
 
 type GraphicsLibrary int

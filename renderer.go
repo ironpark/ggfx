@@ -100,6 +100,12 @@ func SetGLContext(context GLContext) {
 	render.SetGLContext(context)
 }
 
+// CurrentGraphicsLibrary returns the graphics library [Init] chose, or GraphicsLibraryUnknown
+// before Init.
+func CurrentGraphicsLibrary() GraphicsLibrary {
+	return GraphicsLibrary(render.Library())
+}
+
 // IsOpenGLES reports whether the OpenGL driver draws with OpenGL ES, which decides the contexts
 // a window system creates for it. It is false for the other drivers.
 func IsOpenGLES() bool {

@@ -106,32 +106,17 @@ func toUIRunOptions(options *RunOptions) *ui.RunOptions {
 		defaultX11InstanceName = "ebitengine-application"
 	)
 
-	if options == nil {
-		return &ui.RunOptions{
-			X11ClassName:    defaultX11ClassName,
-			X11InstanceName: defaultX11InstanceName,
-		}
+	var o ui.RunOptions
+	if options != nil {
+		o = ui.RunOptions(*options)
 	}
-
-	if options.X11ClassName == "" {
-		options.X11ClassName = defaultX11ClassName
+	if o.X11ClassName == "" {
+		o.X11ClassName = defaultX11ClassName
 	}
-	if options.X11InstanceName == "" {
-		options.X11InstanceName = defaultX11InstanceName
+	if o.X11InstanceName == "" {
+		o.X11InstanceName = defaultX11InstanceName
 	}
-
-	return &ui.RunOptions{
-		GraphicsLibrary:          options.GraphicsLibrary,
-		InitUnfocused:            options.InitUnfocused,
-		ScreenTransparent:        options.ScreenTransparent,
-		SkipTaskbar:              options.SkipTaskbar,
-		SingleThread:             options.SingleThread,
-		DisableHiDPI:             options.DisableHiDPI,
-		ColorSpace:               options.ColorSpace,
-		ApplePressAndHoldEnabled: options.ApplePressAndHoldEnabled,
-		X11ClassName:             options.X11ClassName,
-		X11InstanceName:          options.X11InstanceName,
-	}
+	return &o
 }
 
 // AbsPather is a directory entry or a file that has a path in the real file system.

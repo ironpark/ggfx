@@ -23,6 +23,7 @@ import (
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/ggwd/internal/file"
 	"github.com/ironpark/ggfx/ggwd/internal/hook"
+	"github.com/ironpark/ggfx/ggwd/internal/thread"
 )
 
 var (
@@ -897,4 +898,24 @@ func dipToNativePixels(x float64, scale float64) float64 {
 
 func (u *UserInterface) RunOnMainThread(f func()) {
 	f()
+}
+
+// runLoop runs the loop on the calling goroutine, the only one the browser has. start, if any,
+// runs after the initialization and before the first iteration.
+func (u *UserInterface) runLoop(options *RunOptions, start func() error) error {
+	u.mainThread = thread.NewNoopThread()
+
+	u.setRunning(true)
+	defer u.setRunning(false)
+	defer ggfx.Terminate()
+
+	if err := u.initOnMainThread(options); err != nil {
+		return err
+	}
+	if start != nil {
+		if err := start(); err != nil {
+			return err
+		}
+	}
+	return u.loopFrames()
 }

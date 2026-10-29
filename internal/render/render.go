@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"image"
-	"sync"
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
@@ -35,16 +34,13 @@ var (
 	driver  graphicsdriver.Graphics
 	library atomic.Int32
 
-	// running reports whether Init was called and Terminate was not, so that a read of pixels
-	// can wait for a frame.
-	running atomic.Bool
+	// state is where the renderer is in its life: before Init, running, or terminated.
+	state atomic.Int32
 
 	// stopRenderThread stops the render thread Init started, and renderThreadDone is closed
 	// when it has stopped. Both are nil when the render thread is the caller's.
 	stopRenderThread context.CancelFunc
 	renderThreadDone chan struct{}
-	terminateOnce    sync.Once
-	terminated       atomic.Bool
 
 	theErr atomic.Pointer[error]
 	tick   atomic.Int64
@@ -54,6 +50,12 @@ var (
 
 	// whiteImage is the source a fill draws from.
 	whiteImage *Image
+)
+
+const (
+	stateNew int32 = iota
+	stateRunning
+	stateTerminated
 )
 
 func init() {
@@ -96,7 +98,7 @@ func Init(o *Options) error {
 	if driver != nil {
 		return errors.New("render: Init is called twice")
 	}
-	g, lib, err := newGraphicsDriver(newGraphicsDriverCreator(o.ColorSpace, o.Canvas), o.GraphicsLibrary)
+	g, lib, err := newGraphicsDriver(o.GraphicsLibrary, o)
 	if err != nil {
 		return err
 	}
@@ -116,28 +118,28 @@ func Init(o *Options) error {
 			graphicscommand.LoopRenderThread(ctx)
 		}()
 	}
-	running.Store(true)
+	state.Store(stateRunning)
 	return nil
 }
 
 // Terminate waits for the queued graphics commands to run and stops the render thread. Nothing
 // is rendered after it. A window system calls it before it destroys the context or the windows
 // the commands draw to.
+// Terminate does nothing before Init or when called again.
 func Terminate() {
-	terminateOnce.Do(func() {
-		terminated.Store(true)
-		running.Store(false)
-		graphicscommand.Terminate()
-		if stopRenderThread != nil {
-			stopRenderThread()
-			<-renderThreadDone
-		}
-	})
+	if !state.CompareAndSwap(stateRunning, stateTerminated) {
+		return
+	}
+	graphicscommand.Terminate()
+	if stopRenderThread != nil {
+		stopRenderThread()
+		<-renderThreadDone
+	}
 }
 
 // Terminated reports whether Terminate was called.
 func Terminated() bool {
-	return terminated.Load()
+	return state.Load() == stateTerminated
 }
 
 // SetGLContext sets the OpenGL context everything is drawn in on the desktop. It shares objects
@@ -186,26 +188,16 @@ func Flush(present bool) error {
 	return atlas.FlushCommands(driver, present)
 }
 
-// MaxImageSize returns the maximum image size the graphics driver supports.
-func MaxImageSize() int {
-	return graphicscommand.MaxImageSize(driver)
-}
-
-// ColorSpace returns the graphics driver's color space.
-func ColorSpace() color.ColorSpace {
-	return driver.ColorSpace()
-}
-
-// Error returns the error a read of pixels ran into, if any.
-func Error() error {
+// loadError returns the error a read of pixels ran into, if any.
+func loadError() error {
 	if err := theErr.Load(); err != nil {
 		return *err
 	}
 	return nil
 }
 
-// SetError records err, joined with the errors recorded before it.
-func SetError(e error) {
+// setError records e, joined with the errors recorded before it.
+func setError(e error) {
 	if e == nil {
 		return
 	}
@@ -241,7 +233,7 @@ func BeginFrame() error {
 		return err
 	}
 	processFuncsInFrame()
-	if err := Error(); err != nil {
+	if err := loadError(); err != nil {
 		return errors.Join(err, atlas.EndFrame(driver))
 	}
 	return nil
@@ -259,7 +251,7 @@ func FinishForcedFrame() error {
 }
 
 func readPixels(img *Image, pixels []byte, region image.Rectangle) error {
-	if !running.Load() {
+	if state.Load() != stateRunning {
 		panic("render: ReadPixels cannot be called before Init or after Terminate")
 	}
 

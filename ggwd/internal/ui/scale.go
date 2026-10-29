@@ -14,8 +14,6 @@
 
 package ui
 
-import "github.com/ironpark/ggfx"
-
 // monitorDeviceScaleFactor returns the current monitor's device scale factor, or 1 when no monitor
 // is available.
 func (u *UserInterface) monitorDeviceScaleFactor() float64 {
@@ -34,11 +32,4 @@ func (u *UserInterface) LogicalPositionToClientPositionInNativePixels(x, y float
 	x = dipToNativePixels(x, s)
 	y = dipToNativePixels(y, s)
 	return x, y
-}
-
-// graphicsLibrary returns the graphics library the renderer draws with.
-func graphicsLibrary() ggfx.GraphicsLibrary {
-	var info ggfx.DebugInfo
-	ggfx.ReadDebugInfo(&info)
-	return info.GraphicsLibrary
 }

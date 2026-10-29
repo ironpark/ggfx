@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 package testing
 
 import (
@@ -47,9 +46,7 @@ func runInFrame(m *testing.M) (int, error) {
 	}
 	defer ggfx.Terminate()
 
-	var info ggfx.DebugInfo
-	ggfx.ReadDebugInfo(&info)
-	if info.GraphicsLibrary == ggfx.GraphicsLibraryOpenGL && runtime.GOOS != "js" {
+	if ggfx.CurrentGraphicsLibrary() == ggfx.GraphicsLibraryOpenGL && runtime.GOOS != "js" {
 		c, err := newGLContext()
 		if err != nil {
 			return 0, fmt.Errorf("testing: OpenGL needs a context: %w", err)

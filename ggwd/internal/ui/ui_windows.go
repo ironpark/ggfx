@@ -166,11 +166,8 @@ func (u *glfwBackend) nativeWindow() (uintptr, error) {
 
 // surfaceTarget returns what a surface other than OpenGL's presents to: the window's HWND.
 func (u *glfwBackend) surfaceTarget() (any, error) {
-	w, err := u.window.GetWin32Window()
-	if err != nil {
-		return nil, err
-	}
-	return ggfx.HWND(w), nil
+	w, err := u.nativeWindow()
+	return ggfx.HWND(w), err
 }
 
 func (u *glfwBackend) isWindowOccluded() (bool, error) {

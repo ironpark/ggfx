@@ -348,7 +348,7 @@ func (u *glfwBackend) nativeWindow() (uintptr, error) {
 
 // surfaceTarget returns what a surface other than OpenGL's presents to: the window's content view.
 func (u *glfwBackend) surfaceTarget() (any, error) {
-	w, err := u.window.GetCocoaWindow()
+	w, err := u.nativeWindow()
 	if err != nil {
 		return nil, err
 	}

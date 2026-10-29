@@ -28,31 +28,18 @@ import (
 
 const kCVReturnSuccess = 0
 
+// setNSView makes the layer the layer of nsView, which renders it and nothing else. It is called
+// once, on the main thread.
 func (v *view) setNSView(nsView uintptr) {
 	v.nsView = nsView
-	v.nsViewChanged = true
-}
-
-func (v *view) setUIView(uiview uintptr) {
-	panic("metal: setUIView is not available on macOS")
-}
-
-func (v *view) update() {
-	if !v.nsViewChanged {
-		return
-	}
-
-	// TODO: Should this be called on the main thread?
-	nsView := cocoa.NSView{ID: objc.ID(v.nsView)}
-	nsView.SetLayer(uintptr(v.ml.Layer()))
-	nsView.SetWantsLayer(true)
+	view := cocoa.NSView{ID: objc.ID(nsView)}
+	view.SetLayer(uintptr(v.ml.Layer()))
+	view.SetWantsLayer(true)
 	// The layer content is updated by the drawable presentations, not by the view's display
 	// mechanism. Keep AppKit from updating the layer content, especially when window resizing
 	// starts. Otherwise, the layer content is reset and the window background is shown for a
 	// moment (#3478).
-	nsView.SetLayerContentsRedrawPolicy(cocoa.NSViewLayerContentsRedrawNever)
-
-	v.nsViewChanged = false
+	view.SetLayerContentsRedrawPolicy(cocoa.NSViewLayerContentsRedrawNever)
 }
 
 const (

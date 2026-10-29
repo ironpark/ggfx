@@ -115,7 +115,7 @@ func (u *UserInterface) initGraphicsOnMainThread(options *RunOptions) error {
 		return err
 	}
 
-	if graphicsLibrary() == ggfx.GraphicsLibraryOpenGL {
+	if ggfx.CurrentGraphicsLibrary() == ggfx.GraphicsLibraryOpenGL {
 		if err := u.createGLContextWindow(); err != nil {
 			return err
 		}
@@ -192,7 +192,7 @@ func (u *glfwBackend) createWindowOnMainThread() error {
 
 	// The OpenGL driver needs a window with a GL context, unlike the other drivers.
 	// Set the context-related hints before creating a window.
-	lib := graphicsLibrary()
+	lib := ggfx.CurrentGraphicsLibrary()
 	if lib == ggfx.GraphicsLibraryOpenGL {
 		if err := u.setOpenGLWindowHints(); err != nil {
 			return err
