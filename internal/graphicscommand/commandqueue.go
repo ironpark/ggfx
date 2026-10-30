@@ -257,6 +257,11 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 		}
 	}()
 
+	flushes.Add(1)
+	commandsRun.Add(int64(len(q.commands)))
+	verticesSent.Add(int64(len(q.vertices) / graphics.VertexFloatCount))
+	bufferBytes.Store(int64(cap(q.vertices)*4 + cap(q.indices)*4))
+
 	cs := q.commands
 	for len(cs) > 0 {
 		var nv int
@@ -492,4 +497,15 @@ func (b *uint32sBuffer) alloc(n int) []uint32 {
 
 func (b *uint32sBuffer) reset() {
 	b.buf = b.buf[:0]
+}
+
+// The queue's counts, for DebugInfo: they only grow, but for bufferBytes,
+// the size of the vertex and index buffers kept between flushes.
+var flushes, commandsRun, verticesSent, bufferBytes atomic.Int64
+
+// Counts reports how many flushes and commands have run and vertices been
+// sent since the program started, and the bytes the queue keeps for
+// vertices and indices.
+func Counts() (flushCount, commands, vertices, buffers int64) {
+	return flushes.Load(), commandsRun.Load(), verticesSent.Load(), bufferBytes.Load()
 }

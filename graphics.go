@@ -17,6 +17,7 @@ package ggfx
 import (
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/builtinshader"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
 )
 
 // Filter represents the type of texture filter to be used when an image is magnified or minified.
@@ -41,6 +42,14 @@ type DebugInfo struct {
 	// TotalGPUImageMemoryUsageInBytes is the total image memory usage for GPU in bytes.
 	// TotalGPUImageMemoryUsageInBytes is approximately the total memory usage for GPU.
 	TotalGPUImageMemoryUsageInBytes int64
+
+	// Flushes, Commands and Vertices count the command queue's flushes to
+	// the GPU, the commands it ran and the vertices it sent, since the
+	// program started; read twice, they give a rate.
+	Flushes, Commands, Vertices int64
+	// QueueBufferBytes is what the queue keeps between flushes for
+	// vertices and indices, as large as the largest batch so far.
+	QueueBufferBytes int64
 }
 
 // ReadDebugInfo writes debug info (e.g. the GPU memory used by images) into a provided struct.
@@ -48,4 +57,5 @@ type DebugInfo struct {
 // ReadDebugInfo is concurrent-safe.
 func ReadDebugInfo(d *DebugInfo) {
 	d.TotalGPUImageMemoryUsageInBytes = atlas.TotalGPUImageMemoryUsageInBytes()
+	d.Flushes, d.Commands, d.Vertices, d.QueueBufferBytes = graphicscommand.Counts()
 }
