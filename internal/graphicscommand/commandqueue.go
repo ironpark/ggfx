@@ -61,6 +61,11 @@ type commandQueue struct {
 	vertices []float32
 	indices  []uint32
 
+	// verticesUse and indicesUse track how many vertices and indices recent flushes held, so
+	// that the slices give back the room a large flush took.
+	verticesUse recentUse
+	indicesUse  recentUse
+
 	tmpNumVertexFloats int
 
 	drawTrianglesCommandPool drawTrianglesCommandPool
@@ -128,6 +133,8 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 						IndexCount: len(indices),
 					})
 				}
+				// The merged command keeps the last command's uniforms, which are equal.
+				q.uint32sBuffer.free(uniforms)
 				return
 			}
 		}
@@ -243,8 +250,9 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 			q.commands[i] = nil
 		}
 		q.commands = q.commands[:0]
-		q.vertices = q.vertices[:0]
-		q.indices = q.indices[:0]
+		// No command refers to the vertices or indices any more, and the driver has copied them.
+		q.vertices = shrinkToRecentUse(q.vertices, &q.verticesUse)
+		q.indices = shrinkToRecentUse(q.indices, &q.indicesUse)
 		q.tmpNumVertexFloats = 0
 
 		if mode != graphicsdriver.FlushModeIntermediate {
@@ -475,6 +483,11 @@ func (c *commandQueueManager) flush(graphicsDriver graphicsdriver.Graphics, mode
 // uint32sBuffer is a reusable buffer to allocate []uint32.
 type uint32sBuffer struct {
 	buf []uint32
+
+	// used is how many uint32s were allocated since the last reset, over all the arrays buf used.
+	used int
+	// use tracks used over recent frames.
+	use recentUse
 }
 
 func roundUpPower2(x int) int {
@@ -492,11 +505,79 @@ func (b *uint32sBuffer) alloc(n int) []uint32 {
 	}
 	s := buf[len(buf) : len(buf)+n]
 	b.buf = buf[:len(buf)+n]
+	b.used += n
 	return s
 }
 
+// free gives back s, the slice the last alloc returned, which must no longer be used. A slice
+// that is not the last one allocated is left alone.
+func (b *uint32sBuffer) free(s []uint32) {
+	n := len(s)
+	if n == 0 || n > len(b.buf) || &s[0] != &b.buf[len(b.buf)-n] {
+		return
+	}
+	b.buf = b.buf[:len(b.buf)-n]
+	b.used -= n
+}
+
+// reset frees all the allocated slices; it must be called only when none of them is used any more.
 func (b *uint32sBuffer) reset() {
+	b.use.add(b.used)
+	b.used = 0
+	limit := max(b.use.peak(), minRetainedElements)
+	if cap(b.buf) > shrinkFactor*limit {
+		// Slices still held elsewhere keep the old array alive by themselves.
+		b.buf = make([]uint32, 0, 2*limit)
+		return
+	}
 	b.buf = b.buf[:0]
+}
+
+const (
+	// recentUseWindow is how many observations a recentUse covers at least; it covers up to twice
+	// as many.
+	recentUseWindow = 60
+
+	// shrinkFactor is how many times larger than its recent peak a reused slice may grow before
+	// its room is given back.
+	shrinkFactor = 4
+
+	// minRetainedElements is the room a reused slice may always keep.
+	minRetainedElements = 4096
+)
+
+// recentUse tracks the most a reused slice held over recent flushes or frames.
+type recentUse struct {
+	current  int
+	previous int
+	count    int
+}
+
+// add records that n elements were used.
+func (r *recentUse) add(n int) {
+	r.current = max(r.current, n)
+	r.count++
+	if r.count >= recentUseWindow {
+		r.previous, r.current, r.count = r.current, 0, 0
+	}
+}
+
+// peak reports the most elements used over the last recentUseWindow to 2*recentUseWindow
+// observations.
+func (r *recentUse) peak() int {
+	return max(r.current, r.previous)
+}
+
+// shrinkToRecentUse records the use of s in use, and returns s emptied. If s has far more room
+// than recent uses needed, the returned slice is a smaller one. Slices of s may still be held
+// elsewhere; they keep the old array alive by themselves.
+func shrinkToRecentUse[T any](s []T, use *recentUse) []T {
+	use.add(len(s))
+	limit := max(use.peak(), minRetainedElements)
+	if cap(s) > shrinkFactor*limit {
+		return make([]T, 0, 2*limit)
+	}
+	return s[:0]
 }
 
 // The queue's counts, for DebugInfo: they only grow, but for bufferBytes,

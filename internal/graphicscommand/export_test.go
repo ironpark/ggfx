@@ -47,5 +47,44 @@ func (q *commandQueue) AllocUniformsForTesting(n int) {
 }
 
 func (q *commandQueue) PendingResourcesForTesting() (uniforms, finalizers int) {
-	return len(q.uint32sBuffer.buf), len(q.finalizers)
+	return q.uint32sBuffer.used, len(q.finalizers)
+}
+
+// PoolForTesting puts a command that drew an image over regions clip
+// regions in a pool, and reports what the command the pool hands back
+// still holds: an image, and room for how many regions.
+func PoolForTesting(regions int) (image bool, room int) {
+	var p drawTrianglesCommandPool
+	p.put(&drawTrianglesCommand{dst: &Image{}, dstRegions: make([]graphicsdriver.DstRegion, regions)})
+	c := p.get()
+	return c.dst != nil, cap(c.dstRegions)
+}
+
+// MinRetainedElements is the room a reused slice of the queue may always keep.
+const MinRetainedElements = minRetainedElements
+
+// BufferCapsForTesting reports the room the queue keeps for vertices,
+// indices and uniforms.
+func (q *commandQueue) BufferCapsForTesting() (vertices, indices, uniforms int) {
+	return cap(q.vertices), cap(q.indices), cap(q.uint32sBuffer.buf)
+}
+
+type fakeDriverImage struct{ graphicsdriver.Image }
+
+func (fakeDriverImage) ID() graphicsdriver.ImageID { return 1 }
+
+type fakeDriverShader struct{ graphicsdriver.Shader }
+
+func (fakeDriverShader) ID() graphicsdriver.ShaderID { return 1 }
+
+// NewFakeImageForTesting returns an image as if a driver had made it, for a
+// queue flushed to a fake driver.
+func NewFakeImageForTesting(width, height int) *Image {
+	return &Image{image: fakeDriverImage{}, width: width, height: height}
+}
+
+// FakeForTesting returns a copy of s as if a driver had made it, for a
+// queue flushed to a fake driver.
+func (s *Shader) FakeForTesting() *Shader {
+	return &Shader{shader: fakeDriverShader{}, ir: s.ir}
 }

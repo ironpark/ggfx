@@ -53,10 +53,23 @@ func (p *drawTrianglesCommandPool) get() *drawTrianglesCommand {
 	return v
 }
 
+// pooledDstRegions is the most regions a pooled command keeps room for.
+// A merged command can gather thousands of clip regions in one frame; were
+// its slice kept, every pooled command would come to hold the largest
+// frame's, and the pool would grow for as long as the app ran.
+const pooledDstRegions = 64
+
+// put keeps v for reuse, holding nothing of the frame it drew: not its
+// images, which could then not be released, nor a large slice of regions.
 func (p *drawTrianglesCommandPool) put(v *drawTrianglesCommand) {
 	if len(p.pool) >= 1024 {
 		return
 	}
+	regions := v.dstRegions[:0]
+	if cap(regions) > pooledDstRegions {
+		regions = nil
+	}
+	*v = drawTrianglesCommand{dstRegions: regions}
 	p.pool = append(p.pool, v)
 }
 
