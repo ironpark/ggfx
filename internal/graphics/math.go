@@ -14,38 +14,18 @@
 
 package graphics
 
-// InternalImageSize returns a nearest appropriate size as an internal image.
+// InternalImageSize returns a nearest appropriate size as an internal image: x rounded up
+// to a multiple of 16, the least a texture's side is on some iOS devices
+// (https://stackoverflow.com/questions/15935651).
 //
-// Where every GPU ggfx draws with takes a texture of any size, a desktop's,
-// that is the size rounded up to a multiple of textureGrain: a texture the
-// size of a 5046×2458 window takes 50 MB rather than the 128 MB a power of
-// two, 8192×4096, did. ggfx clamps and builds its own mipmaps, so it never
-// asks for what a size other than a power of two is denied on the GPUs
-// that deny it; the atlas's pages are powers of two by their own making.
-// Elsewhere (see math_pot.go) it is the next power of two, as it was.
+// It was the next power of two, for GPUs that take no other size, but every one ggfx draws
+// with takes any: it asks for OpenGL ES 3 and WebGL 2 at least, and Metal and Direct3D always
+// did. A texture the size of a 5046×2458 window now takes 50 MB rather than 128 MB at
+// 8192×4096. The atlas's pages are powers of two by their own making.
 func InternalImageSize(x int) int {
-	// minInternalImageSize is the minimum size of internal images (texture/framebuffer).
-	//
-	// For example, the image size less than 15 is not supported on some iOS devices.
-	// See also: https://stackoverflow.com/questions/15935651
-	const minInternalImageSize = 16
-
+	const grain = 16
 	if x <= 0 {
 		panic("graphics: x must be positive")
 	}
-	if x < minInternalImageSize {
-		return minInternalImageSize
-	}
-	if !powerOfTwoTextures {
-		return (x + textureGrain - 1) / textureGrain * textureGrain
-	}
-	r := 1
-	for r < x {
-		r <<= 1
-	}
-	return r
+	return (x + grain - 1) / grain * grain
 }
-
-// textureGrain is what a texture's sides are rounded up to where any size
-// will do.
-const textureGrain = 16

@@ -28,19 +28,8 @@ func TestInternalImageSize(t *testing.T) {
 		{16, 3},
 		{256, 255},
 		{256, 256},
-		{512, 257},
-	}
-	if !graphics.PowerOfTwoTextures {
-		testCases = []struct {
-			expected int
-			arg      int
-		}{
-			{16, 3},
-			{256, 255},
-			{256, 256},
-			{272, 257},
-			{5056, 5046},
-		}
+		{272, 257},
+		{5056, 5046},
 	}
 
 	for _, testCase := range testCases {

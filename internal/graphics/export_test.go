@@ -15,5 +15,3 @@
 package graphics
 
 var AdjustDestinationPixelForTesting = adjustDestinationPixel
-
-const PowerOfTwoTextures = powerOfTwoTextures
