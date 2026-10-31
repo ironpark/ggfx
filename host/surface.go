@@ -15,6 +15,8 @@
 package host
 
 import (
+	"image"
+
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/render"
@@ -94,6 +96,21 @@ type WindowState struct {
 func (s *Surface) SetWindowState(state WindowState) {
 	s.surface.SetWindowState(state.LiveResizing, state.Fullscreen)
 }
+
+// BufferAge reports how many presents ago the buffer the frame being drawn
+// on s draws into was last presented, as [Frame.Screen] found it: 1 the
+// last, 2 the one before. That buffer still holds that frame, and only
+// what changed since needs drawing over it. 0 means what it holds is not
+// known: the screen is cleared, and the frame is drawn whole. A driver
+// that keeps no buffers always reports 0.
+func (s *Surface) BufferAge() int { return s.surface.BufferAge() }
+
+// SetDamage tells s, while a frame is drawn to it, the parts of the frame
+// in pixels that differ from the frame presented before it, for the
+// present to show those alone and the compositor to read no more. Every
+// pixel in them must be drawn. nil, the default each frame, presents all
+// of the frame; a driver that cannot present a part does so too.
+func (s *Surface) SetDamage(rects []image.Rectangle) { s.surface.SetDamage(rects) }
 
 // Dispose deallocates the screen and releases s after the commands queued before it. A window
 // system disposes a window's surface before it destroys the window.
