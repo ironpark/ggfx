@@ -132,8 +132,10 @@ type Surface struct {
 	graphics *Graphics
 	view     view
 
-	// drawable is the drawable acquired for the current frame, and zero when none is.
-	drawable ca.MetalDrawable
+	// drawable is the drawable acquired for the current frame, and zero when none is. drawableTex
+	// is its texture, taken when it is acquired: a drawable must not be asked once presented.
+	drawable    ca.MetalDrawable
+	drawableTex mtl.Texture
 
 	// cleared reports whether the drawable has been cleared this frame. The first render pass on
 	// a drawable clears it; later passes load what earlier ones drew, as an app draws to the screen
@@ -249,7 +251,7 @@ func (s *Surface) Dispose() {
 	s.mu.Unlock()
 	if s.drawable != (ca.MetalDrawable{}) {
 		s.drawable.Release()
-		s.drawable = ca.MetalDrawable{}
+		s.drawable, s.drawableTex = ca.MetalDrawable{}, mtl.Texture{}
 	}
 	s.view.release()
 	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *Surface) bool { return t == s })
@@ -266,12 +268,13 @@ func (s *Surface) texture() mtl.Texture {
 		// Keep the drawable alive across flushes that drain the autorelease pool without presenting (#3704).
 		drawable.Retain()
 		s.drawable = drawable
+		s.drawableTex = drawable.Texture()
 		// A frame that starts from the last is not cleared.
-		s.cleared = s.startFrom(drawable.Texture())
+		s.cleared = s.startFrom(s.drawableTex)
 		// After nextDrawable, it is expected some command buffers are completed.
 		s.graphics.gcBuffers()
 	}
-	return s.drawable.Texture()
+	return s.drawableTex
 }
 
 func (g *Graphics) ColorSpace() color.ColorSpace {
@@ -431,9 +434,9 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 	g.cb = mtl.CommandBuffer{}
 
 	for _, s := range presented {
-		s.presented(s.drawable.Texture())
+		s.presented(s.drawableTex)
 		s.drawable.Release()
-		s.drawable = ca.MetalDrawable{}
+		s.drawable, s.drawableTex = ca.MetalDrawable{}, mtl.Texture{}
 		s.view.finishDrawableUsage()
 	}
 }
