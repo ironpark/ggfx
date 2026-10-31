@@ -15,7 +15,6 @@
 package metal
 
 import (
-	"cmp"
 	"fmt"
 	"image"
 	"math"
@@ -63,8 +62,11 @@ type Graphics struct {
 	// frameToCB keeps command buffers not to be released until the command buffers are completed.
 	frameToCB map[int64][]mtl.CommandBuffer
 
-	buffers       map[int64][]mtl.Buffer
-	unusedBuffers map[mtl.Buffer]struct{}
+	// buffers maps a frame number to the buffers used in the frame, until its command buffers are completed.
+	buffers map[int64][]mtl.Buffer
+
+	// unusedBuffers keeps the buffers of completed frames for later frames to reuse.
+	unusedBuffers bufferPool[mtl.Buffer]
 
 	lastDst *Image
 
@@ -274,28 +276,12 @@ loop:
 		delete(g.frameToCB, frame)
 
 		for _, b := range g.buffers[frame] {
-			if g.unusedBuffers == nil {
-				g.unusedBuffers = map[mtl.Buffer]struct{}{}
-			}
-			g.unusedBuffers[b] = struct{}{}
+			g.unusedBuffers.put(b, b.Length(), frame)
 		}
 		delete(g.buffers, frame)
 	}
 
-	const maxUnusedBuffers = 10
-	if len(g.unusedBuffers) > maxUnusedBuffers {
-		bufs := make([]mtl.Buffer, 0, len(g.unusedBuffers))
-		for b := range g.unusedBuffers {
-			bufs = append(bufs, b)
-		}
-		slices.SortFunc(bufs, func(a, b mtl.Buffer) int {
-			return cmp.Compare(b.Length(), a.Length())
-		})
-		for _, b := range bufs[maxUnusedBuffers:] {
-			delete(g.unusedBuffers, b)
-			b.Release()
-		}
-	}
+	g.unusedBuffers.evict(g.frame, mtl.Buffer.Release)
 }
 
 func (g *Graphics) ensureCommandBuffer() {
@@ -313,16 +299,8 @@ func (g *Graphics) ensureCommandBuffer() {
 func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
 	g.ensureCommandBuffer()
 
-	var newBuf mtl.Buffer
-	for b := range g.unusedBuffers {
-		if b.Length() >= length {
-			newBuf = b
-			delete(g.unusedBuffers, b)
-			break
-		}
-	}
-
-	if newBuf == (mtl.Buffer{}) {
+	newBuf, ok := g.unusedBuffers.get(length)
+	if !ok {
 		newBuf = g.device.NewBufferWithLength(pow2(length), resourceStorageMode)
 	}
 
