@@ -31,8 +31,15 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
 )
 
+// useMetalDisplayLink is whether a view takes its drawables from a CAMetalDisplayLink where the
+// OS has one. Such a display link keeps a pool of drawables of its own, four whatever the layer's
+// maximumDrawableCount and its preferredFrameLatency, and one of them waits in its callback for
+// the next frame however long that is: 92 MB for a window 3000 by 2000 pixels, where the layer's
+// own nextDrawable and a CVDisplayLink keep maximumDrawableCount, 46 MB.
+const useMetalDisplayLink = false
+
 func (v *view) initDisplayLink() error {
-	if isCAMetalDisplayLinkAvailable() {
+	if useMetalDisplayLink && isCAMetalDisplayLinkAvailable() {
 		if err := v.initCAMetalDisplayLink(); err != nil {
 			return err
 		}
@@ -303,14 +310,21 @@ func (v *view) initCADisplayLink() error {
 	}
 	v.handleToSelf = newViewHandle(v)
 	cvDisplayLinkSetOutputCallback(displayLinkRef, displayLinkOutputCallbackPtr, uintptr(v.handleToSelf))
-	cvDisplayLinkStart(displayLinkRef)
 
-	v.caDisplayLink = displayLinkRef
+	// The display link starts with the first frame that waits for it.
+	v.linkMu.Lock()
+	v.caDisplayLink, v.linkStopped = displayLinkRef, true
+	v.linkMu.Unlock()
 	return nil
 }
 
 // releaseDisplayLink releases the display link created at initCADisplayLink.
 func (v *view) releaseDisplayLink() {
+	v.linkMu.Lock()
+	defer v.linkMu.Unlock()
+	if v.linkIdleTimer != nil {
+		v.linkIdleTimer.Stop()
+	}
 	if v.caDisplayLink == 0 {
 		return
 	}

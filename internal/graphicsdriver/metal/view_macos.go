@@ -17,6 +17,8 @@
 package metal
 
 import (
+	"time"
+
 	"github.com/ebitengine/purego/objc"
 
 	"github.com/ironpark/ggfx/internal/cocoa"
@@ -67,11 +69,48 @@ func (v *view) release() {
 	}
 }
 
+// linkIdle is how long the display link runs with no frame waiting for it before it stops: a
+// display link that runs calls in at every refresh, 120 times a second, for nothing.
+const linkIdle = 500 * time.Millisecond
+
 func (v *view) waitForDisplayLinkOutputCallback() {
+	v.linkMu.Lock()
 	if v.caDisplayLink == 0 {
+		v.linkMu.Unlock()
 		return
 	}
+	if v.linkStopped {
+		cvDisplayLinkStart(v.caDisplayLink)
+		v.linkStopped = false
+	}
+	if v.linkIdleTimer == nil {
+		v.linkIdleTimer = time.AfterFunc(linkIdle, v.stopIdleDisplayLink)
+	} else {
+		v.linkIdleTimer.Reset(linkIdle)
+	}
+	v.linkMu.Unlock()
 	v.fence.wait()
+}
+
+// stopIdleDisplayLink stops the display link no frame waited for within linkIdle; the next frame
+// starts it again, and waits for its next refresh.
+func (v *view) stopIdleDisplayLink() {
+	v.linkMu.Lock()
+	defer v.linkMu.Unlock()
+	if v.caDisplayLink != 0 && !v.linkStopped {
+		cvDisplayLinkStop(v.caDisplayLink)
+		v.linkStopped = true
+	}
+}
+
+// dropDrawables makes the layer let go of the drawables it keeps, the one on the screen too,
+// for a window no longer shown: a layer lets go of its drawables when its drawable size changes,
+// and allocates new ones of the size the next frame gives it again. What the window showed is
+// gone, and the next frame draws it whole (see Surface.SetWindowState). It is called on the main
+// thread, between frames.
+func (v *view) dropDrawables() {
+	v.ml.SetDrawableSize(1, 1)
+	v.drawablesDropped.Store(true)
 }
 
 // setDrawableSize records the new drawable size. The size is applied to the layer at the next
@@ -91,7 +130,7 @@ func (v *view) setDrawableSize(width, height int) {
 
 // applyDrawableSizeIfNeeded applies the drawable size recorded at setDrawableSize to the layer.
 func (v *view) applyDrawableSizeIfNeeded() {
-	if !v.drawableSizeDirty {
+	if !v.drawablesDropped.Swap(false) && !v.drawableSizeDirty {
 		return
 	}
 

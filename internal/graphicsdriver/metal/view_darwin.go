@@ -30,9 +30,10 @@ import (
 
 // maximumDrawableCount is the maximum number of drawable objects.
 //
-// Always use 3 for macOS (#2880, #2883, #3278).
-// At least, this should work with MacBook Pro 2020 (Intel) and MacBook Pro 2023 (M3).
-const maximumDrawableCount = 3
+// Each is a whole screen's memory, 23 MB for a window 3000 by 2000 pixels. A game drawing every
+// refresh wants 3 (#2880, #2883, #3278); a UI, which draws a frame now and then and mostly a part
+// of one, keeps up with 2, one on the screen and one drawn in, at 120 frames a second.
+const maximumDrawableCount = 2
 
 type view struct {
 	// windowLiveResizing and windowFullscreen are what the window system last told of the view's
@@ -40,6 +41,11 @@ type view struct {
 	// written on the window system's goroutine and taken at updatePresentationState.
 	windowLiveResizing atomic.Bool
 	windowFullscreen   atomic.Bool
+	windowHidden       atomic.Bool
+
+	// drawablesDropped reports whether the layer let go of its drawables while its window was
+	// hidden, and must be given its drawable size again before the next drawable.
+	drawablesDropped atomic.Bool
 
 	// liveResizing reports whether the window is being resized by the user on macOS, as of the
 	// current frame. This is written on the rendering thread, and can be read from the thread for
@@ -104,16 +110,26 @@ type view struct {
 	// The following members are used only with CADisplayLink.
 	handleToSelf viewHandle
 	fence        *fence
+	// linkStopped is whether the display link stopped for want of frames (see
+	// waitForDisplayLinkOutputCallback), and linkIdleTimer stops it; linkMu guards them and
+	// caDisplayLink, used on the rendering thread and the timer's.
+	linkMu        sync.Mutex
+	linkStopped   bool
+	linkIdleTimer *time.Timer
 }
 
 func (v *view) getMTLDevice() mtl.Device {
 	return v.device
 }
 
-// setWindowState records what the view's window is doing, for the next frame to take.
-func (v *view) setWindowState(liveResizing, fullscreen bool) {
+// setWindowState records what the view's window is doing, for the next frame to take. A window
+// just hidden makes the layer let go of its drawables.
+func (v *view) setWindowState(liveResizing, fullscreen, hidden bool) {
 	v.windowLiveResizing.Store(liveResizing)
 	v.windowFullscreen.Store(fullscreen)
+	if v.windowHidden.Swap(hidden) != hidden && hidden {
+		v.dropDrawables()
+	}
 }
 
 func (v *view) colorPixelFormat() mtl.PixelFormat {

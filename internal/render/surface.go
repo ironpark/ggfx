@@ -119,14 +119,14 @@ func (s *Surface) FramebufferSize() (width, height int, ok bool) {
 
 // windowStateSetter is a driver's surface that asks what its window is doing.
 type windowStateSetter interface {
-	SetWindowState(liveResizing, fullscreen bool)
+	SetWindowState(liveResizing, fullscreen, hidden bool)
 }
 
 // SetWindowState tells the surface what its window is doing, for the frames after it. Only Metal
 // asks.
-func (s *Surface) SetWindowState(liveResizing, fullscreen bool) {
+func (s *Surface) SetWindowState(liveResizing, fullscreen, hidden bool) {
 	if w, ok := s.surface.(windowStateSetter); ok {
-		w.SetWindowState(liveResizing, fullscreen)
+		w.SetWindowState(liveResizing, fullscreen, hidden)
 	}
 }
 

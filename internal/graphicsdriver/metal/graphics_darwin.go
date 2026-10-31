@@ -238,10 +238,16 @@ func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error
 	return i, nil
 }
 
-// SetWindowState tells the surface what its window is doing: whether the user is resizing it, and
-// whether it is in the fullscreen mode. The next frame takes it.
-func (s *Surface) SetWindowState(liveResizing, fullscreen bool) {
-	s.view.setWindowState(liveResizing, fullscreen)
+// SetWindowState tells the surface what its window is doing: whether the user is resizing it,
+// whether it is in the fullscreen mode, and whether it is hidden. The next frame takes it. A
+// window hidden keeps no drawable, nor the last frame presented: the next frame is drawn whole.
+func (s *Surface) SetWindowState(liveResizing, fullscreen, hidden bool) {
+	if hidden {
+		s.mu.Lock()
+		s.forgetLastLocked()
+		s.mu.Unlock()
+	}
+	s.view.setWindowState(liveResizing, fullscreen, hidden)
 }
 
 func (s *Surface) Dispose() {

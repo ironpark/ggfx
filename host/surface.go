@@ -88,13 +88,18 @@ type WindowState struct {
 	// Fullscreen is set while the window is in macOS's fullscreen mode. Metal then presents to the
 	// display directly rather than in step with Core Animation transactions.
 	Fullscreen bool
+
+	// Hidden is set while the window is not shown: ordered out or minimized, not merely covered,
+	// which a window switcher still shows. Metal then lets go of the drawables it keeps for the
+	// window, and the first frame after draws it whole.
+	Hidden bool
 }
 
 // SetWindowState tells s what its window is doing. A window system sets it before each frame
 // drawn to s, on the goroutine that begins the frame; a surface whose state was never set is a
 // window at rest. Only Metal asks.
 func (s *Surface) SetWindowState(state WindowState) {
-	s.surface.SetWindowState(state.LiveResizing, state.Fullscreen)
+	s.surface.SetWindowState(state.LiveResizing, state.Fullscreen, state.Hidden)
 }
 
 // Kept reports whether the frame being drawn on s starts from the last, as
