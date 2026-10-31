@@ -19,6 +19,7 @@ import (
 	"image"
 	"math"
 	"slices"
+	"sync"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -138,6 +139,67 @@ type Surface struct {
 	// a drawable clears it; later passes load what earlier ones drew, as an app draws to the screen
 	// many times per frame.
 	cleared bool
+
+	// A frame can start from the last one presented (see Kept): last is the texture of the
+	// drawable presented last, retained while it is on the screen, which it is until the next
+	// drawable is presented, and so intact for the next frame to copy. keep is what Kept told the
+	// frame being drawn. Kept runs on the goroutine that begins frames, the rest on the rendering
+	// thread, which a flush waits for; mu orders them.
+	mu   sync.Mutex
+	last mtl.Texture
+	keep bool
+}
+
+// Kept reports whether the next frame starts from the last presented: when there is one, the
+// next drawable is a copy of it, not cleared. A frame of another size makes a new screen image,
+// and Kept is not asked then.
+func (s *Surface) Kept() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.keep = s.last != (mtl.Texture{})
+	return s.keep
+}
+
+// startFrom copies the last presented frame into tex, the drawable just acquired, and reports
+// whether it did: when the frame being drawn was told it starts from the last, and that is the
+// same size. It runs on the rendering thread.
+func (s *Surface) startFrom(tex mtl.Texture) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.keep || s.last == (mtl.Texture{}) {
+		return false
+	}
+	w, h := tex.Width(), tex.Height()
+	if s.last.Width() != w || s.last.Height() != h {
+		// A frame told it is kept would show what it did not draw over as cleared; that can only
+		// be a resize, which makes a new screen image and is not kept. The next is drawn whole.
+		s.forgetLastLocked()
+		return false
+	}
+	g := s.graphics
+	g.flushRenderCommandEncoderIfNeeded()
+	g.ensureCommandBuffer()
+	bce := g.cb.BlitCommandEncoder()
+	bce.CopyFromTexture(s.last, 0, 0, mtl.Origin{}, mtl.Size{Width: w, Height: h, Depth: 1}, tex, 0, 0, mtl.Origin{})
+	bce.EndEncoding()
+	return true
+}
+
+// presented keeps tex, the texture of the drawable just presented, as the frame the next one
+// may start from. It runs on the rendering thread.
+func (s *Surface) presented(tex mtl.Texture) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tex.Retain()
+	s.forgetLastLocked()
+	s.last = tex
+}
+
+func (s *Surface) forgetLastLocked() {
+	if s.last != (mtl.Texture{}) {
+		s.last.Release()
+		s.last = mtl.Texture{}
+	}
 }
 
 // NewSurface makes a layer the layer of the graphicsdriver.NSView target. NewSurface must be
@@ -182,6 +244,9 @@ func (s *Surface) SetWindowState(liveResizing, fullscreen bool) {
 
 func (s *Surface) Dispose() {
 	g := s.graphics
+	s.mu.Lock()
+	s.forgetLastLocked()
+	s.mu.Unlock()
 	if s.drawable != (ca.MetalDrawable{}) {
 		s.drawable.Release()
 		s.drawable = ca.MetalDrawable{}
@@ -201,7 +266,8 @@ func (s *Surface) texture() mtl.Texture {
 		// Keep the drawable alive across flushes that drain the autorelease pool without presenting (#3704).
 		drawable.Retain()
 		s.drawable = drawable
-		s.cleared = false
+		// A frame that starts from the last is not cleared.
+		s.cleared = s.startFrom(drawable.Texture())
 		// After nextDrawable, it is expected some command buffers are completed.
 		s.graphics.gcBuffers()
 	}
@@ -365,6 +431,7 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 	g.cb = mtl.CommandBuffer{}
 
 	for _, s := range presented {
+		s.presented(s.drawable.Texture())
 		s.drawable.Release()
 		s.drawable = ca.MetalDrawable{}
 		s.view.finishDrawableUsage()

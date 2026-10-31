@@ -139,7 +139,8 @@ func (v *view) initialize(device mtl.Device, colorSpace color.ColorSpace) error 
 
 	// Presents wait for the display. The layer's default might differ (#1364).
 	v.ml.SetDisplaySyncEnabled(true)
-	v.ml.SetFramebufferOnly(true)
+	// Not framebuffer only: the next frame copies the drawable presented last (see Kept).
+	v.ml.SetFramebufferOnly(false)
 
 	// presentsWithTransaction is disabled at first, and updated at every frame on macOS
 	// (see updatePresentationState). This is always disabled on iOS.

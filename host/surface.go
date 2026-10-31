@@ -97,13 +97,13 @@ func (s *Surface) SetWindowState(state WindowState) {
 	s.surface.SetWindowState(state.LiveResizing, state.Fullscreen)
 }
 
-// BufferAge reports how many presents ago the buffer the frame being drawn
-// on s draws into was last presented, as [Frame.Screen] found it: 1 the
-// last, 2 the one before. That buffer still holds that frame, and only
-// what changed since needs drawing over it. 0 means what it holds is not
-// known: the screen is cleared, and the frame is drawn whole. A driver
-// that keeps no buffers always reports 0.
-func (s *Surface) BufferAge() int { return s.surface.BufferAge() }
+// Kept reports whether the frame being drawn on s starts from the last, as
+// [Frame.Screen] found: the screen holds what the last frame presented,
+// whichever of the driver's buffers it is in, and only what changed since
+// needs drawing over it. Else the screen is cleared, and the frame is
+// drawn whole. A driver that cannot keep a frame always reports false;
+// Metal can.
+func (s *Surface) Kept() bool { return s.surface.Kept() }
 
 // SetDamage tells s, while a frame is drawn to it, the parts of the frame
 // in pixels that differ from the frame presented before it, for the

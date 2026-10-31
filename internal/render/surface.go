@@ -26,16 +26,21 @@ import (
 type Surface struct {
 	surface graphicsdriver.Surface
 	screen  *Image
-	age     int // the age of the buffer the frame being drawn draws into
+	kept    bool // the frame being drawn starts from the last
 }
 
-// keptSurface is a driver's surface that keeps what its buffers held, and
-// presents only what changed.
+// keptSurface is a driver's surface that can start a frame from the last
+// one: the buffer the frame draws into is brought to what the last frame
+// presented, whichever buffer that is, and is not cleared.
 type keptSurface interface {
-	// BufferAge picks the buffer the next frame draws into, and returns
-	// how many presents ago it was last presented: 1 the last, 2 the one
-	// before; 0 when what it holds is not known.
-	BufferAge() int
+	// Kept reports whether the next frame starts from the last, and has
+	// the driver make it so.
+	Kept() bool
+}
+
+// damagedSurface is a driver's surface that can present a part of a
+// frame.
+type damagedSurface interface {
 	// SetDamage gives the parts of the frame being drawn, in pixels, that
 	// differ from the frame presented before it, for the present to show
 	// those alone; nil when all of it may.
@@ -73,32 +78,31 @@ func (s *Surface) Screen(width, height int) *Image {
 		s.screen.Deallocate()
 		s.screen = nil
 	}
-	s.age = 0
+	s.kept = false
 	if s.screen == nil {
 		s.screen = NewScreenImage(width, height, s.surface)
 	} else if k, ok := s.surface.(keptSurface); ok {
-		s.age = k.BufferAge()
+		s.kept = k.Kept()
 	}
-	// A buffer that keeps a frame is drawn over, not afresh.
-	if s.age == 0 && driver.NeedsClearingScreen() {
+	// A frame that starts from the last is drawn over it, not afresh.
+	if !s.kept && driver.NeedsClearingScreen() {
 		s.screen.Clear()
 	}
 	return s.screen
 }
 
-// BufferAge reports how many presents ago the buffer the frame being drawn
-// draws into was last presented, as the last Screen found it: 1 the last,
-// 2 the one before; 0 when what it holds is not known, and the frame is
-// drawn whole on a cleared screen. Only a driver that keeps its buffers
-// reports more than 0.
-func (s *Surface) BufferAge() int { return s.age }
+// Kept reports whether the frame being drawn starts from the last, as the
+// last Screen found: the screen holds what the last frame presented, and
+// only what changed since needs drawing. Else it is cleared, for a frame
+// drawn whole. Only a driver that can keep a frame reports true.
+func (s *Surface) Kept() bool { return s.kept }
 
 // SetDamage gives the parts of the frame being drawn, in pixels, that
 // differ from the frame presented before it, so that the present shows
 // those alone; nil, or a driver that cannot, presents all of it.
 func (s *Surface) SetDamage(rects []image.Rectangle) {
-	if k, ok := s.surface.(keptSurface); ok {
-		k.SetDamage(rects)
+	if d, ok := s.surface.(damagedSurface); ok {
+		d.SetDamage(rects)
 	}
 }
 

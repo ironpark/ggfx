@@ -1118,6 +1118,11 @@ func (t Texture) Release() {
 	cocoa.MsgSend0(t.texture, sel_release)
 }
 
+// Retain keeps the texture alive until a matching Release.
+func (t Texture) Retain() {
+	cocoa.MsgSend0(t.texture, sel_retain)
+}
+
 // checkPixelsForTransfer returns an error unless pixels is large enough for transferring region with bytesPerRow.
 //
 // The underlying selectors are the convenience forms without a slice or a bytes-per-image argument, so a
