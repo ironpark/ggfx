@@ -527,7 +527,7 @@ func (b *uint32sBuffer) reset() {
 	limit := max(b.use.peak(), minRetainedElements)
 	if cap(b.buf) > shrinkFactor*limit {
 		// Slices still held elsewhere keep the old array alive by themselves.
-		b.buf = make([]uint32, 0, 2*limit)
+		b.buf = make([]uint32, 0, retainedFor(limit))
 		return
 	}
 	b.buf = b.buf[:0]
@@ -539,8 +539,11 @@ const (
 	recentUseWindow = 60
 
 	// shrinkFactor is how many times larger than its recent peak a reused slice may grow before
-	// its room is given back.
-	shrinkFactor = 4
+	// its room is given back, down to a quarter more than the peak (see retainedFor): a large
+	// slice grows by about a quarter when appended past its room, so a frame as large as the
+	// peak again fits in what is kept, and the queues, two of them, hold their vertices for a
+	// screenful of glyphs at 1.25 times its size rather than up to 4.
+	shrinkFactor = 2
 
 	// minRetainedElements is the room a reused slice may always keep.
 	minRetainedElements = 4096
@@ -575,10 +578,13 @@ func shrinkToRecentUse[T any](s []T, use *recentUse) []T {
 	use.add(len(s))
 	limit := max(use.peak(), minRetainedElements)
 	if cap(s) > shrinkFactor*limit {
-		return make([]T, 0, 2*limit)
+		return make([]T, 0, retainedFor(limit))
 	}
 	return s[:0]
 }
+
+// retainedFor is the room a reused slice keeps once shrunk, for a recent peak of limit.
+func retainedFor(limit int) int { return limit + limit/4 }
 
 // The queue's counts, for DebugInfo: they only grow, but for bufferBytes,
 // the size of the vertex and index buffers kept between flushes.
