@@ -50,6 +50,22 @@ type DebugInfo struct {
 	// QueueBufferBytes is what the queue keeps between flushes for
 	// vertices and indices, as large as the largest batch so far.
 	QueueBufferBytes int64
+
+	// AtlasPages are the GPU images that images share, an atlas page each, and Isolated sums
+	// the rest, one image's each, the screens among them.
+	AtlasPages []AtlasPage
+	Isolated   AtlasPage
+}
+
+// AtlasPage is a GPU image some images share: its size in pixels, the bytes the GPU keeps for it,
+// and how many pixels of it, and how many images, are in use. A page grows as images come and
+// lets go only once all of them have gone.
+type AtlasPage struct {
+	Width, Height int
+	Bytes         int64
+	UsedPixels    int64
+	Images        int
+	Source        bool
 }
 
 // ReadDebugInfo writes debug info (e.g. the GPU memory used by images) into a provided struct.
@@ -58,4 +74,16 @@ type DebugInfo struct {
 func ReadDebugInfo(d *DebugInfo) {
 	d.TotalGPUImageMemoryUsageInBytes = atlas.TotalGPUImageMemoryUsageInBytes()
 	d.Flushes, d.Commands, d.Vertices, d.QueueBufferBytes = graphicscommand.Counts()
+	d.AtlasPages, d.Isolated = d.AtlasPages[:0], AtlasPage{}
+	for _, b := range atlas.ReadBackendStats(nil) {
+		p := AtlasPage{Width: b.Width, Height: b.Height, Bytes: 4 * int64(b.InternalWidth) * int64(b.InternalHeight),
+			UsedPixels: b.UsedArea, Images: b.Images, Source: b.Source}
+		if !b.Atlas {
+			d.Isolated.Bytes += p.Bytes
+			d.Isolated.UsedPixels += p.UsedPixels
+			d.Isolated.Images++
+			continue
+		}
+		d.AtlasPages = append(d.AtlasPages, p)
+	}
 }

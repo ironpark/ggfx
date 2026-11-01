@@ -390,3 +390,19 @@ func (p *Page) AllocatedRegion() image.Rectangle {
 	// A node at the right or the bottom edge can stick out of the page.
 	return r.Intersect(image.Rect(0, 0, p.width, p.height))
 }
+
+// UsedArea is how many pixels the page's allocated nodes cover, and how many are allocated.
+func (p *Page) UsedArea() (area int64, nodes int) {
+	if p.root == nil {
+		return 0, 0
+	}
+	_ = walk(p.root, func(n *Node) error {
+		if n.used {
+			area += int64(n.region.Dx()) * int64(n.region.Dy())
+			nodes++
+			return skipChildren
+		}
+		return nil
+	})
+	return area, nodes
+}

@@ -496,3 +496,22 @@ func TestAllocatedRegionWithOverhang(t *testing.T) {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 }
+
+func TestUsedAreaCountsAllocatedNodes(t *testing.T) {
+	p := packing.NewPage(1024, 1024, 1024, 0)
+	if a, n := p.UsedArea(); a != 0 || n != 0 {
+		t.Fatalf("an empty page uses %d pixels in %d nodes", a, n)
+	}
+	a := p.Alloc(100, 50)
+	b := p.Alloc(30, 30)
+	if a == nil || b == nil {
+		t.Fatal("alloc failed")
+	}
+	if area, n := p.UsedArea(); area != 100*50+30*30 || n != 2 {
+		t.Fatalf("used %d pixels in %d nodes, want %d in 2", area, n, 100*50+30*30)
+	}
+	p.Free(a)
+	if area, n := p.UsedArea(); area != 30*30 || n != 1 {
+		t.Fatalf("after a free, used %d pixels in %d nodes", area, n)
+	}
+}

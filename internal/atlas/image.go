@@ -1092,3 +1092,38 @@ func RestoreGPUResources() bool {
 	suspended.Store(false)
 	return theGPUResourcesState.requestToRestoreGPUResources()
 }
+
+// BackendStats is one backend's GPU image: its size, the size the GPU keeps for it, and, for an
+// atlas page, how much of it its images use.
+type BackendStats struct {
+	Width, Height                 int
+	InternalWidth, InternalHeight int
+	// Atlas reports whether the backend is a page images share; UsedArea and Images are then what
+	// they cover and how many there are, else the backend is one image's alone.
+	Atlas    bool
+	Source   bool
+	Screen   bool
+	UsedArea int64
+	Images   int
+}
+
+// ReadBackendStats appends every backend's stats to dst.
+func ReadBackendStats(dst []BackendStats) []BackendStats {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	for _, b := range theBackends {
+		if b.backendImage == nil {
+			continue
+		}
+		s := BackendStats{Width: b.width, Height: b.height, Source: b.source, Screen: b.screen}
+		s.InternalWidth, s.InternalHeight = b.backendImage.InternalSize()
+		if b.page != nil {
+			s.Atlas = true
+			s.UsedArea, s.Images = b.page.UsedArea()
+		} else {
+			s.UsedArea, s.Images = int64(b.width)*int64(b.height), 1
+		}
+		dst = append(dst, s)
+	}
+	return dst
+}
