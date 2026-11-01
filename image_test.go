@@ -2337,8 +2337,15 @@ func TestImageFloatTranslate(t *testing.T) {
 				}
 			}
 
+			// The sources are unmanaged so that they start at the origin of a texture of their own.
+			// On an atlas a source can sit thousands of pixels down, where a float32 texture
+			// position is 1/2048 of a pixel or coarser, while 0.501 leaves the boundary rows only
+			// 0.001/s of a pixel inside a texel: which texel they read then depends on how the GPU
+			// rounds, and Apple's software OpenGL renderer reads the next one.
+			unmanaged := &ggfx.NewImageOptions{Unmanaged: true}
+
 			t.Run("image", func(t *testing.T) {
-				src := ggfx.NewImage(w, h)
+				src := ggfx.NewImageWithOptions(image.Rect(0, 0, w, h), unmanaged)
 				pix := make([]byte, 4*w*h)
 				for j := range h {
 					for i := range w {
@@ -2351,7 +2358,7 @@ func TestImageFloatTranslate(t *testing.T) {
 			})
 
 			t.Run("subimage", func(t *testing.T) {
-				src := ggfx.NewImage(w*s, h*s)
+				src := ggfx.NewImageWithOptions(image.Rect(0, 0, w*s, h*s), unmanaged)
 				pix := make([]byte, 4*(w*s)*(h*s))
 				for j := range h * s {
 					for i := range w * s {
