@@ -136,6 +136,8 @@ type Surface struct {
 	// is its texture, taken when it is acquired: a drawable must not be asked once presented.
 	drawable    ca.MetalDrawable
 	drawableTex mtl.Texture
+	// chained reports whether drawableTex is the view's swap chain's, for the current frame.
+	chained bool
 
 	// cleared reports whether the drawable has been cleared this frame. The first render pass on
 	// a drawable clears it; later passes load what earlier ones drew, as an app draws to the screen
@@ -218,6 +220,9 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 		return nil, err
 	}
 	s.view.ml.SetOpaque(!transparent)
+	if s.view.chain != nil {
+		s.view.chain.setOpaque(!transparent)
+	}
 	s.view.setNSView(uintptr(nsView))
 	g.surfaces = append(g.surfaces, s)
 	return s, nil
@@ -266,6 +271,19 @@ func (s *Surface) Dispose() {
 // texture returns the drawable's texture for the current frame, acquiring a drawable if needed.
 // It returns a zero texture when no drawable is available.
 func (s *Surface) texture() mtl.Texture {
+	if c := s.view.chain; c != nil {
+		if !s.chained {
+			s.view.waitForDisplayLinkOutputCallback()
+			tex := c.acquire(s.view.drawableWidth, s.view.drawableHeight)
+			if tex == (mtl.Texture{}) {
+				return mtl.Texture{}
+			}
+			s.chained, s.drawableTex = true, tex
+			s.cleared = s.startFrom(tex)
+			s.graphics.gcBuffers()
+		}
+		return s.drawableTex
+	}
 	if s.drawable == (ca.MetalDrawable{}) {
 		drawable := s.view.nextDrawable()
 		if drawable == (ca.MetalDrawable{}) {
@@ -411,8 +429,13 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 
 	var presented []*Surface
 	var withTransaction []*Surface
+	var chained []*Surface
 	if present {
 		for _, s := range g.surfaces {
+			if s.chained {
+				chained = append(chained, s)
+				continue
+			}
 			if s.drawable == (ca.MetalDrawable{}) {
 				continue
 			}
@@ -430,6 +453,16 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 
 	for _, s := range withTransaction {
 		s.view.presentDrawableWithTransaction(g.cb, s.drawable)
+	}
+
+	for _, s := range chained {
+		var onMainThread func(func())
+		if s.view.liveResizing.Load() {
+			onMainThread = s.view.runOnMainThread
+		}
+		s.view.chain.present(g.cb, onMainThread)
+		s.presented(s.drawableTex)
+		s.chained, s.drawableTex = false, mtl.Texture{}
 	}
 
 	for _, t := range g.tmpTextures {

@@ -575,6 +575,7 @@ var (
 	sel_setStorageMode                                                                                                                = objc.RegisterName("setStorageMode:")
 	sel_setUsage                                                                                                                      = objc.RegisterName("setUsage:")
 	sel_newTextureWithDescriptor                                                                                                      = objc.RegisterName("newTextureWithDescriptor:")
+	sel_newTextureWithDescriptor_iosurface_plane                                                                                      = objc.RegisterName("newTextureWithDescriptor:iosurface:plane:")
 	sel_commandBuffer                                                                                                                 = objc.RegisterName("commandBuffer")
 	sel_status                                                                                                                        = objc.RegisterName("status")
 	sel_presentDrawable                                                                                                               = objc.RegisterName("presentDrawable:")
@@ -799,6 +800,25 @@ func (d Device) NewTextureWithDescriptor(td TextureDescriptor) Texture {
 	textureDescriptor.Send(sel_setStorageMode, uintptr(td.StorageMode))
 	textureDescriptor.Send(sel_setUsage, uintptr(td.Usage))
 	texture := d.device.Send(sel_newTextureWithDescriptor, textureDescriptor)
+	textureDescriptor.Send(sel_release)
+	return Texture{
+		texture: texture,
+	}
+}
+
+// NewTextureWithIOSurface creates a texture whose storage is plane of the IOSurface surface,
+// which another process, the window server, can show.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtldevice/newtexture(descriptor:iosurface:plane:)?language=objc.
+func (d Device) NewTextureWithIOSurface(td TextureDescriptor, surface uintptr, plane int) Texture {
+	textureDescriptor := objc.ID(class_MTLTextureDescriptor).Send(sel_new)
+	textureDescriptor.Send(sel_setTextureType, uintptr(td.TextureType))
+	textureDescriptor.Send(sel_setPixelFormat, uintptr(td.PixelFormat))
+	textureDescriptor.Send(sel_setWidth, uintptr(td.Width))
+	textureDescriptor.Send(sel_setHeight, uintptr(td.Height))
+	textureDescriptor.Send(sel_setStorageMode, uintptr(td.StorageMode))
+	textureDescriptor.Send(sel_setUsage, uintptr(td.Usage))
+	texture := d.device.Send(sel_newTextureWithDescriptor_iosurface_plane, textureDescriptor, surface, uintptr(plane))
 	textureDescriptor.Send(sel_release)
 	return Texture{
 		texture: texture,

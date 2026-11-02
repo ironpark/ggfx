@@ -59,6 +59,10 @@ type view struct {
 	device mtl.Device
 	ml     ca.MetalLayer
 
+	// chain is the swap chain the view draws into and shows instead of ml's drawables, nil when
+	// it draws into ml's (see useSwapChain).
+	chain *swapChain
+
 	// pixelFormat is the layer's pixel format, which the view sets once. A draw to the screen
 	// asks for it, and asking the layer is a message to it, allocating each time.
 	pixelFormat mtl.PixelFormat
@@ -163,6 +167,12 @@ func (v *view) initialize(device mtl.Device, colorSpace color.ColorSpace) error 
 	v.ml.SetPresentsWithTransaction(false)
 
 	v.ml.SetMaximumDrawableCount(maximumDrawableCount)
+
+	if useSwapChain {
+		if c, err := newSwapChain(device, colorSpace); err == nil {
+			v.chain = c
+		}
+	}
 
 	if err := v.initializeOS(); err != nil {
 		return err

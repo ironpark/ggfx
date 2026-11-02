@@ -32,7 +32,11 @@ const kCVReturnSuccess = 0
 // once, on the main thread.
 func (v *view) setNSView(nsView uintptr) {
 	view := cocoa.NSView{ID: objc.ID(nsView)}
-	view.SetLayer(uintptr(v.ml.Layer()))
+	if v.chain != nil {
+		view.SetLayer(uintptr(v.chain.layer))
+	} else {
+		view.SetLayer(uintptr(v.ml.Layer()))
+	}
 	view.SetWantsLayer(true)
 	// The layer content is updated by the drawable presentations, not by the view's display
 	// mechanism. Keep AppKit from updating the layer content, especially when window resizing
@@ -56,6 +60,9 @@ func (v *view) initializeOS() error {
 // release releases the resources created at initialize.
 func (v *view) release() {
 	v.released.Store(true)
+	if v.chain != nil {
+		v.chain.release()
+	}
 	v.releaseDisplayLink()
 	if v.metalDisplayLinkRunLoop.ID != 0 {
 		v.updateMetalDisplayLink()
@@ -109,6 +116,10 @@ func (v *view) stopIdleDisplayLink() {
 // gone, and the next frame draws it whole (see Surface.SetWindowState). It is called on the main
 // thread, between frames.
 func (v *view) dropDrawables() {
+	if v.chain != nil {
+		v.chain.drop()
+		return
+	}
 	v.ml.SetDrawableSize(1, 1)
 	v.drawablesDropped.Store(true)
 }
