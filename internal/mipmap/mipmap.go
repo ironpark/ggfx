@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"sync"
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/buffered"
@@ -311,4 +312,28 @@ func mipmapLevelFromDistance(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float32) int
 func pow2(power int) float32 {
 	x := 1
 	return float32(x << uint(power))
+}
+
+var (
+	quadSourcesM sync.Mutex
+	quadSources  []*buffered.Image
+)
+
+// DrawQuads draws quads, quad k of four vertices from srcs[k] within srcRegions[k], from the
+// sources' own images and not their mipmaps, as one DrawTriangles a quad would with
+// canSkipMipmap. See atlas.Image.DrawQuads.
+func (m *Mipmap) DrawQuads(srcs []*Mipmap, vertices []float32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions []image.Rectangle, shader *atlas.Shader) {
+	if len(srcs) == 0 {
+		return
+	}
+	quadSourcesM.Lock()
+	defer quadSourcesM.Unlock()
+	imgs := quadSources[:0]
+	for _, src := range srcs {
+		imgs = append(imgs, src.orig)
+	}
+	m.orig.DrawQuads(imgs, vertices, blend, dstRegion, srcRegions, shader)
+	clear(imgs)
+	quadSources = imgs[:0]
+	m.markDirty()
 }

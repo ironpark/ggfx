@@ -118,3 +118,18 @@ func (p *Program) FilterInternalUniforms(uniforms []uint32) {
 		uniforms[i] *= m
 	}
 }
+
+// ReadsInternalUniforms reports whether the program reads any of the internal uniforms' dwords
+// from to to (exclusive). A program whose internal uniforms cannot be told apart reads them all.
+func (p *Program) ReadsInternalUniforms(from, to int) bool {
+	mask := p.internalUniformMask()
+	if mask == nil {
+		return true
+	}
+	for i := from; i < to && i < len(mask); i++ {
+		if mask[i] != 0 {
+			return true
+		}
+	}
+	return false
+}

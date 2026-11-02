@@ -903,14 +903,14 @@ func (cb CommandBuffer) Commit() {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1443039-waituntilcompleted?language=objc.
 func (cb CommandBuffer) WaitUntilCompleted() {
-	cb.commandBuffer.Send(sel_waitUntilCompleted)
+	cocoa.MsgSend0(cb.commandBuffer, sel_waitUntilCompleted)
 }
 
 // WaitUntilScheduled blocks execution of the current thread until the command buffer is scheduled.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlcommandbuffer/1443036-waituntilscheduled?language=objc.
 func (cb CommandBuffer) WaitUntilScheduled() {
-	cb.commandBuffer.Send(sel_waitUntilScheduled)
+	cocoa.MsgSend0(cb.commandBuffer, sel_waitUntilScheduled)
 }
 
 // RenderCommandEncoderWithDescriptor creates a render command encoder from a descriptor.
@@ -970,7 +970,7 @@ type RenderCommandEncoder struct {
 }
 
 func (rce RenderCommandEncoder) Release() {
-	rce.commandEncoder.Send(sel_release)
+	cocoa.MsgSend0(rce.commandEncoder, sel_release)
 }
 
 // SetRenderPipelineState sets the current render pipeline state object.
@@ -1168,14 +1168,14 @@ func (t Texture) ReplaceRegion(region Region, level int, pixels []byte, bytesPer
 //
 // Reference: https://developer.apple.com/documentation/metal/mtltexture/1515339-width?language=objc.
 func (t Texture) Width() int {
-	return int(t.texture.Send(sel_width))
+	return int(cocoa.MsgSend0(t.texture, sel_width))
 }
 
 // Height is the height of the texture image for the base level mipmap, in pixels.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtltexture/1515938-height?language=objc.
 func (t Texture) Height() int {
-	return int(t.texture.Send(sel_height))
+	return int(cocoa.MsgSend0(t.texture, sel_height))
 }
 
 // Buffer is a memory allocation for storing unformatted data

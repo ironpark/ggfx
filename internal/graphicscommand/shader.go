@@ -15,6 +15,7 @@
 package graphicscommand
 
 import (
+	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/shader"
 )
@@ -55,4 +56,14 @@ func (s *Shader) Dispose() {
 		target: s,
 	}
 	theCommandQueueManager.enqueueCommand(c)
+}
+
+// ReadsSourceRegions reports whether the shader reads the regions of its source images: draws from
+// different regions of one image can be merged into one only when it does not, as the regions are
+// then zeroed out of their uniforms (see EnqueueDrawTrianglesCommand).
+func (s *Shader) ReadsSourceRegions() bool {
+	if s.ir == nil {
+		return true
+	}
+	return s.ir.ReadsInternalUniforms(graphics.SourceImageRegionOriginUniformDwordIndex, graphics.SourceImageRegionSizeUniformDwordIndex+4*graphics.ShaderSrcImageCount)
 }

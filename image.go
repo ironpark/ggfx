@@ -54,6 +54,10 @@ type Image struct {
 	// tmpUniforms must not be reused until render.Image.Draw* is called.
 	tmpUniforms []uint32
 
+	// tmpQuadSources and tmpQuadRegions are DrawImages' lists of its images and their regions.
+	tmpQuadSources []*render.Image
+	tmpQuadRegions []image.Rectangle
+
 	// subImageCache is a cache for sub-images.
 	// subImageCache is valid only when the image is not a sub-image.
 	subImageCache map[image.Rectangle]*Image

@@ -17,6 +17,7 @@ package buffered
 import (
 	"fmt"
 	"image"
+	"sync"
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -118,4 +119,32 @@ func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 // writeBackPixelsIfNeeded applies the pending pixel writes to the GPU.
 func (i *Image) writeBackPixelsIfNeeded() {
 	i.cache.writeBackPixelsIfNeeded(i.img)
+}
+
+// quadSources is DrawQuads' buffer for the sources' atlas images. DrawQuads runs with the
+// images' render locks held, which serialize no two draws to different destinations, so it is
+// guarded by a mutex of its own.
+var (
+	quadSourcesM sync.Mutex
+	quadSources  []*atlas.Image
+)
+
+// DrawQuads draws quads, quad k of four vertices from srcs[k] within srcRegions[k], as one
+// DrawTriangles a quad would. See atlas.Image.DrawQuads.
+func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions []image.Rectangle, shader *atlas.Shader) {
+	quadSourcesM.Lock()
+	defer quadSourcesM.Unlock()
+	imgs := quadSources[:0]
+	for _, src := range srcs {
+		if i == src {
+			panic("buffered: Image.DrawQuads: source images must be different from the receiver")
+		}
+		src.writeBackPixelsIfNeeded()
+		imgs = append(imgs, src.img)
+	}
+	i.writeBackPixelsIfNeeded()
+	i.img.DrawQuads(imgs, vertices, blend, dstRegion, srcRegions, shader)
+	clear(imgs)
+	quadSources = imgs[:0]
+	i.cache.reset()
 }
