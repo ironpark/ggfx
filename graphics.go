@@ -55,6 +55,9 @@ type DebugInfo struct {
 	// the rest, one image's each, the screens among them.
 	AtlasPages []AtlasPage
 	Isolated   AtlasPage
+	// ScreenBytes is what TotalGPUImageMemoryUsageInBytes counts for the screens, which on Metal
+	// are the layer's drawables, counted by the window system's memory rather than as images.
+	ScreenBytes int64
 }
 
 // AtlasPage is a GPU image some images share: its size in pixels, the bytes the GPU keeps for it,
@@ -74,10 +77,13 @@ type AtlasPage struct {
 func ReadDebugInfo(d *DebugInfo) {
 	d.TotalGPUImageMemoryUsageInBytes = atlas.TotalGPUImageMemoryUsageInBytes()
 	d.Flushes, d.Commands, d.Vertices, d.QueueBufferBytes = graphicscommand.Counts()
-	d.AtlasPages, d.Isolated = d.AtlasPages[:0], AtlasPage{}
+	d.AtlasPages, d.Isolated, d.ScreenBytes = d.AtlasPages[:0], AtlasPage{}, 0
 	for _, b := range atlas.ReadBackendStats(nil) {
 		p := AtlasPage{Width: b.Width, Height: b.Height, Bytes: 4 * int64(b.InternalWidth) * int64(b.InternalHeight),
 			UsedPixels: b.UsedArea, Images: b.Images, Source: b.Source}
+		if b.Screen {
+			d.ScreenBytes += p.Bytes
+		}
 		if !b.Atlas {
 			d.Isolated.Bytes += p.Bytes
 			d.Isolated.UsedPixels += p.UsedPixels
