@@ -40,7 +40,7 @@ import (
 
 // swapIdle is how long the swap chain waits for a frame before it lets the buffer not on the
 // screen go.
-const swapIdle = time.Second
+const swapIdle = 250 * time.Millisecond
 
 // useSwapChain reports whether surfaces draw into a swap chain of their own rather than a
 // CAMetalLayer's drawables. GGFX_METAL_SWAPCHAIN=0 turns it off.
