@@ -51,6 +51,9 @@ type swapBuffer struct {
 	surface  uintptr // IOSurfaceRef, 0 when not made
 	tex      mtl.Texture
 	volatile bool // made purgeable while idle
+	// shown reports that the buffer holds a frame it showed whole: with
+	// the other on the screen, the frame before that one.
+	shown bool
 }
 
 // swapChain is the IOSurfaces a surface draws into, and the layer that shows them. acquire and
@@ -98,6 +101,7 @@ var ioSurface struct {
 const (
 	purgeableNonVolatile = 0
 	purgeableVolatile    = 1
+	purgeableEmpty       = 2
 	pixelFormatBGRA      = 0x42475241 // 'BGRA'
 	cfNumberSInt32Type   = 3
 )
@@ -236,12 +240,14 @@ func (c *swapChain) freeLocked(i int) {
 const mostInUseWait = 20 * time.Millisecond
 
 // acquire returns the texture the next frame draws into, width by height pixels: the buffer not
-// on the screen. It returns a zero texture when there is none to be had.
-func (c *swapChain) acquire(width, height int) mtl.Texture {
+// on the screen. It returns a zero texture when there is none to be had. previous reports that
+// the texture holds the frame shown before the one on the screen, so that only what that one
+// changed need be copied to bring it up to it.
+func (c *swapChain) acquire(width, height int) (tex mtl.Texture, previous bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if width <= 0 || height <= 0 {
-		return mtl.Texture{}
+		return mtl.Texture{}, false
 	}
 	if c.width != width || c.height != height {
 		// The layer keeps what it shows until the first frame of the new size replaces it.
@@ -257,23 +263,29 @@ func (c *swapChain) acquire(width, height int) mtl.Texture {
 	if b.surface == 0 {
 		nb, ok := c.newSurface(width, height)
 		if !ok {
-			return mtl.Texture{}
+			return mtl.Texture{}, false
 		}
 		*b = nb
 	}
 	if b.volatile {
-		// Whatever it held, the frame draws or copies over all of it.
+		// What the system took of it while idle is gone: the frame copies all of the one on the
+		// screen over it.
 		var old uint32
 		purego.SyscallN(ioSurface.setPurgeable, b.surface, purgeableNonVolatile, uintptr(unsafe.Pointer(&old)))
 		b.volatile = false
+		if old == purgeableEmpty {
+			b.shown = false
+		}
 	}
+	previous = b.shown && c.front >= 0
+	b.shown = false // drawn into from now on
 	for start := time.Now(); time.Since(start) < mostInUseWait; time.Sleep(250 * time.Microsecond) {
 		if r, _, _ := purego.SyscallN(ioSurface.isInUse, b.surface); r&0xff == 0 {
 			break
 		}
 	}
 	c.drawing = i
-	return b.tex
+	return b.tex, previous
 }
 
 // present shows the buffer the frame drew into once cb, committed, is scheduled, or on the main
@@ -288,6 +300,7 @@ func (c *swapChain) present(cb mtl.CommandBuffer, onMainThread func(func())) {
 		return
 	}
 	surface := c.bufs[i].surface
+	c.bufs[i].shown = true
 	c.front = i
 	if c.idleTimer == nil {
 		c.idleTimer = time.AfterFunc(swapIdle, c.idle)

@@ -152,6 +152,37 @@ type Surface struct {
 	mu   sync.Mutex
 	last mtl.Texture
 	keep bool
+
+	// damage is what the frame being drawn changes, in pixels, as SetDamage told it, and
+	// damaged whether it did: a frame that does not says nothing of what it changes. lastDamage
+	// is what the frame on the screen changed of the one before it, nil for all of it. A frame
+	// that changes all draws over all, and copies nothing of the last; one drawn into the
+	// buffer that holds the frame before the last copies only what the last changed.
+	damage     []image.Rectangle
+	damaged    bool
+	lastDamage []image.Rectangle
+}
+
+// SetDamage tells the surface what the frame being drawn changes of the last, in pixels.
+func (s *Surface) SetDamage(rects []image.Rectangle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.damage = append(s.damage[:0], rects...)
+	s.damaged = true
+}
+
+// coversLocked reports whether the frame being drawn changes all of a w by h frame.
+func (s *Surface) coversLocked(w, h int) bool {
+	if !s.damaged {
+		return false
+	}
+	all := image.Rect(0, 0, w, h)
+	for _, r := range s.damage {
+		if all.In(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // Kept reports whether the next frame starts from the last presented: when there is one, the
@@ -167,7 +198,10 @@ func (s *Surface) Kept() bool {
 // startFrom copies the last presented frame into tex, the drawable just acquired, and reports
 // whether it did: when the frame being drawn was told it starts from the last, and that is the
 // same size. It runs on the rendering thread.
-func (s *Surface) startFrom(tex mtl.Texture) bool {
+//
+// previous reports that tex holds the frame before the last presented, so that only what the
+// last changed is copied; a frame that changes all of it copies nothing.
+func (s *Surface) startFrom(tex mtl.Texture, previous bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.keep || s.last == (mtl.Texture{}) {
@@ -180,11 +214,26 @@ func (s *Surface) startFrom(tex mtl.Texture) bool {
 		s.forgetLastLocked()
 		return false
 	}
+	if s.coversLocked(w, h) {
+		// It draws over all of it; what it starts from never shows.
+		return true
+	}
+	copies := []image.Rectangle{image.Rect(0, 0, w, h)}
+	if previous && s.lastDamage != nil {
+		copies = s.lastDamage
+	}
 	g := s.graphics
 	g.flushRenderCommandEncoderIfNeeded()
 	g.ensureCommandBuffer()
 	bce := g.cb.BlitCommandEncoder()
-	bce.CopyFromTexture(s.last, 0, 0, mtl.Origin{}, mtl.Size{Width: w, Height: h, Depth: 1}, tex, 0, 0, mtl.Origin{})
+	for _, r := range copies {
+		r = r.Intersect(image.Rect(0, 0, w, h))
+		if r.Empty() {
+			continue
+		}
+		at := mtl.Origin{X: r.Min.X, Y: r.Min.Y}
+		bce.CopyFromTexture(s.last, 0, 0, at, mtl.Size{Width: r.Dx(), Height: r.Dy(), Depth: 1}, tex, 0, 0, at)
+	}
 	bce.EndEncoding()
 	return true
 }
@@ -195,11 +244,21 @@ func (s *Surface) presented(tex mtl.Texture) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tex.Retain()
-	s.forgetLastLocked()
+	if s.last != (mtl.Texture{}) {
+		s.last.Release()
+	}
 	s.last = tex
+	// What this frame changed is what the next, drawn into the buffer before it, copies.
+	if s.damaged && !s.coversLocked(tex.Width(), tex.Height()) {
+		s.lastDamage = append(s.lastDamage[:0], s.damage...)
+	} else {
+		s.lastDamage = nil
+	}
+	s.damage, s.damaged = s.damage[:0], false
 }
 
 func (s *Surface) forgetLastLocked() {
+	s.lastDamage = nil
 	if s.last != (mtl.Texture{}) {
 		s.last.Release()
 		s.last = mtl.Texture{}
@@ -274,12 +333,12 @@ func (s *Surface) texture() mtl.Texture {
 	if c := s.view.chain; c != nil {
 		if !s.chained {
 			s.view.waitForDisplayLinkOutputCallback()
-			tex := c.acquire(s.view.drawableWidth, s.view.drawableHeight)
+			tex, previous := c.acquire(s.view.drawableWidth, s.view.drawableHeight)
 			if tex == (mtl.Texture{}) {
 				return mtl.Texture{}
 			}
 			s.chained, s.drawableTex = true, tex
-			s.cleared = s.startFrom(tex)
+			s.cleared = s.startFrom(tex, previous)
 			s.graphics.gcBuffers()
 		}
 		return s.drawableTex
@@ -294,7 +353,7 @@ func (s *Surface) texture() mtl.Texture {
 		s.drawable = drawable
 		s.drawableTex = drawable.Texture()
 		// A frame that starts from the last is not cleared.
-		s.cleared = s.startFrom(s.drawableTex)
+		s.cleared = s.startFrom(s.drawableTex, false)
 		// After nextDrawable, it is expected some command buffers are completed.
 		s.graphics.gcBuffers()
 	}
