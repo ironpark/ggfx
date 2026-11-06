@@ -19,10 +19,12 @@ package opengl
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 const floatSizeInBytes = 4
@@ -140,6 +142,11 @@ type openGLState struct {
 
 	elementArrayBufferSizeInBytes int
 
+	// arrayBufferUse and elementArrayBufferUse track the bytes recent batches sent, so that the
+	// buffers give back the room a large batch took.
+	arrayBufferUse        recent.Peak
+	elementArrayBufferUse recent.Peak
+
 	// uniformBuffers hold the internal and the user's uniform blocks, bound at the binding points
 	// internalUniformBlockBinding and userUniformBlockBinding.
 	uniformBuffers            [2]buffer
@@ -198,35 +205,48 @@ func pow2(x int) int {
 	return p2
 }
 
+// minVertexBufferBytes is the room the vertex and the index buffer may always keep.
+const minVertexBufferBytes = 64 << 10
+
+// orphanVertexBuffers reports whether the vertex and the index buffer are orphaned, given new
+// storage of the same size, before they are written. Writing a buffer the GPU may still read from
+// a previous draw otherwise waits for that draw. WebGL has no such wait to avoid, and would clear
+// the new storage.
+const orphanVertexBuffers = runtime.GOOS != "js"
+
 func (s *openGLState) setVertices(context *context, vertices []float32, indices []uint32) {
 	if s.vertexArray == 0 {
 		s.vertexArray = context.ctx.CreateVertexArray()
 	}
 	context.ctx.BindVertexArray(s.vertexArray)
 
-	if size := len(vertices) * int(unsafe.Sizeof(vertices[0])); s.arrayBufferSizeInBytes < size {
+	size := len(vertices) * int(unsafe.Sizeof(vertices[0]))
+	if c := s.arrayBufferUse.Capacity(s.arrayBufferSizeInBytes, size, minVertexBufferBytes); s.arrayBuffer == 0 || c != s.arrayBufferSizeInBytes {
 		if s.arrayBuffer != 0 {
 			context.ctx.DeleteBuffer(uint32(s.arrayBuffer))
 		}
 
-		newSize := pow2(size)
 		// newArrayBuffer calls BindBuffer.
-		s.arrayBuffer = context.newArrayBuffer(newSize)
-		s.arrayBufferSizeInBytes = newSize
+		s.arrayBuffer = context.newArrayBuffer(c)
+		s.arrayBufferSizeInBytes = c
 
 		// Reenable the array buffer layout explicitly after resetting the array buffer.
 		theArrayBufferLayout.enable(context)
+	} else if orphanVertexBuffers {
+		context.ctx.BufferInit(gl.ARRAY_BUFFER, s.arrayBufferSizeInBytes, gl.DYNAMIC_DRAW)
 	}
 
-	if size := len(indices) * int(unsafe.Sizeof(indices[0])); s.elementArrayBufferSizeInBytes < size {
+	size = len(indices) * int(unsafe.Sizeof(indices[0]))
+	if c := s.elementArrayBufferUse.Capacity(s.elementArrayBufferSizeInBytes, size, minVertexBufferBytes); s.elementArrayBuffer == 0 || c != s.elementArrayBufferSizeInBytes {
 		if s.elementArrayBuffer != 0 {
 			context.ctx.DeleteBuffer(uint32(s.elementArrayBuffer))
 		}
 
-		newSize := pow2(size)
 		// newElementArrayBuffer calls BindBuffer.
-		s.elementArrayBuffer = context.newElementArrayBuffer(newSize)
-		s.elementArrayBufferSizeInBytes = newSize
+		s.elementArrayBuffer = context.newElementArrayBuffer(c)
+		s.elementArrayBufferSizeInBytes = c
+	} else if orphanVertexBuffers {
+		context.ctx.BufferInit(gl.ELEMENT_ARRAY_BUFFER, s.elementArrayBufferSizeInBytes, gl.DYNAMIC_DRAW)
 	}
 
 	// Note that the vertices and the indices passed to BufferSubData is not under GC management in the gl package.

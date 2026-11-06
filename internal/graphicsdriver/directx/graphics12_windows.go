@@ -25,6 +25,7 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/shader"
 )
 
@@ -74,6 +75,12 @@ type graphics12 struct {
 
 	vertices [frameCount][]*resourceWithSize
 	indices  [frameCount][]*resourceWithSize
+
+	// verticesUse and indicesUse track the bytes recent batches sent, and batchesUse how many
+	// batches recent frames sent, so that the buffers give back the room a large frame took.
+	verticesUse recent.Peak
+	indicesUse  recent.Peak
+	batchesUse  recent.Peak
 
 	graphicsInfra *graphicsInfra
 
@@ -841,6 +848,21 @@ func (g *graphics12) releaseResources(frameIndex int) {
 }
 
 func (g *graphics12) resetVerticesAndIndices(frameIndex int, release bool) {
+	if !release {
+		// Release the buffers of the slots recent frames did not use: a frame of many batches
+		// would otherwise keep its buffers for good. The GPU has completed the frame.
+		g.batchesUse.Add(len(g.vertices[frameIndex]))
+		keep := max(g.batchesUse.Max(), 1)
+		for _, bs := range [][]*resourceWithSize{g.vertices[frameIndex], g.indices[frameIndex]} {
+			bs = bs[:cap(bs)]
+			for i := keep; i < len(bs); i++ {
+				if bs[i] != nil {
+					bs[i].release()
+					bs[i] = nil
+				}
+			}
+		}
+	}
 	if release {
 		for i := range g.vertices[frameIndex] {
 			g.vertices[frameIndex][i].release()
@@ -956,8 +978,13 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	} else {
 		g.vertices[g.frameIndex] = append(g.vertices[g.frameIndex], nil)
 	}
-	vsize := pow2(uint32(len(vertices)) * uint32(unsafe.Sizeof(vertices[0])))
-	if g.vertices[g.frameIndex][vidx] != nil && g.vertices[g.frameIndex][vidx].sizeInBytes < vsize {
+	// The slot's buffer was last used by a frame the GPU has completed, so it can be replaced.
+	var curvsize int
+	if b := g.vertices[g.frameIndex][vidx]; b != nil {
+		curvsize = int(b.sizeInBytes)
+	}
+	vsize := uint32(g.verticesUse.Capacity(curvsize, len(vertices)*int(unsafe.Sizeof(vertices[0])), minVertexBufferBytes))
+	if g.vertices[g.frameIndex][vidx] != nil && g.vertices[g.frameIndex][vidx].sizeInBytes != vsize {
 		g.vertices[g.frameIndex][vidx].release()
 		g.vertices[g.frameIndex][vidx] = nil
 	}
@@ -985,8 +1012,13 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	} else {
 		g.indices[g.frameIndex] = append(g.indices[g.frameIndex], nil)
 	}
-	isize := pow2(uint32(len(indices)) * uint32(unsafe.Sizeof(indices[0])))
-	if g.indices[g.frameIndex][iidx] != nil && g.indices[g.frameIndex][iidx].sizeInBytes < isize {
+	// The slot's buffer was last used by a frame the GPU has completed, so it can be replaced.
+	var curisize int
+	if b := g.indices[g.frameIndex][iidx]; b != nil {
+		curisize = int(b.sizeInBytes)
+	}
+	isize := uint32(g.indicesUse.Capacity(curisize, len(indices)*int(unsafe.Sizeof(indices[0])), minVertexBufferBytes))
+	if g.indices[g.frameIndex][iidx] != nil && g.indices[g.frameIndex][iidx].sizeInBytes != isize {
 		g.indices[g.frameIndex][iidx].release()
 		g.indices[g.frameIndex][iidx] = nil
 	}

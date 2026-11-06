@@ -68,3 +68,21 @@ func (p *Peak) Add(n int) {
 func (p *Peak) Max() int {
 	return max(p.current, p.previous)
 }
+
+// Capacity records n, the size a reused buffer must hold now, as one tick of p's own clock, and
+// returns the capacity the buffer should have. It is capacity itself while that holds n and is no
+// more than ShrinkFactor times the recent peak, or minimum if larger; otherwise it is the power of
+// two that holds the recent peak, so a buffer grown for a rare large use gives its room back once
+// the use is out of the window.
+func (p *Peak) Capacity(capacity, n, minimum int) int {
+	p.Add(n)
+	limit := max(p.Max(), minimum)
+	if capacity >= n && capacity <= ShrinkFactor*limit {
+		return capacity
+	}
+	c := 1
+	for c < limit {
+		c *= 2
+	}
+	return c
+}

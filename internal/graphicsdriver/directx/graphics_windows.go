@@ -18,7 +18,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"runtime"
 	"strconv"
@@ -34,17 +33,8 @@ import (
 
 const frameCount = 2
 
-func pow2(x uint32) uint32 {
-	if x > (math.MaxUint32+1)/2 {
-		return math.MaxUint32
-	}
-
-	var p2 uint32 = 1
-	for p2 < x {
-		p2 *= 2
-	}
-	return p2
-}
+// minVertexBufferBytes is the room a vertex or an index buffer may always keep.
+const minVertexBufferBytes = 64 << 10
 
 func parseFeatureLevel(str string) (_D3D_FEATURE_LEVEL, bool) {
 	switch str {
