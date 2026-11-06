@@ -263,6 +263,8 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 				q.finalizers[i] = nil
 			}
 			q.finalizers = q.finalizers[:0]
+			// The finalizers gave the frame's upload bytes back.
+			graphics.AdvanceBytesPoolFrame()
 		}
 	}()
 

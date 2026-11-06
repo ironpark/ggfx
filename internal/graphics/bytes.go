@@ -17,6 +17,8 @@ package graphics
 import (
 	"runtime"
 	"sync"
+
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 // ManagedBytes is a managed byte slice.
@@ -78,13 +80,41 @@ func NewManagedBytes(size int, f func([]byte)) *ManagedBytes {
 	return bs
 }
 
+// The pool keeps byte arrays given back for later uploads. It keeps at most maxPooledBytes of
+// arrays, counted by capacity, and no more than the frames of the last recent.Window to
+// 2*recent.Window took from it, so that a rare large upload's arrays are given back.
+const (
+	// maxPooledBytes is the most the pool keeps. An array larger than this is never kept.
+	maxPooledBytes = 8 * 1024 * 1024
+
+	// maxPooledArrays is the most arrays the pool keeps.
+	maxPooledArrays = 64
+
+	// maxWasteFactor is how many times larger than the request an array taken from the pool may be.
+	maxWasteFactor = 4
+)
+
 type bytesPool struct {
+	// pool holds the arrays, the oldest given back first.
 	pool [][]byte
+	// total is the sum of the capacities of the arrays in pool.
+	total int
+
+	// taken is the bytes of the arrays taken, from the pool or newly made, in this frame, and use
+	// tracks it over recent frames.
+	taken int
+	use   recent.Peak
 
 	m sync.Mutex
 }
 
 var theBytesPool bytesPool
+
+// AdvanceBytesPoolFrame tells the pool of upload bytes that a frame ended, and gives back the arrays
+// recent frames did not need. It can be called from any goroutine.
+func AdvanceBytesPoolFrame() {
+	theBytesPool.advanceFrame()
+}
 
 func (b *bytesPool) get(size int) *ManagedBytes {
 	bs := b.getFromCache(size)
@@ -101,44 +131,78 @@ func (b *bytesPool) get(size int) *ManagedBytes {
 	return m
 }
 
+// getFromCache returns the smallest array in the pool that holds size bytes and is at most
+// maxWasteFactor times as large, sliced to size, or nil if there is none.
 func (b *bytesPool) getFromCache(size int) []byte {
 	b.m.Lock()
 	defer b.m.Unlock()
 
+	best := -1
 	for i, bs := range b.pool {
-		if cap(bs) < size {
+		c := cap(bs)
+		if c < size || c > maxWasteFactor*max(size, 64) {
 			continue
 		}
-
-		copy(b.pool[i:], b.pool[i+1:])
-		b.pool[len(b.pool)-1] = nil
-		b.pool = b.pool[:len(b.pool)-1]
-		return bs[:size]
+		if best < 0 || c < cap(b.pool[best]) {
+			best = i
+			if c == size {
+				break
+			}
+		}
+	}
+	if best < 0 {
+		b.taken += size
+		return nil
 	}
 
-	return nil
+	bs := b.pool[best]
+	b.removeAt(best)
+	b.taken += cap(bs)
+	return bs[:size]
+}
+
+func (b *bytesPool) removeAt(i int) {
+	b.total -= cap(b.pool[i])
+	copy(b.pool[i:], b.pool[i+1:])
+	b.pool[len(b.pool)-1] = nil
+	b.pool = b.pool[:len(b.pool)-1]
 }
 
 func (b *bytesPool) put(bs []byte) {
-	if len(bs) == 0 {
+	if cap(bs) == 0 || cap(bs) > maxPooledBytes {
 		return
 	}
 
 	b.m.Lock()
 	defer b.m.Unlock()
 
-	b.pool = append(b.pool, bs)
-
-	// GC the pool. The size limitation is arbitrary.
-	for len(b.pool) >= 32 || b.totalSize() >= 1024*1024*1024 {
-		b.pool = b.pool[1:]
-	}
+	b.pool = append(b.pool, bs[:0])
+	b.total += cap(bs)
+	b.trim(maxPooledBytes)
 }
 
-func (b *bytesPool) totalSize() int {
-	var s int
-	for _, bs := range b.pool {
-		s += len(bs)
+// trim drops the oldest arrays until the pool holds at most limit bytes and maxPooledArrays arrays.
+func (b *bytesPool) trim(limit int) {
+	n := 0
+	total := b.total
+	for n < len(b.pool) && (len(b.pool)-n > maxPooledArrays || total > limit) {
+		total -= cap(b.pool[n])
+		n++
 	}
-	return s
+	if n == 0 {
+		return
+	}
+	m := copy(b.pool, b.pool[n:])
+	clear(b.pool[m:])
+	b.pool = b.pool[:m]
+	b.total = total
+}
+
+func (b *bytesPool) advanceFrame() {
+	b.m.Lock()
+	defer b.m.Unlock()
+
+	b.use.Add(b.taken)
+	b.taken = 0
+	b.trim(min(maxPooledBytes, b.use.Max()))
 }
