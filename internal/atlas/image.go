@@ -1035,7 +1035,9 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 
 		// min*Size and maxSize can already be set for testings.
 		if minSourceSize == 0 {
-			minSourceSize = 1024
+			// A source page starts small, as an app's first images are often a few small ones,
+			// and grows as images come (see backend.tryAlloc).
+			minSourceSize = 256
 		}
 		if minDestinationSize == 0 {
 			minDestinationSize = 16
