@@ -16,6 +16,7 @@ package directx
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"unsafe"
 
@@ -28,6 +29,10 @@ type image12 struct {
 	id       graphicsdriver.ImageID
 	width    int
 	height   int
+
+	// format is the image's pixel format. A screen image is always PixelFormatRGBA8, whatever
+	// its swap chain's format is.
+	format graphicsdriver.PixelFormat
 
 	// surface is the surface this image is presented on. surface is non-nil iff screen is true.
 	surface *surface12
@@ -82,7 +87,7 @@ func (i *image12) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 		Height:           uint32(unionRegion.Dy()),
 		DepthOrArraySize: 1,
 		MipLevels:        0,
-		Format:           _DXGI_FORMAT_R8G8B8A8_UNORM,
+		Format:           dxgiFormat(i.format),
 		SampleDesc: _DXGI_SAMPLE_DESC{
 			Count:   1,
 			Quality: 0,
@@ -133,18 +138,10 @@ func (i *image12) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 		return err
 	}
 
-	stride := int(layouts.Footprint.RowPitch)
+	bpp := i.format.BytesPerPixel()
 	srcPix := unsafe.Slice((*byte)(unsafe.Pointer(m)), totalBytes)
 	for _, a := range args {
-		w := a.Region.Dx()
-		if unionRegion == a.Region && stride == 4*w {
-			copy(a.Pixels, srcPix)
-			continue
-		}
-		offset := 4*(a.Region.Min.X-unionRegion.Min.X) + stride*(a.Region.Min.Y-unionRegion.Min.Y)
-		for j := 0; j < a.Region.Dy(); j++ {
-			copy(a.Pixels[j*w*4:(j+1)*w*4], srcPix[offset+j*stride:])
-		}
+		copyFromFootprint(a.Pixels, a.Region, srcPix, unionRegion.Min, int(layouts.Footprint.RowPitch), bpp)
 	}
 
 	readingStagingBuffer.Unmap(0, nil)
@@ -173,7 +170,7 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		Height:           uint32(region.Dy()),
 		DepthOrArraySize: 1,
 		MipLevels:        0,
-		Format:           _DXGI_FORMAT_R8G8B8A8_UNORM,
+		Format:           dxgiFormat(i.format),
 		SampleDesc: _DXGI_SAMPLE_DESC{
 			Count:   1,
 			Quality: 0,
@@ -199,11 +196,10 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 
 	i.graphics.needFlushCopyCommandList = true
 
+	bpp := i.format.BytesPerPixel()
 	srcBytes := unsafe.Slice((*byte)(unsafe.Pointer(m)), totalBytes)
 	for _, a := range args {
-		for j := 0; j < a.Region.Dy(); j++ {
-			copy(srcBytes[((a.Region.Min.Y-region.Min.Y)+j)*int(layouts.Footprint.RowPitch)+(a.Region.Min.X-region.Min.X)*4:], a.Pixels[j*a.Region.Dx()*4:(j+1)*a.Region.Dx()*4])
-		}
+		copyToFootprint(srcBytes, region.Min, int(layouts.Footprint.RowPitch), a.Pixels, a.Region, bpp)
 	}
 
 	for _, a := range args {
@@ -231,6 +227,46 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	uploadingStagingBuffer.Unmap(0, nil)
 
 	return nil
+}
+
+// dxgiFormat returns the format of an offscreen image's texture, its views and its copy
+// footprints.
+func dxgiFormat(format graphicsdriver.PixelFormat) _DXGI_FORMAT {
+	switch format {
+	case graphicsdriver.PixelFormatRGBA8:
+		return _DXGI_FORMAT_R8G8B8A8_UNORM
+	case graphicsdriver.PixelFormatA8:
+		return _DXGI_FORMAT_R8_UNORM
+	}
+	panic(fmt.Sprintf("directx: unexpected pixel format %s", format))
+}
+
+// renderTargetFormat returns the format of the image's render target view, which a pipeline
+// state that draws into the image must be made for.
+func (i *image12) renderTargetFormat() _DXGI_FORMAT {
+	if i.screen {
+		return _DXGI_FORMAT_B8G8R8A8_UNORM
+	}
+	return dxgiFormat(i.format)
+}
+
+// shaderResourceViewDesc returns the description of the view a shader samples the image through.
+//
+// An A8 image is an R8 texture whose view maps all four components to the red one, so that it
+// samples as (v, v, v, v), as graphicsdriver.PixelFormatA8 requires.
+func (i *image12) shaderResourceViewDesc() _D3D12_SHADER_RESOURCE_VIEW_DESC {
+	mapping := uint32(_D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING)
+	if i.format == graphicsdriver.PixelFormatA8 {
+		mapping = _D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING_0_0_0_0
+	}
+	return _D3D12_SHADER_RESOURCE_VIEW_DESC{
+		Format:                  dxgiFormat(i.format),
+		ViewDimension:           _D3D12_SRV_DIMENSION_TEXTURE2D,
+		Shader4ComponentMapping: mapping,
+		Texture2D: _D3D12_TEX2D_SRV{
+			MipLevels: 1,
+		},
+	}
 }
 
 func (i *image12) resource() *_ID3D12Resource {

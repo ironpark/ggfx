@@ -18,9 +18,11 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
+// pipelineStateKey identifies a pipeline state of a shader. A pipeline state is made for one
+// render target format, so the format of the image drawn into is part of the key.
 type pipelineStateKey struct {
-	blend  graphicsdriver.Blend
-	screen bool
+	blend     graphicsdriver.Blend
+	rtvFormat _DXGI_FORMAT
 }
 
 type shader12 struct {
@@ -64,16 +66,16 @@ func (s *shader12) disposeImpl() {
 	}
 }
 
-func (s *shader12) pipelineState(blend graphicsdriver.Blend, screen bool) (*_ID3D12PipelineState, error) {
+func (s *shader12) pipelineState(blend graphicsdriver.Blend, rtvFormat _DXGI_FORMAT) (*_ID3D12PipelineState, error) {
 	key := pipelineStateKey{
-		blend:  blend,
-		screen: screen,
+		blend:     blend,
+		rtvFormat: rtvFormat,
 	}
 	if state, ok := s.pipelineStates[key]; ok {
 		return state, nil
 	}
 
-	state, err := s.graphics.pipelineStates.newPipelineState(s.graphics.device, s.vertexShader, s.pixelShader, blend, screen)
+	state, err := s.graphics.pipelineStates.newPipelineState(s.graphics.device, s.vertexShader, s.pixelShader, blend, rtvFormat)
 	if err != nil {
 		return nil, err
 	}

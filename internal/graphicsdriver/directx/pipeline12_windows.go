@@ -171,7 +171,7 @@ func (p *pipelineStates) release() {
 	p.shaderDescriptorSize = 0
 }
 
-func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D12GraphicsCommandList, frameIndex int, screen bool, srcs [graphics.ShaderSrcImageCount]*image12, shader *shader12, dstRegions []graphicsdriver.DstRegion, uniforms []uint32, blend graphicsdriver.Blend, indexOffset int) error {
+func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D12GraphicsCommandList, frameIndex int, rtvFormat _DXGI_FORMAT, srcs [graphics.ShaderSrcImageCount]*image12, shader *shader12, dstRegions []graphicsdriver.DstRegion, uniforms []uint32, blend graphicsdriver.Blend, indexOffset int) error {
 	idx := len(p.constantBuffers[frameIndex])
 	if idx >= numDescriptorsPerFrame {
 		return fmt.Errorf("directx: too many constant buffers")
@@ -247,14 +247,8 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		if src == nil {
 			continue
 		}
-		device.CreateShaderResourceView(src.resource(), &_D3D12_SHADER_RESOURCE_VIEW_DESC{
-			Format:                  _DXGI_FORMAT_R8G8B8A8_UNORM,
-			ViewDimension:           _D3D12_SRV_DIMENSION_TEXTURE2D,
-			Shader4ComponentMapping: _D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
-			Texture2D: _D3D12_TEX2D_SRV{
-				MipLevels: 1, // TODO: Can this be 0?
-			},
-		}, h)
+		desc := src.shaderResourceViewDesc()
+		device.CreateShaderResourceView(src.resource(), &desc, h)
 	}
 
 	// Update the constant buffers: the internal uniform block, then the user's block.
@@ -282,7 +276,7 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 	commandList.SetGraphicsRootDescriptorTable(0, gh)
 	commandList.SetGraphicsRootDescriptorTable(1, gh)
 
-	s, err := shader.pipelineState(blend, screen)
+	s, err := shader.pipelineState(blend, rtvFormat)
 	if err != nil {
 		return err
 	}
@@ -367,18 +361,19 @@ func (p *pipelineStates) ensureRootSignature(device *_ID3D12Device) (*_ID3D12Roo
 	return p.rootSignature, nil
 }
 
-func (p *pipelineStates) newPipelineState(device *_ID3D12Device, vsh, psh *_ID3DBlob, blend graphicsdriver.Blend, screen bool) (*_ID3D12PipelineState, error) {
+// newPipelineState creates a pipeline state that draws into a render target view of rtvFormat.
+//
+// An R8 target (an A8 image) blends its red channel by the color part of blend. It has no alpha
+// channel, so a destination-alpha factor reads 1, as graphicsdriver.PixelFormatA8 documents;
+// the alpha part of blend is unused. R8_UNORM is a required render target and blendable format
+// at feature level 11_0, the lowest Direct3D 12 runs at.
+func (p *pipelineStates) newPipelineState(device *_ID3D12Device, vsh, psh *_ID3DBlob, blend graphicsdriver.Blend, rtvFormat _DXGI_FORMAT) (*_ID3D12PipelineState, error) {
 	rootSignature, err := p.ensureRootSignature(device)
 	if err != nil {
 		return nil, err
 	}
 
 	writeMask := uint8(_D3D12_COLOR_WRITE_ENABLE_ALL)
-
-	rtvFormat := _DXGI_FORMAT_R8G8B8A8_UNORM
-	if screen {
-		rtvFormat = _DXGI_FORMAT_B8G8R8A8_UNORM
-	}
 
 	// Create a pipeline state.
 	psoDesc := _D3D12_GRAPHICS_PIPELINE_STATE_DESC{

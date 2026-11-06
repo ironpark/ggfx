@@ -1024,16 +1024,22 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	return nil
 }
 
-// SupportsPixelFormat reports only PixelFormatRGBA8 for now.
+// SupportsPixelFormat reports PixelFormatRGBA8 and PixelFormatA8.
 //
-// TODO: Support PixelFormatA8 with DXGI_FORMAT_R8_UNORM and an SRV whose Shader4ComponentMapping
-// maps all four components to component 0; see graphicsdriver.PixelFormatA8.
+// An A8 image is a DXGI_FORMAT_R8_UNORM texture, drawn into through a plain R8 render target
+// view and sampled through a shader resource view that maps all four components to the red one.
+// Sampling, rendering to and blending R8_UNORM are required at feature level 11_0, the lowest
+// Direct3D 12 runs at, so no device needs asking.
 func (g *graphics12) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool {
-	return format == graphicsdriver.PixelFormatRGBA8
+	switch format {
+	case graphicsdriver.PixelFormatRGBA8, graphicsdriver.PixelFormatA8:
+		return true
+	}
+	return false
 }
 
 func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
-	if format != graphicsdriver.PixelFormatRGBA8 {
+	if !g.SupportsPixelFormat(format) {
 		return nil, fmt.Errorf("directx: unsupported pixel format %s", format)
 	}
 	desc := _D3D12_RESOURCE_DESC{
@@ -1043,7 +1049,7 @@ func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelForm
 		Height:           uint32(graphics.InternalImageSize(height)),
 		DepthOrArraySize: 1,
 		MipLevels:        0,
-		Format:           _DXGI_FORMAT_R8G8B8A8_UNORM,
+		Format:           dxgiFormat(format),
 		SampleDesc: _DXGI_SAMPLE_DESC{
 			Count:   1,
 			Quality: 0,
@@ -1069,6 +1075,7 @@ func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelForm
 		id:       g.genNextImageID(),
 		width:    width,
 		height:   height,
+		format:   format,
 		texture:  t,
 		states:   [frameCount]_D3D12_RESOURCE_STATES{state},
 	}
@@ -1234,7 +1241,7 @@ func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.
 	})
 
 	g.tmpUniforms = flipProjectionY(g.tmpUniforms, uniforms)
-	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, g.frameIndex, dst.screen, srcImages, shader, dstRegions, g.tmpUniforms, blend, indexOffset); err != nil {
+	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, g.frameIndex, dst.renderTargetFormat(), srcImages, shader, dstRegions, g.tmpUniforms, blend, indexOffset); err != nil {
 		return err
 	}
 
