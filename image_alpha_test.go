@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"runtime"
 	"testing"
 
 	"github.com/ironpark/ggfx"
@@ -96,8 +97,16 @@ func newAlpha(w, h int) *ggfx.Image {
 	return ggfx.NewImageWithOptions(image.Rect(0, 0, w, h), &ggfx.NewImageOptions{Format: ggfx.PixelFormatAlpha})
 }
 
+// a8Native reports whether the driver makes alpha images natively: Metal, and OpenGL outside the
+// browser (WebGL has no texture swizzle).
 func a8Native() bool {
-	return host.CurrentDriver().Library == host.GraphicsLibraryMetal
+	switch host.CurrentDriver().Library {
+	case host.GraphicsLibraryMetal:
+		return true
+	case host.GraphicsLibraryOpenGL:
+		return runtime.GOOS != "js"
+	}
+	return false
 }
 
 // TestAlphaImageDrawsAsWhite draws an alpha image and the equivalent white RGBA image the same

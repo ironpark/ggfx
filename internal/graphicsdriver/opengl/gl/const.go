@@ -53,8 +53,10 @@ const (
 	KEEP                  = 0x1E00
 	LINK_STATUS           = 0x8B82
 	MAX                   = 0x8008
+	MAJOR_VERSION         = 0x821B
 	MAX_TEXTURE_SIZE      = 0x0D33
 	MIN                   = 0x8007
+	MINOR_VERSION         = 0x821C
 	NEAREST               = 0x2600
 	NO_ERROR              = 0
 	NOTEQUAL              = 0x0205
@@ -63,10 +65,13 @@ const (
 	ONE_MINUS_DST_COLOR   = 0x0307
 	ONE_MINUS_SRC_ALPHA   = 0x0303
 	ONE_MINUS_SRC_COLOR   = 0x0301
+	PACK_ALIGNMENT        = 0x0D05
 	PIXEL_PACK_BUFFER     = 0x88EB
 	PIXEL_UNPACK_BUFFER   = 0x88EC
+	R8                    = 0x8229
 	READ_FRAMEBUFFER      = 0x8CA8
 	READ_WRITE            = 0x88BA
+	RED                   = 0x1903
 	RENDERBUFFER          = 0x8D41
 	RGBA                  = 0x1908
 	SCISSOR_TEST          = 0x0C11
@@ -83,6 +88,10 @@ const (
 	TEXTURE_2D            = 0x0DE1
 	TEXTURE_MAG_FILTER    = 0x2800
 	TEXTURE_MIN_FILTER    = 0x2801
+	TEXTURE_SWIZZLE_A     = 0x8E45
+	TEXTURE_SWIZZLE_B     = 0x8E44
+	TEXTURE_SWIZZLE_G     = 0x8E43
+	TEXTURE_SWIZZLE_R     = 0x8E42
 	TEXTURE_WRAP_S        = 0x2802
 	TEXTURE_WRAP_T        = 0x2803
 	TRIANGLES             = 0x0004

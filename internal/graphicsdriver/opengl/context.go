@@ -113,6 +113,9 @@ type context struct {
 	initOnce                        sync.Once
 	hasKHRParallelShaderCompile     bool
 	hasKHRParallelShaderCompileOnce sync.Once
+
+	// tmpPixels is scratch for reading an A8 framebuffer as RGBA on OpenGL ES.
+	tmpPixels []byte
 }
 
 func (c *context) bindTexture(t textureNative) {
@@ -222,7 +225,10 @@ func (c *context) blend(blend graphicsdriver.Blend) {
 	)
 }
 
-func (c *context) newTexture(width, height int) (textureNative, error) {
+// newTexture makes a texture of format. An A8 texture is GL_R8 sampled through the swizzle RRRR, so
+// a shader reads a stored v as (v, v, v, v); see graphicsdriver.PixelFormatA8. A texture's swizzle is
+// state of the texture object, so it holds in every context the texture is shared with.
+func (c *context) newTexture(width, height int, format graphicsdriver.PixelFormat) (textureNative, error) {
 	t := c.ctx.CreateTexture()
 	if t <= 0 {
 		return 0, errors.New("opengl: creating texture failed")
@@ -244,14 +250,54 @@ func (c *context) newTexture(width, height int) (textureNative, error) {
 	// avoided.
 	//
 	// See also https://stackoverflow.com/questions/57734645.
-	c.ctx.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, nil)
+	switch format {
+	case graphicsdriver.PixelFormatRGBA8:
+		c.ctx.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, nil)
+	case graphicsdriver.PixelFormatA8:
+		c.ctx.TexImage2D(gl.TEXTURE_2D, 0, gl.R8, int32(width), int32(height), gl.RED, gl.UNSIGNED_BYTE, nil)
+		c.ctx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_SWIZZLE_R, gl.RED)
+		c.ctx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_SWIZZLE_G, gl.RED)
+		c.ctx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_SWIZZLE_B, gl.RED)
+		c.ctx.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_SWIZZLE_A, gl.RED)
+	default:
+		c.deleteTexture(textureNative(t))
+		return 0, fmt.Errorf("opengl: unsupported pixel format %s", format)
+	}
 
 	return textureNative(t), nil
 }
 
-func (c *context) framebufferPixels(buf []byte, f *framebuffer, region image.Rectangle) error {
-	if got, want := len(buf), 4*region.Dx()*region.Dy(); got != want {
-		return fmt.Errorf("opengl: len(buf) must be %d but was %d at framebufferPixels", got, want)
+// supportsTextureSwizzle reports whether textures can have a swizzle (GL_TEXTURE_SWIZZLE_*), and so
+// whether GL_R8 can stand for PixelFormatA8: OpenGL 3.3+ and OpenGL ES 3.0+, where GL_R8 is also
+// color-renderable. WebGL has no texture swizzle. The functions must have been loaded.
+//
+// Contexts older than OpenGL 3.3 could have GL_ARB_texture_swizzle, but the driver's shaders are
+// GLSL 3.30 and need OpenGL 3.3 anyway.
+func (c *context) supportsTextureSwizzle() bool {
+	if runtime.GOOS == "js" {
+		return false
+	}
+	// GL_MAJOR_VERSION and GL_MINOR_VERSION are OpenGL 3.0 and OpenGL ES 3.0 queries. An older
+	// context answers GL_INVALID_ENUM and leaves 0.
+	major := c.ctx.GetInteger(gl.MAJOR_VERSION)
+	minor := c.ctx.GetInteger(gl.MINOR_VERSION)
+	// Drain the error queue, but not forever: a lost context keeps answering an error.
+	for range 8 {
+		if c.ctx.GetError() == gl.NO_ERROR {
+			break
+		}
+	}
+	if c.ctx.IsES() {
+		return major >= 3
+	}
+	return major > 3 || major == 3 && minor >= 3
+}
+
+// framebufferPixels reads the pixels of region of f, whose color attachment is of format, into buf,
+// rows tightly packed.
+func (c *context) framebufferPixels(buf []byte, f *framebuffer, region image.Rectangle, format graphicsdriver.PixelFormat) error {
+	if got, want := len(buf), format.BytesPerPixel()*region.Dx()*region.Dy(); got != want {
+		return fmt.Errorf("opengl: len(buf) must be %d but was %d at framebufferPixels", want, got)
 	}
 
 	c.ctx.Flush()
@@ -260,7 +306,30 @@ func (c *context) framebufferPixels(buf []byte, f *framebuffer, region image.Rec
 	y := int32(region.Min.Y)
 	width := int32(region.Dx())
 	height := int32(region.Dy())
-	c.ctx.ReadPixels(buf, x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE)
+	if format != graphicsdriver.PixelFormatA8 {
+		c.ctx.ReadPixels(buf, x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE)
+		return nil
+	}
+
+	if c.ctx.IsES() {
+		// OpenGL ES guarantees only GL_RGBA/GL_UNSIGNED_BYTE for a normalized color buffer (the
+		// other pair it reads is the implementation's choice), so read RGBA and keep red.
+		n := region.Dx() * region.Dy()
+		if cap(c.tmpPixels) < 4*n {
+			c.tmpPixels = make([]byte, 4*n)
+		}
+		tmp := c.tmpPixels[:4*n]
+		c.ctx.ReadPixels(tmp, x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE)
+		for i := range n {
+			buf[i] = tmp[4*i]
+		}
+		return nil
+	}
+
+	// A row of 1 byte a pixel need not be a multiple of the default alignment of 4.
+	c.ctx.PixelStorei(gl.PACK_ALIGNMENT, 1)
+	c.ctx.ReadPixels(buf, x, y, width, height, gl.RED, gl.UNSIGNED_BYTE)
+	c.ctx.PixelStorei(gl.PACK_ALIGNMENT, 4)
 	return nil
 }
 

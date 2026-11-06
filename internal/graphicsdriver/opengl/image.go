@@ -32,6 +32,9 @@ type Image struct {
 	width       int
 	height      int
 
+	// format is the format of the texture. A screen image is always PixelFormatRGBA8.
+	format graphicsdriver.PixelFormat
+
 	// surface is the surface the image is presented on. It is non-nil iff the image is a screen image.
 	surface *Surface
 
@@ -79,7 +82,7 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 		return err
 	}
 	for _, arg := range args {
-		if err := i.graphics.context.framebufferPixels(arg.Pixels, i.framebuffer, arg.Region); err != nil {
+		if err := i.graphics.context.framebufferPixels(arg.Pixels, i.framebuffer, arg.Region, i.format); err != nil {
 			return err
 		}
 	}
@@ -134,13 +137,21 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	}
 	i.graphics.drawCalled = false
 
+	ctx := i.graphics.context.ctx
 	i.graphics.context.bindTexture(i.texture)
+	format := uint32(gl.RGBA)
+	if i.format == graphicsdriver.PixelFormatA8 {
+		// A row of 1 byte a pixel need not be a multiple of the default alignment of 4.
+		format = gl.RED
+		ctx.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+		defer ctx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
+	}
 	for _, a := range args {
 		x := int32(a.Region.Min.X)
 		y := int32(a.Region.Min.Y)
 		width := int32(a.Region.Dx())
 		height := int32(a.Region.Dy())
-		i.graphics.context.ctx.TexSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE, a.Pixels)
+		ctx.TexSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, format, gl.UNSIGNED_BYTE, a.Pixels)
 	}
 
 	return nil

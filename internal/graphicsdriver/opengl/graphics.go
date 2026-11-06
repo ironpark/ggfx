@@ -69,6 +69,9 @@ type Graphics struct {
 	// textureNative cannot be a map key unfortunately.
 	activatedTextures []activatedTexture
 
+	// a8Supported reports whether images can be PixelFormatA8. It is decided at Initialize.
+	a8Supported bool
+
 	graphicsPlatform
 }
 
@@ -192,16 +195,20 @@ func (g *Graphics) genNextShaderID() graphicsdriver.ShaderID {
 	return g.nextShaderID
 }
 
-// SupportsPixelFormat reports only PixelFormatRGBA8 for now.
-//
-// TODO: Support PixelFormatA8 on OpenGL 3.3+ and OpenGL ES 3.0+ with a GL_R8 texture swizzled
-// RRRR (GL_TEXTURE_SWIZZLE_RGBA); see graphicsdriver.PixelFormatA8. WebGL cannot swizzle.
+// SupportsPixelFormat reports PixelFormatA8 where a texture can have a swizzle: OpenGL 3.3+ and
+// OpenGL ES 3.0+, but not WebGL. An A8 image is a GL_R8 texture sampled as RRRR.
 func (g *Graphics) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool {
-	return format == graphicsdriver.PixelFormatRGBA8
+	switch format {
+	case graphicsdriver.PixelFormatRGBA8:
+		return true
+	case graphicsdriver.PixelFormatA8:
+		return g.a8Supported
+	}
+	return false
 }
 
 func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
-	if format != graphicsdriver.PixelFormatRGBA8 {
+	if !g.SupportsPixelFormat(format) {
 		return nil, fmt.Errorf("opengl: unsupported pixel format %s", format)
 	}
 	i := &Image{
@@ -209,11 +216,12 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 		graphics: g,
 		width:    width,
 		height:   height,
+		format:   format,
 	}
 	w := graphics.InternalImageSize(width)
 	h := graphics.InternalImageSize(height)
 	g.checkSize(w, h)
-	t, err := g.context.newTexture(w, h)
+	t, err := g.context.newTexture(w, h, format)
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +345,7 @@ func (g *Graphics) Initialize() error {
 	if err := g.state.reset(&g.context); err != nil {
 		return err
 	}
+	g.a8Supported = g.context.supportsTextureSwizzle()
 	return nil
 }
 
