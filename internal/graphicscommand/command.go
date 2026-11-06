@@ -261,20 +261,55 @@ func (c *writePixelsCommand) Exec(commandQueue *commandQueue, graphicsDriver gra
 	if len(c.args) == 0 {
 		return nil
 	}
-	args := make([]graphicsdriver.PixelsArgs, 0, len(c.args))
+	// No driver keeps args once WritePixels returns, so the queue's scratch is reused.
+	args := commandQueue.tmpPixelsArgs[:0]
 	for _, a := range c.args {
-		pix, f := a.pixels.GetAndRelease()
+		pix := a.pixels.Take()
 		// Keep upload bytes alive until the frame's commands have been submitted.
-		commandQueue.addFinalizer(f)
+		commandQueue.uploadedBytes = append(commandQueue.uploadedBytes, pix)
 		args = append(args, graphicsdriver.PixelsArgs{
 			Pixels: pix,
 			Region: a.region,
 		})
 	}
-	if err := c.dst.image.WritePixels(args); err != nil {
-		return err
+	err := c.dst.image.WritePixels(args)
+	clear(args)
+	commandQueue.tmpPixelsArgs = keepSmall(args)
+	return err
+}
+
+// maxKeptWrites is the most writes a reused slice of writes keeps room for. A larger one, from a
+// rare burst of writes, is dropped rather than kept for good.
+const maxKeptWrites = 512
+
+// keepSmall returns s emptied, or nil if it has more room than maxKeptWrites.
+func keepSmall[T any](s []T) []T {
+	if cap(s) > maxKeptWrites {
+		return nil
 	}
-	return nil
+	return s[:0]
+}
+
+// writePixelsCommandPool is a pool of write-pixels commands, which keep the room of their args.
+type writePixelsCommandPool struct {
+	pool []*writePixelsCommand
+}
+
+func (p *writePixelsCommandPool) get() *writePixelsCommand {
+	if len(p.pool) == 0 {
+		return &writePixelsCommand{}
+	}
+	c := p.pool[len(p.pool)-1]
+	p.pool[len(p.pool)-1] = nil
+	p.pool = p.pool[:len(p.pool)-1]
+	return c
+}
+
+func (p *writePixelsCommandPool) put(c *writePixelsCommand) {
+	c.dst = nil
+	clear(c.args)
+	c.args = keepSmall(c.args)
+	p.pool = append(p.pool, c)
 }
 
 func (c *writePixelsCommand) NeedsSync() bool {

@@ -48,7 +48,7 @@ var (
 	// theCallbackTokens and theFillPathsStates are keyed by weak pointers not to keep the destination images alive.
 	// When a destination image is collected before being used again, releaseFillPathsState removes the entries.
 	theCallbackTokens      = map[weak.Pointer[ggfx.Image]]int64{}
-	theFillPathsStates     = map[weak.Pointer[ggfx.Image]]*fillPathsState{}
+	theFillPathsStates     = map[weak.Pointer[ggfx.Image]]*fillDst{}
 	theFillPathsStatesPool = pool.Pool[*fillPathsState]{
 		New: func() *fillPathsState {
 			return &fillPathsState{}
@@ -104,11 +104,16 @@ func FillPath(dst *ggfx.Image, path *Path, fillOptions *FillOptions, drawPathOpt
 	}
 	delete(theCallbackTokens, key)
 
-	s, ok := theFillPathsStates[key]
+	d, ok := theFillPathsStates[key]
 	if !ok {
+		d = &fillDst{}
+		theFillPathsStates[key] = d
+		d.cleanup = runtime.AddCleanup(dst, releaseFillPathsState, key)
+	}
+	s := d.state
+	if s == nil {
 		s = theFillPathsStatesPool.Get()
-		theFillPathsStates[key] = s
-		s.cleanup = runtime.AddCleanup(dst, releaseFillPathsState, key)
+		d.state = s
 	}
 	if s.antialias != drawPathOptions.AntiAlias || s.blend != drawPathOptions.Blend || s.fillRule != fillOptions.FillRule {
 		s.fillPaths(dst)
@@ -139,15 +144,15 @@ func fillPathCallback(dst *ggfx.Image) {
 	}
 	delete(theCallbackTokens, key)
 
-	s, ok := theFillPathsStates[key]
-	if !ok {
+	d, ok := theFillPathsStates[key]
+	if !ok || d.state == nil {
 		panic("vector: fillPathsState must exist here")
 	}
+	s := d.state
 	s.fillPaths(dst)
 	s.reset()
-	delete(theFillPathsStates, key)
-	s.cleanup.Stop()
-	s.cleanup = runtime.Cleanup{}
+	// The entry and its cleanup stay for the image's next batch; the state goes back to the pool.
+	d.state = nil
 	theFillPathsStatesPool.Put(s)
 }
 
@@ -159,14 +164,24 @@ func releaseFillPathsState(key weak.Pointer[ggfx.Image]) {
 	// The destination image is already collected, and its usage callbacks are gone with it.
 	delete(theCallbackTokens, key)
 
-	s, ok := theFillPathsStates[key]
+	d, ok := theFillPathsStates[key]
 	if !ok {
 		return
 	}
 	delete(theFillPathsStates, key)
-	s.cleanup = runtime.Cleanup{}
-	s.reset()
-	theFillPathsStatesPool.Put(s)
+	if s := d.state; s != nil {
+		d.state = nil
+		s.reset()
+		theFillPathsStatesPool.Put(s)
+	}
+}
+
+// fillDst is the entry of a destination image paths were filled to: the batch of paths pending
+// for it, if any, and the cleanup that removes the entry once the image is collected. The entry
+// stays while the image lives, so that its later batches register no cleanup again.
+type fillDst struct {
+	state   *fillPathsState
+	cleanup runtime.Cleanup
 }
 
 //go:linkname originalImage github.com/ironpark/ggfx.originalImage
@@ -291,10 +306,6 @@ type fillPathsState struct {
 	antialias bool
 	blend     ggfx.Blend
 	fillRule  FillRule
-
-	// cleanup removes the entries for the destination image from theCallbackTokens and theFillPathsStates
-	// when the image is collected.
-	cleanup runtime.Cleanup
 }
 
 func (f *fillPathsState) reset() {

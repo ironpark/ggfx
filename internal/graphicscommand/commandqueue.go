@@ -70,9 +70,24 @@ type commandQueue struct {
 	tmpNumVertexFloats int
 
 	drawTrianglesCommandPool drawTrianglesCommandPool
+	writePixelsCommandPool   writePixelsCommandPool
+
+	// uploadedBytes are the pixels the write-pixels commands uploaded, given back to the pool of
+	// bytes at the end of the frame, and tmpPixelsArgs the scratch they are uploaded with.
+	uploadedBytes [][]byte
+	tmpPixelsArgs []graphicsdriver.PixelsArgs
 
 	uint32sBuffer uint32sBuffer
 	finalizers    []func()
+
+	// flushDriver, flushMode, flushSync and flushLogger are the arguments of the flush in
+	// progress, flushErr its error when it is synchronous, and runFlushFunc q.runFlush, bound once.
+	flushDriver  graphicsdriver.Graphics
+	flushMode    graphicsdriver.FlushMode
+	flushSync    bool
+	flushLogger  debug.FrameLogger
+	flushErr     error
+	runFlushFunc func()
 
 	err atomic.Value
 }
@@ -195,29 +210,45 @@ func (q *commandQueue) Flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 		}
 	}
 
-	logger := debug.SwitchFrameLogger()
+	// The flush's arguments are kept in q rather than captured by a closure, so that a flush
+	// allocates nothing. q is not touched by anyone else until runFlush puts it back in the pool.
+	q.flushDriver = graphicsDriver
+	q.flushMode = mode
+	q.flushSync = sync
+	q.flushLogger = debug.SwitchFrameLogger()
+	q.flushErr = nil
+	if q.runFlushFunc == nil {
+		q.runFlushFunc = q.runFlush
+	}
+	runOnRenderThread(q.runFlushFunc, sync)
 
-	var flushErr error
-	runOnRenderThread(func() {
-		defer logger.Flush()
-
-		if err := q.flush(graphicsDriver, mode, logger); err != nil {
-			if sync {
-				flushErr = err
-				return
-			}
-			q.err.Store(err)
-			return
+	if sync {
+		// When the flush succeeded, q may already be in the pool again; flushErr is then nil.
+		if err := q.flushErr; err != nil {
+			q.flushErr = nil
+			return err
 		}
-
-		theCommandQueueManager.putCommandQueue(q)
-	}, sync)
-
-	if sync && flushErr != nil {
-		return flushErr
 	}
 
 	return nil
+}
+
+// runFlush runs the flush Flush set up, on the render thread.
+func (q *commandQueue) runFlush() {
+	driver, mode, sync, logger := q.flushDriver, q.flushMode, q.flushSync, q.flushLogger
+	q.flushDriver, q.flushLogger = nil, nil
+	defer logger.Flush()
+
+	if err := q.flush(driver, mode, logger); err != nil {
+		if sync {
+			q.flushErr = err
+			return
+		}
+		q.err.Store(err)
+		return
+	}
+
+	theCommandQueueManager.putCommandQueue(q)
 }
 
 // flush must be called the render thread.
@@ -245,8 +276,13 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 		// Apparently, the part of a slice between len and cap-1 still holds references.
 		// Then, resetting the length by [:0] doesn't release the references.
 		for i, c := range q.commands {
-			if c, ok := c.(*drawTrianglesCommand); ok {
+			switch c := c.(type) {
+			case *drawTrianglesCommand:
 				q.drawTrianglesCommandPool.put(c)
+			case *writePixelsCommand:
+				// An image's pendingWrite may still point to c, but it is not used once the
+				// queue's generation has passed.
+				q.writePixelsCommandPool.put(c)
 			}
 			q.commands[i] = nil
 		}
@@ -263,6 +299,15 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 				q.finalizers[i] = nil
 			}
 			q.finalizers = q.finalizers[:0]
+			for i, bs := range q.uploadedBytes {
+				graphics.PutBytes(bs)
+				q.uploadedBytes[i] = nil
+			}
+			if cap(q.uploadedBytes) > 4*maxKeptWrites {
+				q.uploadedBytes = nil
+			} else {
+				q.uploadedBytes = q.uploadedBytes[:0]
+			}
 			// The finalizers gave the frame's upload bytes back.
 			graphics.AdvanceBytesPoolFrame()
 		}
@@ -449,6 +494,15 @@ type commandQueueManager struct {
 }
 
 var theCommandQueueManager commandQueueManager
+
+// newWritePixelsCommand returns a write-pixels command from the current queue's pool. The queue
+// puts it back once it has run.
+func (c *commandQueueManager) newWritePixelsCommand() *writePixelsCommand {
+	if c.current == nil {
+		c.current, _ = c.pool.get()
+	}
+	return c.current.writePixelsCommandPool.get()
+}
 
 func (c *commandQueueManager) enqueueCommand(command command) {
 	if c.current == nil {

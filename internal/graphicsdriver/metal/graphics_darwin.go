@@ -62,12 +62,11 @@ type Graphics struct {
 	// frame is incremented when the screen is presented.
 	frame int64
 
-	// frameToCB maps a frame number to command buffers used in the frame.
-	// frameToCB keeps command buffers not to be released until the command buffers are completed.
-	frameToCB map[int64][]mtl.CommandBuffer
-
-	// buffers maps a frame number to the buffers used in the frame, until its command buffers are completed.
-	buffers map[int64][]mtl.Buffer
+	// inFlight holds, oldest first, the command buffers and the buffers of the frames whose command
+	// buffers may not have completed, so that they are not released or reused before. spareFrames
+	// are records to reuse, so that a frame allocates none.
+	inFlight    []*frameResources
+	spareFrames []*frameResources
 
 	// unusedBuffers keeps the buffers of completed frames for later frames to reuse.
 	unusedBuffers bufferPool[mtl.Buffer]
@@ -421,29 +420,62 @@ func pow2(x uintptr) uintptr {
 	return p2
 }
 
+// frameResources are a frame's command buffers and the buffers its commands use.
+type frameResources struct {
+	frame   int64
+	cbs     []mtl.CommandBuffer
+	buffers []mtl.Buffer
+}
+
+// currentFrameResources returns the record of the current frame, adding one if needed.
+func (g *Graphics) currentFrameResources() *frameResources {
+	if n := len(g.inFlight); n > 0 && g.inFlight[n-1].frame == g.frame {
+		return g.inFlight[n-1]
+	}
+	var r *frameResources
+	if n := len(g.spareFrames); n > 0 {
+		r = g.spareFrames[n-1]
+		g.spareFrames[n-1] = nil
+		g.spareFrames = g.spareFrames[:n-1]
+	} else {
+		r = &frameResources{}
+	}
+	r.frame = g.frame
+	g.inFlight = append(g.inFlight, r)
+	return r
+}
+
 func (g *Graphics) gcBuffers() {
+	kept := g.inFlight[:0]
 loop:
-	for frame, cbs := range g.frameToCB {
-		if frame == g.frame {
+	for _, r := range g.inFlight {
+		if r.frame == g.frame {
+			kept = append(kept, r)
 			continue
 		}
 
 		// Check if all command buffers for the frame are completed.
-		for _, cb := range cbs {
+		for _, cb := range r.cbs {
 			if cb.Status() != mtl.CommandBufferStatusCompleted {
+				kept = append(kept, r)
 				continue loop
 			}
 		}
-		for _, cb := range cbs {
+		for i, cb := range r.cbs {
 			cb.Release()
+			r.cbs[i] = mtl.CommandBuffer{}
 		}
-		delete(g.frameToCB, frame)
+		r.cbs = r.cbs[:0]
 
-		for _, b := range g.buffers[frame] {
-			g.unusedBuffers.put(b, b.Length(), frame)
+		for i, b := range r.buffers {
+			g.unusedBuffers.put(b, b.Length(), r.frame)
+			r.buffers[i] = mtl.Buffer{}
 		}
-		delete(g.buffers, frame)
+		r.buffers = r.buffers[:0]
+		g.spareFrames = append(g.spareFrames, r)
 	}
+	clear(g.inFlight[len(kept):])
+	g.inFlight = kept
 
 	g.unusedBuffers.evict(g.frame, mtl.Buffer.Release)
 }
@@ -454,10 +486,8 @@ func (g *Graphics) ensureCommandBuffer() {
 	}
 	g.cb = g.cq.CommandBuffer()
 	g.encoders = 0
-	if g.frameToCB == nil {
-		g.frameToCB = map[int64][]mtl.CommandBuffer{}
-	}
-	g.frameToCB[g.frame] = append(g.frameToCB[g.frame], g.cb)
+	r := g.currentFrameResources()
+	r.cbs = append(r.cbs, g.cb)
 	g.cb.Retain()
 }
 
@@ -486,10 +516,8 @@ func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
 		newBuf = g.device.NewBufferWithLength(pow2(length), resourceStorageMode)
 	}
 
-	if g.buffers == nil {
-		g.buffers = map[int64][]mtl.Buffer{}
-	}
-	g.buffers[g.frame] = append(g.buffers[g.frame], newBuf)
+	r := g.currentFrameResources()
+	r.buffers = append(r.buffers, newBuf)
 	return newBuf
 }
 

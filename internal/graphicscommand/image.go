@@ -158,17 +158,17 @@ func (i *Image) flushBufferedWritePixels() {
 			c.args = append(c.args[:cur], arg)
 		}
 		clear(i.bufferedWritePixelsArgs)
-		i.bufferedWritePixelsArgs = i.bufferedWritePixelsArgs[:0]
+		i.bufferedWritePixelsArgs = keepSmall(i.bufferedWritePixelsArgs)
 		return
 	}
 
-	c := &writePixelsCommand{
-		dst:  i,
-		args: i.bufferedWritePixelsArgs,
-	}
+	c := theCommandQueueManager.newWritePixelsCommand()
+	c.dst = i
+	c.args = append(c.args, i.bufferedWritePixelsArgs...)
 	theCommandQueueManager.enqueueCommand(c)
 
-	i.bufferedWritePixelsArgs = nil
+	clear(i.bufferedWritePixelsArgs)
+	i.bufferedWritePixelsArgs = keepSmall(i.bufferedWritePixelsArgs)
 	i.pendingWrite = c
 	i.pendingWriteGeneration = theCommandQueueManager.generation
 	i.touched = i.touched[:0]
