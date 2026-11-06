@@ -38,6 +38,9 @@ type Image struct {
 	internalHeight int
 	screen         bool
 
+	// format is the format of the image's pixels, and of the pixels of WritePixels and ReadPixels.
+	format graphicsdriver.PixelFormat
+
 	// readable reports whether the screen image can be a rendering source (see ScreenReadable).
 	readable bool
 
@@ -61,13 +64,25 @@ func genNextImageID() int {
 	return id
 }
 
-// NewImage returns a new image. The pixel data just after NewImage is undetermined.
+// NewImage returns a new RGBA8 image. The pixel data just after NewImage is undetermined.
 // A non-nil surface makes the image the screen image of that surface.
 func NewImage(width, height int, surface graphicsdriver.Surface, attribute string) *Image {
+	return newImage(width, height, graphicsdriver.PixelFormatRGBA8, surface, attribute)
+}
+
+// NewImageWithFormat returns a new offscreen image of the given pixel format, which the driver
+// must support (see SupportsPixelFormat). The pixel data just after NewImageWithFormat is
+// undetermined.
+func NewImageWithFormat(width, height int, format graphicsdriver.PixelFormat, attribute string) *Image {
+	return newImage(width, height, format, nil, attribute)
+}
+
+func newImage(width, height int, format graphicsdriver.PixelFormat, surface graphicsdriver.Surface, attribute string) *Image {
 	i := &Image{
 		width:     width,
 		height:    height,
 		screen:    surface != nil,
+		format:    format,
 		readable:  surface != nil && ScreenReadable(surface),
 		id:        genNextImageID(),
 		attribute: attribute,
@@ -76,11 +91,17 @@ func NewImage(width, height int, surface graphicsdriver.Surface, attribute strin
 		result:    i,
 		width:     width,
 		height:    height,
+		format:    format,
 		surface:   surface,
 		attribute: attribute,
 	}
 	theCommandQueueManager.enqueueCommand(c)
 	return i
+}
+
+// Format returns the format of the image's pixels.
+func (i *Image) Format() graphicsdriver.PixelFormat {
+	return i.format
 }
 
 // readableSurface is a surface whose screen image can be a rendering source.
@@ -168,7 +189,7 @@ func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 	theCommandQueueManager.enqueueDrawTrianglesCommand(i, srcs, vertices, indices, blend, dstRegion, srcRegions, shader, uniforms)
 }
 
-// ReadPixels reads the image's pixels.
+// ReadPixels reads the image's pixels, in the image's format.
 // ReadPixels returns an error when an error happens in the graphics driver.
 func (i *Image) ReadPixels(graphicsDriver graphicsdriver.Graphics, args []graphicsdriver.PixelsArgs) error {
 	i.flushBufferedWritePixels()
@@ -183,7 +204,11 @@ func (i *Image) ReadPixels(graphicsDriver graphicsdriver.Graphics, args []graphi
 	return nil
 }
 
+// WritePixels writes pixels in the image's format to region.
 func (i *Image) WritePixels(pixels *graphics.ManagedBytes, region image.Rectangle) {
+	if got, want := pixels.Len(), i.format.BytesPerPixel()*region.Dx()*region.Dy(); got != want {
+		panic(fmt.Sprintf("graphicscommand: len(pixels) must be %d but %d at WritePixels", want, got))
+	}
 	// Release the previous pixels if the region is included by the new region.
 	// Successive WritePixels calls might accumulate the pixels and never release,
 	// especially when the image is unmanaged (#3036).
@@ -220,7 +245,7 @@ func (i *Image) dumpTo(w io.Writer, graphicsDriver graphicsdriver.Graphics, blac
 		return fmt.Errorf("graphicscommand: a screen image cannot be dumped")
 	}
 
-	pix := make([]byte, 4*i.width*i.height)
+	pix := make([]byte, i.format.BytesPerPixel()*i.width*i.height)
 	if err := i.ReadPixels(graphicsDriver, []graphicsdriver.PixelsArgs{
 		{
 			Pixels: pix,
@@ -228,6 +253,11 @@ func (i *Image) dumpTo(w io.Writer, graphicsDriver graphicsdriver.Graphics, blac
 		},
 	}); err != nil {
 		return err
+	}
+	if i.format == graphicsdriver.PixelFormatA8 {
+		rgba := make([]byte, 4*len(pix))
+		graphics.ExpandAlpha(rgba, pix)
+		pix = rgba
 	}
 
 	if blackbg {
@@ -258,6 +288,9 @@ func LogImagesInfo(images []*Image) {
 			attr = " (" + i.attribute + ")"
 		} else if i.screen {
 			attr = " (screen)"
+		}
+		if i.format != graphicsdriver.PixelFormatRGBA8 {
+			attr += " " + i.format.String()
 		}
 		debug.FrameLogf("  %d: (%d, %d)%s\n", i.id, w, h, attr)
 	}

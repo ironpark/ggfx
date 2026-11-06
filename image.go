@@ -29,13 +29,15 @@ import (
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/pool"
 	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/scratch"
 )
 
 // Image represents a rectangle set of pixels.
-// The pixel format is alpha-premultiplied RGBA.
+// The pixel format is alpha-premultiplied RGBA, or alpha only for an image made with
+// [PixelFormatAlpha], which still reads and writes as RGBA through the image.Image interfaces.
 // Image implements the standard image.Image and draw.Image interfaces.
 type Image struct {
 	// addr holds self to check copying.
@@ -132,6 +134,9 @@ func (i *Image) Clear() {
 }
 
 // Fill fills the image with a solid color.
+//
+// An image of [PixelFormatAlpha] is filled with the color's alpha: its pixels then read as
+// (a, a, a, a).
 //
 // When the image is disposed, Fill does nothing.
 func (i *Image) Fill(clr color.Color) {
@@ -1002,6 +1007,9 @@ func (i *Image) ColorModel() color.Model {
 // len(pixels) must be 4 * (bounds width) * (bounds height).
 // If len(pixels) is not correct, ReadPixels panics.
 //
+// For an image of [PixelFormatAlpha], each pixel of alpha a reads as (a, a, a, a); len(pixels)
+// may instead be (bounds width) * (bounds height), and then ReadPixels reads one alpha byte a pixel.
+//
 // ReadPixels also works on a sub-image.
 //
 // Note that an important logic should not rely on values returned by ReadPixels, since
@@ -1010,7 +1018,23 @@ func (i *Image) ColorModel() color.Model {
 // ReadPixels can't be called outside the main loop (ebiten.Run's updating function) starts.
 func (i *Image) ReadPixels(pixels []byte) {
 	b := i.Bounds()
-	if got, want := len(pixels), 4*b.Dx()*b.Dy(); got != want {
+	n := b.Dx() * b.Dy()
+	if i.image.Format() == graphicsdriver.PixelFormatA8 {
+		switch len(pixels) {
+		case n:
+			i.invokeUsageCallbacks()
+			i.image.ReadPixels(pixels, i.adjustedBounds())
+		case 4 * n:
+			i.invokeUsageCallbacks()
+			a := make([]byte, n)
+			i.image.ReadPixels(a, i.adjustedBounds())
+			graphics.ExpandAlpha(pixels, a)
+		default:
+			panic(fmt.Sprintf("ggfx: len(pixels) must be %d or %d but %d at ReadPixels", 4*n, n, len(pixels)))
+		}
+		return
+	}
+	if got, want := len(pixels), 4*n; got != want {
 		panic(fmt.Sprintf("ggfx: len(pixels) must be %d but %d at ReadPixels", want, got))
 	}
 
@@ -1063,6 +1087,11 @@ func (i *Image) at(x, y int) (r, g, b, a byte) {
 	i.invokeUsageCallbacks()
 
 	x, y = i.adjustPosition(x, y)
+	if i.image.Format() == graphicsdriver.PixelFormatA8 {
+		var pix [1]byte
+		i.image.ReadPixels(pix[:], image.Rect(x, y, x+1, y+1))
+		return pix[0], pix[0], pix[0], pix[0]
+	}
 	var pix [4]byte
 	i.image.ReadPixels(pix[:], image.Rect(x, y, x+1, y+1))
 	return pix[0], pix[1], pix[2], pix[3]
@@ -1078,6 +1107,8 @@ func (i *Image) at(x, y int) (r, g, b, a byte) {
 // the value is kept and is not clamped.
 //
 // If the image is disposed, Set does nothing.
+//
+// An image of [PixelFormatAlpha] keeps the color's alpha.
 //
 // For performance, it is recommended to use WritePixels instead of Set whenever possible.
 func (i *Image) Set(x, y int, clr color.Color) {
@@ -1099,6 +1130,10 @@ func (i *Image) Set(x, y int, clr color.Color) {
 
 	dx, dy := i.adjustPosition(x, y)
 	cr, cg, cb, ca := clr.RGBA()
+	if i.image.Format() == graphicsdriver.PixelFormatA8 {
+		i.image.WritePixels([]byte{byte(ca >> 8)}, image.Rect(dx, dy, dx+1, dy+1))
+		return
+	}
 	i.image.WritePixels([]byte{byte(cr >> 8), byte(cg >> 8), byte(cb >> 8), byte(ca >> 8)}, image.Rect(dx, dy, dx+1, dy+1))
 }
 
@@ -1169,6 +1204,9 @@ func (i *Image) Recycle() {
 // Even if a result is an invalid color as a premultiplied-alpha color, i.e. an alpha value exceeds other color values,
 // the value is kept and is not clamped.
 //
+// An image of [PixelFormatAlpha] keeps the alpha channel of the given RGBA pixels. len(pix) may
+// instead be (bounds width) * (bounds height): one alpha byte a pixel, kept as it is.
+//
 // When the image is disposed, WritePixels does nothing.
 func (i *Image) WritePixels(pixels []byte) {
 	i.copyCheck()
@@ -1178,6 +1216,20 @@ func (i *Image) WritePixels(pixels []byte) {
 	}
 
 	i.invokeUsageCallbacks()
+
+	if i.image.Format() == graphicsdriver.PixelFormatA8 {
+		b := i.Bounds()
+		n := b.Dx() * b.Dy()
+		switch len(pixels) {
+		case n:
+		case 4 * n:
+			a := make([]byte, n)
+			graphics.ExtractChannel(a, pixels, 3)
+			pixels = a
+		default:
+			panic(fmt.Sprintf("ggfx: len(pixels) must be %d or %d but %d at WritePixels", 4*n, n, len(pixels)))
+		}
+	}
 
 	// Do not need to copy pixels here.
 	// * In internal/mipmap, pixels are copied when necessary.
@@ -1203,7 +1255,7 @@ func MaxImageSize() int {
 //
 // NewImage panics once host.Terminate was called.
 func NewImage(width, height int) *Image {
-	return newImage(image.Rect(0, 0, width, height), atlas.ImageTypeRegular)
+	return newImage(image.Rect(0, 0, width, height), atlas.ImageTypeRegular, PixelFormatRGBA)
 }
 
 // NewImageOptions represents options for NewImage.
@@ -1215,6 +1267,10 @@ type NewImageOptions struct {
 	// A regular image is a part of an internal texture atlas, and locating them is done automatically in Ebitengine.
 	// Unmanaged is useful when you want finer controls over the image for performance and memory reasons.
 	Unmanaged bool
+
+	// Format is the image's pixel format. The default (zero) value is PixelFormatRGBA.
+	// See [PixelFormatAlpha].
+	Format PixelFormat
 }
 
 // NewImageWithOptions returns an empty image with the given bounds and the options.
@@ -1235,10 +1291,14 @@ type NewImageOptions struct {
 // NewImageWithOptions panics once host.Terminate was called.
 func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Image {
 	imageType := atlas.ImageTypeRegular
-	if options != nil && options.Unmanaged {
-		imageType = atlas.ImageTypeUnmanaged
+	format := PixelFormatRGBA
+	if options != nil {
+		if options.Unmanaged {
+			imageType = atlas.ImageTypeUnmanaged
+		}
+		format = options.Format
 	}
-	return newImage(bounds, imageType)
+	return newImage(bounds, imageType, format)
 }
 
 // The Image of a surface's screen is made by ggfx/host, through the bridge.
@@ -1254,7 +1314,7 @@ func init() {
 	}
 }
 
-func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
+func newImage(bounds image.Rectangle, imageType atlas.ImageType, format PixelFormat) *Image {
 	if render.Terminated() {
 		panic("ggfx: NewImage cannot be called after Terminate")
 	}
@@ -1266,9 +1326,12 @@ func newImage(bounds image.Rectangle, imageType atlas.ImageType) *Image {
 	if height <= 0 {
 		panic(fmt.Sprintf("ggfx: height at NewImage must be positive but %d", height))
 	}
+	if format != PixelFormatRGBA && format != PixelFormatAlpha {
+		panic(fmt.Sprintf("ggfx: unknown pixel format %d at NewImage", int(format)))
+	}
 
 	i := &Image{}
-	i.image = render.NewImage(width, height, imageType)
+	i.image = render.NewImageWithFormat(width, height, imageType, graphicsdriver.PixelFormat(format))
 	i.bounds = bounds
 	i.addr = i
 	return i
@@ -1303,6 +1366,13 @@ type NewImageFromImageOptions struct {
 	// PreserveBounds represents whether the new image's bounds are the same as the given image.
 	// The default (zero) value is false, that means the new image's upper-left position is adjusted to (0, 0).
 	PreserveBounds bool
+
+	// Format is the new image's pixel format. The default (zero) value is PixelFormatRGBA.
+	//
+	// With PixelFormatAlpha, the new image takes the alpha channel of the source, whatever its
+	// type: an *image.Alpha is copied as it is, and an *Image of PixelFormatRGBA is drawn
+	// through a shader that keeps its alpha.
+	Format PixelFormat
 }
 
 // NewImageFromImageWithOptions creates a new image with the given image (source) with the given options.
@@ -1331,20 +1401,33 @@ func NewImageFromImageWithOptions(source image.Image, options *NewImageFromImage
 	}
 	i := NewImageWithOptions(r, &NewImageOptions{
 		Unmanaged: options.Unmanaged,
+		Format:    options.Format,
 	})
 
 	// If the given image is an Ebitengine image, use DrawImage instead of reading pixels from the source.
 	// This works even before the game loop runs.
 	if source, ok := source.(*Image); ok {
-		op := &DrawImageOptions{}
+		var geoM GeoM
 		if options.PreserveBounds {
 			b := source.Bounds()
-			op.GeoM.Translate(float64(b.Min.X), float64(b.Min.Y))
+			geoM.Translate(float64(b.Min.X), float64(b.Min.Y))
 		}
-		i.DrawImage(source, op)
+		if options.Format == PixelFormatAlpha && source.Format() != PixelFormatAlpha {
+			// A draw into an alpha image keeps red: draw the source's alpha as (a, a, a, a).
+			size := source.Bounds().Size()
+			op := &DrawRectShaderOptions{GeoM: geoM, Blend: BlendCopy}
+			op.Images[0] = source
+			i.DrawRectShader(size.X, size.Y, alphaShader(), op)
+			return i
+		}
+		i.DrawImage(source, &DrawImageOptions{GeoM: geoM})
 		return i
 	}
 
+	if options.Format == PixelFormatAlpha {
+		i.WritePixels(imageToAlpha(source))
+		return i
+	}
 	i.WritePixels(imageToBytes(source, true))
 	return i
 }

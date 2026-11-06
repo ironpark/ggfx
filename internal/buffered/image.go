@@ -44,8 +44,15 @@ type Image struct {
 	cache pixelCache
 }
 
+// NewImage returns an RGBA8 image.
 func NewImage(width, height int, imageType atlas.ImageType) *Image {
-	return newImage(atlas.NewImage(width, height, imageType), width, height)
+	return NewImageWithFormat(width, height, imageType, graphicsdriver.PixelFormatRGBA8)
+}
+
+// NewImageWithFormat returns an image of the given pixel format. WritePixels and ReadPixels take
+// pixels in that format.
+func NewImageWithFormat(width, height int, imageType atlas.ImageType, format graphicsdriver.PixelFormat) *Image {
+	return newImage(atlas.NewImageWithFormat(width, height, imageType, format), width, height)
 }
 
 // NewScreenImage returns a screen image presented on surface.
@@ -59,8 +66,13 @@ func newImage(img *atlas.Image, width, height int) *Image {
 		width:  width,
 		height: height,
 	}
-	i.cache.init(width, height)
+	i.cache.init(width, height, img.Format().BytesPerPixel())
 	return i
+}
+
+// Format returns the image's pixel format.
+func (i *Image) Format() graphicsdriver.PixelFormat {
+	return i.img.Format()
 }
 
 func (i *Image) Deallocate() {
@@ -79,7 +91,7 @@ func (i *Image) DumpScreenshot(graphicsDriver graphicsdriver.Graphics, name stri
 
 // WritePixels replaces the pixels at the specified region.
 func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
-	if l := 4 * region.Dx() * region.Dy(); len(pix) != l {
+	if l := i.cache.bpp * region.Dx() * region.Dy(); len(pix) != l {
 		panic(fmt.Sprintf("buffered: len(pix) was %d but must be %d", len(pix), l))
 	}
 	i.cache.writePixels(i.img, pix, region)

@@ -109,6 +109,7 @@ type PixelFormat uint16
 // The data formats that describe the organization and characteristics
 // of individual pixels in a texture.
 const (
+	PixelFormatR8UNorm        PixelFormat = 10  // Ordinary format with one 8-bit normalized unsigned integer component.
 	PixelFormatRGBA8UNorm     PixelFormat = 70  // Ordinary format with four 8-bit normalized unsigned integer components in RGBA order.
 	PixelFormatRGBA8UNormSRGB PixelFormat = 71  // Ordinary format with four 8-bit normalized unsigned integer components in RGBA order with conversion between sRGB and linear space.
 	PixelFormatBGRA8UNorm     PixelFormat = 80  // Ordinary format with four 8-bit normalized unsigned integer components in BGRA order.
@@ -501,6 +502,44 @@ type TextureDescriptor struct {
 	Usage       TextureUsage
 }
 
+// TextureSwizzle selects the source of a channel when a texture is sampled or read.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtltextureswizzle?language=objc.
+type TextureSwizzle uint8
+
+const (
+	TextureSwizzleZero  TextureSwizzle = 0
+	TextureSwizzleOne   TextureSwizzle = 1
+	TextureSwizzleRed   TextureSwizzle = 2
+	TextureSwizzleGreen TextureSwizzle = 3
+	TextureSwizzleBlue  TextureSwizzle = 4
+	TextureSwizzleAlpha TextureSwizzle = 5
+)
+
+// TextureSwizzleChannels is the channel mapping of a texture: where each of its sampled red, green,
+// blue and alpha come from. It is applied to sampling and reading in shaders, not to rendering into
+// the texture or to blits. A texture that is a render target cannot have one: a swizzled view of it
+// can (see Texture.NewTextureViewWithSwizzle).
+//
+// Reference: https://developer.apple.com/documentation/metal/mtltextureswizzlechannels?language=objc.
+type TextureSwizzleChannels struct {
+	Red, Green, Blue, Alpha TextureSwizzle
+}
+
+// packed returns the channels as the four bytes of MTLTextureSwizzleChannels, which both arm64 and
+// amd64 pass by value in one integer register.
+func (c TextureSwizzleChannels) packed() uintptr {
+	return uintptr(c.Red) | uintptr(c.Green)<<8 | uintptr(c.Blue)<<16 | uintptr(c.Alpha)<<24
+}
+
+// TextureSwizzleAvailable reports whether textures can be swizzled, as texture descriptors and
+// texture views: macOS 10.15+ and iOS 13+.
+func TextureSwizzleAvailable() bool {
+	textureDescriptor := objc.ID(class_MTLTextureDescriptor).Send(sel_new)
+	defer textureDescriptor.Send(sel_release)
+	return textureDescriptor.Send(sel_respondsToSelector, sel_setSwizzle) != 0
+}
+
 // Device is abstract representation of the GPU that
 // serves as the primary interface for a Metal app.
 //
@@ -573,6 +612,8 @@ var (
 	sel_height                                                                                                                        = objc.RegisterName("height")
 	sel_contents                                                                                                                      = objc.RegisterName("contents")
 	sel_setStorageMode                                                                                                                = objc.RegisterName("setStorageMode:")
+	sel_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle                                                               = objc.RegisterName("newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:")
+	sel_setSwizzle                                                                                                                    = objc.RegisterName("setSwizzle:")
 	sel_setUsage                                                                                                                      = objc.RegisterName("setUsage:")
 	sel_newTextureWithDescriptor                                                                                                      = objc.RegisterName("newTextureWithDescriptor:")
 	sel_newTextureWithDescriptor_iosurface_plane                                                                                      = objc.RegisterName("newTextureWithDescriptor:iosurface:plane:")
@@ -1132,6 +1173,18 @@ func NewTexture(texture objc.ID) Texture {
 // resource implements the Resource interface.
 func (t Texture) resource() unsafe.Pointer {
 	return *(*unsafe.Pointer)(unsafe.Pointer(&t.texture))
+}
+
+// NewTextureViewWithSwizzle returns a view of the first level and slice of t, of pixel format pf
+// and the given channel mapping. t must have TextureUsagePixelFormatView, unless pf is its own
+// format. A view can be sampled where t can, and swizzled where t, as a render target, cannot be.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtltexture/newtextureview(pixelformat:texturetype:levels:slices:swizzle:)?language=objc.
+func (t Texture) NewTextureViewWithSwizzle(pf PixelFormat, tt TextureType, swizzle TextureSwizzleChannels) Texture {
+	// levels and slices are NSRanges, passed by value as two integers each: {0, 1}.
+	v := t.texture.Send(sel_newTextureViewWithPixelFormat_textureType_levels_slices_swizzle,
+		uintptr(pf), uintptr(tt), uintptr(0), uintptr(1), uintptr(0), uintptr(1), swizzle.packed())
+	return Texture{texture: v}
 }
 
 func (t Texture) Release() {

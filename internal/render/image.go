@@ -44,6 +44,7 @@ type Image struct {
 	width     int
 	height    int
 	imageType atlas.ImageType
+	format    graphicsdriver.PixelFormat
 
 	// readable reports whether a screen image can be a rendering source (see CanBeSource).
 	readable bool
@@ -67,8 +68,22 @@ type Image struct {
 	tmpVerticesForFill []float32
 }
 
+// NewImage returns an RGBA8 image.
 func NewImage(width, height int, imageType atlas.ImageType) *Image {
-	return newImage(mipmap.New(width, height, imageType), width, height, imageType)
+	return NewImageWithFormat(width, height, imageType, graphicsdriver.PixelFormatRGBA8)
+}
+
+// NewImageWithFormat returns an image of the given pixel format. WritePixels and ReadPixels take
+// pixels in that format.
+func NewImageWithFormat(width, height int, imageType atlas.ImageType, format graphicsdriver.PixelFormat) *Image {
+	i := newImage(mipmap.NewWithFormat(width, height, imageType, format), width, height, imageType)
+	i.format = format
+	return i
+}
+
+// Format returns the image's pixel format.
+func (i *Image) Format() graphicsdriver.PixelFormat {
+	return i.format
 }
 
 // NewScreenImage returns the image presented on surface.
@@ -252,7 +267,13 @@ func (i *Image) Clear() {
 	i.Fill(0, 0, 0, 0, image.Rect(0, 0, i.width, i.height))
 }
 
+// Fill fills region with the premultiplied color (r, g, b, a). An A8 image keeps a.
 func (i *Image) Fill(r, g, b, a float32, region image.Rectangle) {
+	if i.format == graphicsdriver.PixelFormatA8 {
+		// A draw into an A8 image stores red: draw (a, a, a, a).
+		r, g, b = a, a, a
+	}
+
 	// The white image is not locked: it is never modified after the initialization, and a fill
 	// skips mipmaps, so drawing from it cannot modify it.
 	i.mu.Lock()

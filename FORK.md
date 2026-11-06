@@ -272,7 +272,34 @@ covers a pixel center of another buffer. Clipped paths and paths drawn to a
 sub-image keep the old per-path draws. `vector/batch_test.go` checks that
 both ways render the same pixels.
 
+## Alpha-only images
+
+`NewImageOptions.Format` (and `NewImageFromImageOptions.Format`) set to `PixelFormatAlpha` makes an
+image of one byte a pixel on the GPU and in uploads, for coverage: glyphs, icon masks, path masks.
+It samples as premultiplied white of its alpha, `(a, a, a, a)`, so it draws exactly as a white
+RGBA image would and no shader changes; a draw into it keeps the red channel of the result, which
+is the alpha for white coverage. The pixel methods stay RGBA (`At` gives `(a, a, a, a)`, and
+`WritePixels` keeps the given alpha), and `ReadPixels` and `WritePixels` also take one byte a
+pixel. `Fill` and `Set` keep the color's alpha. Mipmap levels of an alpha image are alpha too.
+
+The driver contract is `graphicsdriver.PixelFormatA8` and `Graphics.SupportsPixelFormat`; its doc
+comment says what a driver must do. Metal renders into an R8Unorm texture and samples it through a
+texture view swizzled RRRR (a render target cannot be swizzled itself). The atlas puts alpha
+images on pages of their own. Where the driver does not support A8, the atlas puts an alpha image
+on an RGBA page holding `(a, a, a, a)`, expanding its pixels on upload and taking red on read, and
+`Image.Format` still reports `PixelFormatAlpha`: the two agree as long as what is drawn into the
+image is white coverage. `DebugInfo.AtlasPages` tells which happened.
+
+A destination-alpha blend factor reads 1 on an alpha target, which has no alpha channel, so
+`BlendDestinationOver`, `BlendSourceIn`, `BlendSourceOut`, the atop blends and `BlendXor` differ
+from an RGBA image's alpha there; source-over, copy, clear, lighter and destination-in/out agree.
+
 ## Not done yet
+
+- Alpha-only images are native on Metal only. OpenGL 3.3+/ES 3.0+ (GL_R8 with
+  GL_TEXTURE_SWIZZLE_RGBA) and Direct3D 12 (R8_UNORM with an SRV component mapping) can support
+  them; they report `SupportsPixelFormat(PixelFormatA8)` false for now and get the RGBA fallback,
+  as WebGL and Direct3D 11 always will.
 
 - More than one canvas on WebGL (ggwd's `docs/window.md`). Metal and macOS OpenGL
   ran several windows; DirectX 11/12 and OpenGL on Linux and Windows accept

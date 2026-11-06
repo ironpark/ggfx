@@ -33,7 +33,7 @@ func (*frameDriver) Begin() error {
 	return nil
 }
 
-func (g *frameDriver) NewImage(int, int) (graphicsdriver.Image, error) {
+func (g *frameDriver) NewImage(int, int, graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
 	g.images++
 	return nil, nil
 }

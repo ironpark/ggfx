@@ -228,7 +228,7 @@ func (g *graphics12) initializeDesktop(useWARP bool, useDebugLayer bool, useDRED
 
 	// GetCopyableFootprints might return an invalid value with Wine (#2114).
 	// To check this early, call NewImage here.
-	i, err := g.NewImage(1, 1)
+	i, err := g.NewImage(1, 1, graphicsdriver.PixelFormatRGBA8)
 	if err != nil {
 		return err
 	}
@@ -1024,7 +1024,18 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	return nil
 }
 
-func (g *graphics12) NewImage(width, height int) (graphicsdriver.Image, error) {
+// SupportsPixelFormat reports only PixelFormatRGBA8 for now.
+//
+// TODO: Support PixelFormatA8 with DXGI_FORMAT_R8_UNORM and an SRV whose Shader4ComponentMapping
+// maps all four components to component 0; see graphicsdriver.PixelFormatA8.
+func (g *graphics12) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool {
+	return format == graphicsdriver.PixelFormatRGBA8
+}
+
+func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
+	if format != graphicsdriver.PixelFormatRGBA8 {
+		return nil, fmt.Errorf("directx: unsupported pixel format %s", format)
+	}
 	desc := _D3D12_RESOURCE_DESC{
 		Dimension:        _D3D12_RESOURCE_DIMENSION_TEXTURE2D,
 		Alignment:        0,

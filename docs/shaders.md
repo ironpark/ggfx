@@ -112,6 +112,9 @@ normalized coordinates.
 | `dst_origin()`, `dst_size()`, `dst_texture_size()` | The same for the destination. |
 | `front_facing()` | Whether the fragment belongs to a front-facing (clockwise on screen) triangle. |
 
+A source image of `PixelFormatAlpha` reads as premultiplied white of its alpha, `(a, a, a, a)`,
+and a destination of that format keeps the red channel of what `fragment` returns.
+
 Texture reads are `textureLoad` at integer pixel coordinates; there is no
 sampler. Linear filtering is done by the built-in shaders in WGSL, and a
 custom shader can do the same.

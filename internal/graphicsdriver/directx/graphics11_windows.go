@@ -426,7 +426,16 @@ func (g *graphics11) SetVertices(vertices []float32, indices []uint32) error {
 	return nil
 }
 
-func (g *graphics11) NewImage(width, height int) (graphicsdriver.Image, error) {
+// SupportsPixelFormat reports only PixelFormatRGBA8: Direct3D 11 cannot swizzle a texture's
+// components, which PixelFormatA8 needs.
+func (g *graphics11) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool {
+	return format == graphicsdriver.PixelFormatRGBA8
+}
+
+func (g *graphics11) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
+	if format != graphicsdriver.PixelFormatRGBA8 {
+		return nil, fmt.Errorf("directx: unsupported pixel format %s", format)
+	}
 	t, err := g.device.CreateTexture2D(&_D3D11_TEXTURE2D_DESC{
 		Width:     uint32(graphics.InternalImageSize(width)),
 		Height:    uint32(graphics.InternalImageSize(height)),

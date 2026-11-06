@@ -349,12 +349,13 @@ type newImageCommand struct {
 	result    *Image
 	width     int
 	height    int
+	format    graphicsdriver.PixelFormat
 	surface   graphicsdriver.Surface
 	attribute string
 }
 
 func (c *newImageCommand) String() string {
-	str := fmt.Sprintf("new-image: result: %d, width: %d, height: %d, screen: %t", c.result.id, c.width, c.height, c.surface != nil)
+	str := fmt.Sprintf("new-image: result: %d, width: %d, height: %d, format: %s, screen: %t", c.result.id, c.width, c.height, c.format, c.surface != nil)
 	if c.attribute != "" {
 		str += ", attribute: " + c.attribute
 	}
@@ -367,7 +368,7 @@ func (c *newImageCommand) Exec(commandQueue *commandQueue, graphicsDriver graphi
 	if c.surface != nil {
 		c.result.image, err = c.surface.NewScreenImage(c.width, c.height)
 	} else {
-		c.result.image, err = graphicsDriver.NewImage(c.width, c.height)
+		c.result.image, err = graphicsDriver.NewImage(c.width, c.height, c.format)
 	}
 	return err
 }
@@ -417,6 +418,19 @@ func ResetGraphicsDriverState(graphicsDriver graphicsdriver.Graphics) (err error
 		}, true)
 	}
 	return nil
+}
+
+// SupportsPixelFormat reports whether the driver can make images of format. It must be called
+// after InitializeGraphicsDriverState.
+func SupportsPixelFormat(graphicsDriver graphicsdriver.Graphics, format graphicsdriver.PixelFormat) bool {
+	if format == graphicsdriver.PixelFormatRGBA8 {
+		return true
+	}
+	var ok bool
+	runOnRenderThread(func() {
+		ok = graphicsDriver.SupportsPixelFormat(format)
+	}, true)
+	return ok
 }
 
 // MaxImageSize returns the maximum size of an image.

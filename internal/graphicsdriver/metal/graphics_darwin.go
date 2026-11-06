@@ -570,15 +570,41 @@ func (g *Graphics) genNextShaderID() graphicsdriver.ShaderID {
 	return g.nextShaderID
 }
 
-func (g *Graphics) NewImage(width, height int) (graphicsdriver.Image, error) {
+// SupportsPixelFormat reports PixelFormatA8 where a texture can have a swizzle: an R8Unorm texture
+// sampled as RRRR.
+func (g *Graphics) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool {
+	switch format {
+	case graphicsdriver.PixelFormatRGBA8:
+		return true
+	case graphicsdriver.PixelFormatA8:
+		return mtl.TextureSwizzleAvailable()
+	}
+	return false
+}
+
+// mtlPixelFormat returns the Metal pixel format of an offscreen image of format.
+func mtlPixelFormat(format graphicsdriver.PixelFormat) mtl.PixelFormat {
+	switch format {
+	case graphicsdriver.PixelFormatRGBA8:
+		return mtl.PixelFormatRGBA8UNorm
+	case graphicsdriver.PixelFormatA8:
+		return mtl.PixelFormatR8UNorm
+	}
+	panic(fmt.Sprintf("metal: unexpected pixel format %s", format))
+}
+
+func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
 	g.checkSize(width, height)
 	td := mtl.TextureDescriptor{
 		TextureType: mtl.TextureType2D,
-		PixelFormat: mtl.PixelFormatRGBA8UNorm,
+		PixelFormat: mtlPixelFormat(format),
 		Width:       graphics.InternalImageSize(width),
 		Height:      graphics.InternalImageSize(height),
 		StorageMode: storageMode,
 		Usage:       mtl.TextureUsageShaderRead | mtl.TextureUsageRenderTarget,
+	}
+	if format == graphicsdriver.PixelFormatA8 {
+		td.Usage |= mtl.TextureUsagePixelFormatView
 	}
 	t := g.device.NewTextureWithDescriptor(td)
 	i := &Image{
@@ -586,7 +612,19 @@ func (g *Graphics) NewImage(width, height int) (graphicsdriver.Image, error) {
 		graphics: g,
 		width:    width,
 		height:   height,
+		format:   format,
 		texture:  t,
+	}
+	if format == graphicsdriver.PixelFormatA8 {
+		// The texture is rendered into, so a draw stores the red channel, and sampled through a
+		// view swizzled RRRR: premultiplied white of the stored alpha. A render target cannot be
+		// swizzled itself.
+		i.sampled = t.NewTextureViewWithSwizzle(mtl.PixelFormatR8UNorm, mtl.TextureType2D, mtl.TextureSwizzleChannels{
+			Red:   mtl.TextureSwizzleRed,
+			Green: mtl.TextureSwizzleRed,
+			Blue:  mtl.TextureSwizzleRed,
+			Alpha: mtl.TextureSwizzleRed,
+		})
 	}
 	g.addImage(i)
 	return i, nil
@@ -687,7 +725,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		if src == nil {
 			continue
 		}
-		srcTextures[i] = src.mtlTexture()
+		srcTextures[i] = src.sampledTexture()
 		if src.screen && srcTextures[i] == (mtl.Texture{}) {
 			return nil
 		}
@@ -909,15 +947,19 @@ type Image struct {
 	height   int
 	screen   bool
 	surface  *Surface // non-nil iff screen
+	format   graphicsdriver.PixelFormat
 	texture  mtl.Texture
-	stencil  mtl.Texture
+	// sampled is the view of texture that shaders sample, for an A8 image; zero for the others,
+	// which are sampled as texture.
+	sampled mtl.Texture
+	stencil mtl.Texture
 }
 
 func (i *Image) colorPixelFormat() mtl.PixelFormat {
 	if i.screen {
 		return i.surface.view.colorPixelFormat()
 	}
-	return mtl.PixelFormatRGBA8UNorm
+	return mtlPixelFormat(i.format)
 }
 
 func (i *Image) ID() graphicsdriver.ImageID {
@@ -935,6 +977,10 @@ func (i *Image) Dispose() {
 	if i.stencil != (mtl.Texture{}) {
 		i.stencil.Release()
 		i.stencil = mtl.Texture{}
+	}
+	if i.sampled != (mtl.Texture{}) {
+		i.sampled.Release()
+		i.sampled = mtl.Texture{}
 	}
 	if i.texture != (mtl.Texture{}) {
 		i.texture.Release()
@@ -965,11 +1011,12 @@ func (i *Image) syncTexture() {
 func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 	i.syncTexture()
 
+	bpp := i.format.BytesPerPixel()
 	for _, arg := range args {
-		if got, want := len(arg.Pixels), 4*arg.Region.Dx()*arg.Region.Dy(); got != want {
+		if got, want := len(arg.Pixels), bpp*arg.Region.Dx()*arg.Region.Dy(); got != want {
 			return fmt.Errorf("metal: len(buf) must be %d but %d at ReadPixels", want, got)
 		}
-		if err := i.texture.GetBytes(arg.Pixels, 4*arg.Region.Dx(), mtl.Region{
+		if err := i.texture.GetBytes(arg.Pixels, bpp*arg.Region.Dx(), mtl.Region{
 			Origin: mtl.Origin{X: arg.Region.Min.X, Y: arg.Region.Min.Y},
 			Size:   mtl.Size{Width: arg.Region.Dx(), Height: arg.Region.Dy(), Depth: 1},
 		}, 0); err != nil {
@@ -994,9 +1041,10 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	// managed (e.g., macOS). A temporary texture is needed since ReplaceRegion tries to sync the pixel
 	// data between CPU and GPU, and doing it on the existing texture is inefficient (#1418).
 	// The texture cannot be reused until sending the pixels finishes, then create new ones for each call.
+	// The temporary texture is only a blit source: it has the image's format without a swizzle.
 	td := mtl.TextureDescriptor{
 		TextureType: mtl.TextureType2D,
-		PixelFormat: mtl.PixelFormatRGBA8UNorm,
+		PixelFormat: mtlPixelFormat(i.format),
 		Width:       region.Dx(),
 		Height:      region.Dy(),
 		StorageMode: storageMode,
@@ -1005,11 +1053,15 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	t := g.device.NewTextureWithDescriptor(td)
 	g.tmpTextures = append(g.tmpTextures, t)
 
+	bpp := i.format.BytesPerPixel()
 	for _, a := range args {
+		if got, want := len(a.Pixels), bpp*a.Region.Dx()*a.Region.Dy(); got != want {
+			return fmt.Errorf("metal: len(pixels) must be %d but %d at WritePixels", want, got)
+		}
 		if err := t.ReplaceRegion(mtl.Region{
 			Origin: mtl.Origin{X: a.Region.Min.X - region.Min.X, Y: a.Region.Min.Y - region.Min.Y, Z: 0},
 			Size:   mtl.Size{Width: a.Region.Dx(), Height: a.Region.Dy(), Depth: 1},
-		}, 0, a.Pixels, 4*a.Region.Dx()); err != nil {
+		}, 0, a.Pixels, bpp*a.Region.Dx()); err != nil {
 			return err
 		}
 	}
@@ -1025,6 +1077,14 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	bce.EndEncoding()
 
 	return nil
+}
+
+// sampledTexture returns the texture shaders sample the image as.
+func (i *Image) sampledTexture() mtl.Texture {
+	if i.sampled != (mtl.Texture{}) {
+		return i.sampled
+	}
+	return i.mtlTexture()
 }
 
 func (i *Image) mtlTexture() mtl.Texture {

@@ -14,6 +14,8 @@
 
 package atlas
 
+import "github.com/ironpark/ggfx/internal/graphicsdriver"
+
 const (
 	BaseCountToPutOnSourceBackend = baseCountToPutOnSourceBackend
 )
@@ -93,4 +95,42 @@ func ShaderCountWithInternalShaderForTesting() int {
 	theShadersWithInternalShader.m.Lock()
 	defer theShadersWithInternalShader.m.Unlock()
 	return len(theShadersWithInternalShader.shaders)
+}
+
+// SetA8SupportedForTesting sets whether new A8 images are put on A8 backends, as if the driver
+// did or did not support A8, and returns a function that restores the previous setting.
+func SetA8SupportedForTesting(supported bool) (restore func()) {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	old := a8Supported
+	a8Supported = supported
+	return func() {
+		backendsM.Lock()
+		defer backendsM.Unlock()
+		a8Supported = old
+	}
+}
+
+func A8SupportedForTesting() bool {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	return a8Supported
+}
+
+// BackendFormatForTesting returns the format of the image's backend, or false if the image is not
+// allocated.
+func (i *Image) BackendFormatForTesting() (graphicsdriver.PixelFormat, bool) {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	if i.backend == nil {
+		return 0, false
+	}
+	return i.backend.format, true
+}
+
+// SharesBackendForTesting reports whether i and j are on the same backend.
+func (i *Image) SharesBackendForTesting(j *Image) bool {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	return i.backend != nil && i.backend == j.backend
 }

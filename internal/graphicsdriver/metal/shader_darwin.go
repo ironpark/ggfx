@@ -34,6 +34,7 @@ const (
 
 type shaderRpsKey struct {
 	blend  graphicsdriver.Blend
+	pix    mtl.PixelFormat
 	screen bool
 }
 
@@ -151,6 +152,7 @@ var vertexDescriptor = &mtl.VertexDescriptor{
 func (s *Shader) RenderPipelineState(pix mtl.PixelFormat, blend graphicsdriver.Blend, screen bool) (mtl.RenderPipelineState, error) {
 	key := shaderRpsKey{
 		blend:  blend,
+		pix:    pix,
 		screen: screen,
 	}
 	if rps, ok := s.rpss[key]; ok {

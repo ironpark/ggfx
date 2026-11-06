@@ -35,6 +35,11 @@ var (
 	minSourceSize      = 0
 	minDestinationSize = 0
 	maxSize            = 0
+
+	// a8Supported reports whether the driver makes PixelFormatA8 images. It is set at the first
+	// BeginFrame. Where it is false, an A8 image is put on an RGBA8 backend, and its pixels are
+	// expanded and extracted on the CPU.
+	a8Supported = false
 )
 
 func appendDeferred(f func()) {
@@ -118,6 +123,10 @@ type backend struct {
 	// source is always false when the image type is not ImageTypeRegular.
 	source bool
 
+	// format is the format of backendImage. Only images whose backend format is the same share a
+	// page.
+	format graphicsdriver.PixelFormat
+
 	// sourceInThisFrame reports whether this backend is used as a source in this frame.
 	// sourceInThisFrame is reset every frame.
 	sourceInThisFrame bool
@@ -148,8 +157,8 @@ func (b *backend) tryAlloc(width, height int) (*packing.Node, bool) {
 		return n, true
 	}
 
-	// Extend the image.
-	newImg := graphicscommand.NewImage(pageW, pageH, b.surface, "")
+	// Extend the image. A page is never a screen.
+	newImg := graphicscommand.NewImageWithFormat(pageW, pageH, b.format, "")
 	clearImage(newImg, image.Rect(0, 0, pageW, pageH))
 	src := b.backendImage
 	srcs := [graphics.ShaderSrcImageCount]*graphicscommand.Image{src}
@@ -232,6 +241,11 @@ type imageImpl struct {
 	width     int
 	height    int
 	imageType ImageType
+
+	// format is the format the image was made with, and the format of the pixels of WritePixels
+	// and ReadPixels. Its backend's format is the same, or RGBA8 where the driver lacks it (see
+	// backendFormat).
+	format graphicsdriver.PixelFormat
 
 	// surface is the presentation target of a screen image, and nil otherwise.
 	surface graphicsdriver.Surface
@@ -334,7 +348,7 @@ func (i *Image) ensureIsolatedFromSource(backends []*backend) {
 		return
 	}
 
-	newI := NewImage(i.width, i.height, i.imageType)
+	newI := NewImageWithFormat(i.width, i.height, i.imageType, i.format)
 
 	// Call allocate explicitly in order to have an isolated backend from the specified backends.
 	// `sourceInThisFrame` of `backends` should be true, so `backends` should be in `bs`.
@@ -375,7 +389,7 @@ func (i *Image) putOnSourceBackend() {
 		panic(fmt.Sprintf("atlas: the image type must be ImageTypeRegular but %d", i.imageType))
 	}
 
-	newI := NewImage(i.width, i.height, ImageTypeRegular)
+	newI := NewImageWithFormat(i.width, i.height, ImageTypeRegular, i.format)
 	newI.allocate(nil, true)
 
 	w, h := float32(i.width), float32(i.height)
@@ -523,7 +537,7 @@ func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
 }
 
 func (i *Image) writePixels(pix []byte, region image.Rectangle) {
-	if l := 4 * region.Dx() * region.Dy(); len(pix) != l {
+	if l := i.format.BytesPerPixel() * region.Dx() * region.Dy(); len(pix) != l {
 		panic(fmt.Sprintf("atlas: len(p) must be %d but %d", l, len(pix)))
 	}
 
@@ -539,6 +553,10 @@ func (i *Image) writePixels(pix []byte, region image.Rectangle) {
 
 	r := i.regionWithPadding()
 
+	// An A8 image on an RGBA8 backend (see backendFormat) is given its pixels as RGBA ones.
+	expand := i.format == graphicsdriver.PixelFormatA8 && i.backend.format == graphicsdriver.PixelFormatRGBA8
+	bpp := i.backend.format.BytesPerPixel()
+
 	if !region.Eq(image.Rect(0, 0, i.width, i.height)) || i.paddingSize() == 0 {
 		region = region.Add(r.Min)
 
@@ -548,7 +566,11 @@ func (i *Image) writePixels(pix []byte, region image.Rectangle) {
 		}
 
 		// Copy pixels in the case when pix is modified before the graphics command is executed.
-		pix2 := graphics.NewManagedBytes(len(pix), func(bs []byte) {
+		pix2 := graphics.NewManagedBytes(bpp*region.Dx()*region.Dy(), func(bs []byte) {
+			if expand {
+				graphics.ExpandAlpha(bs, pix)
+				return
+			}
 			copy(bs, pix)
 		})
 		i.backend.backendImage.WritePixels(pix2, region)
@@ -562,26 +584,28 @@ func (i *Image) writePixels(pix []byte, region image.Rectangle) {
 		panic(fmt.Sprintf("atlas: writePixels assumes the padding is always 1 but the actual padding was %d", i.paddingSize()))
 	}
 
-	pixb := graphics.NewManagedBytes(4*r.Dx()*r.Dy(), func(bs []byte) {
+	pixb := graphics.NewManagedBytes(bpp*r.Dx()*r.Dy(), func(bs []byte) {
 		// Clear the edges. bs might not be zero-cleared.
-		rowPixels := 4 * r.Dx()
+		rowBytes := bpp * r.Dx()
 		if r.Dy() > region.Dy() {
-			for i := range rowPixels {
-				bs[rowPixels*(r.Dy()-1)+i] = 0
-			}
+			clear(bs[rowBytes*(r.Dy()-1) : rowBytes*r.Dy()])
 		}
 		if r.Dx() > region.Dx() {
 			for j := 1; j <= region.Dy(); j++ {
-				bs[rowPixels*j-4] = 0
-				bs[rowPixels*j-3] = 0
-				bs[rowPixels*j-2] = 0
-				bs[rowPixels*j-1] = 0
+				clear(bs[rowBytes*j-bpp : rowBytes*j])
 			}
 		}
 
 		// Copy the content.
+		srcBpp := i.format.BytesPerPixel()
 		for j := 0; j < region.Dy(); j++ {
-			copy(bs[4*j*r.Dx():], pix[4*j*region.Dx():4*(j+1)*region.Dx()])
+			src := pix[srcBpp*j*region.Dx() : srcBpp*(j+1)*region.Dx()]
+			dst := bs[bpp*j*r.Dx() : bpp*(j*r.Dx()+region.Dx())]
+			if expand {
+				graphics.ExpandAlpha(dst, src)
+				continue
+			}
+			copy(dst, src)
 		}
 	})
 	i.backend.backendImage.WritePixels(pixb, r)
@@ -600,21 +624,32 @@ func (i *Image) ReadPixels(graphicsDriver graphicsdriver.Graphics, pixels []byte
 	// To prevent memory leaks, flush the deferred functions here.
 	flushDeferred()
 
+	if l := i.format.BytesPerPixel() * region.Dx() * region.Dy(); len(pixels) != l {
+		panic(fmt.Sprintf("atlas: len(pixels) must be %d but %d at ReadPixels", l, len(pixels)))
+	}
+
 	if i.backend == nil || i.backend.backendImage == nil {
-		for i := range pixels {
-			pixels[i] = 0
-		}
+		clear(pixels)
 		return true, nil
 	}
 
+	// An A8 image on an RGBA8 backend keeps the red channel, as a draw into an A8 image would.
+	extract := i.format == graphicsdriver.PixelFormatA8 && i.backend.format == graphicsdriver.PixelFormatRGBA8
+	dst := pixels
+	if extract {
+		dst = make([]byte, 4*len(pixels))
+	}
 	args := []graphicsdriver.PixelsArgs{
 		{
-			Pixels: pixels,
+			Pixels: dst,
 			Region: region.Add(i.regionWithPadding().Min),
 		},
 	}
 	if err := i.backend.backendImage.ReadPixels(graphicsDriver, args); err != nil {
 		return false, err
+	}
+	if extract {
+		graphics.ExtractChannel(pixels, dst, 0)
 	}
 	return true, nil
 }
@@ -686,18 +721,45 @@ func MaxImageSize() int {
 	return maxSize
 }
 
+// NewImage returns an RGBA8 image.
 func NewImage(width, height int, imageType ImageType) *Image {
+	return NewImageWithFormat(width, height, imageType, graphicsdriver.PixelFormatRGBA8)
+}
+
+// NewImageWithFormat returns an image of the given pixel format. WritePixels and ReadPixels take
+// pixels in that format.
+//
+// An A8 image is on an A8 backend, never sharing a page with RGBA8 images, where the driver
+// supports A8. Elsewhere it is on an RGBA8 backend like any other image, its pixels expanded to
+// (a, a, a, a) when written and their red channel taken when read: the same as the GPU would do
+// for white coverage.
+func NewImageWithFormat(width, height int, imageType ImageType, format graphicsdriver.PixelFormat) *Image {
 	if imageType == ImageTypeScreen {
 		panic("atlas: use NewScreenImage for a screen image")
 	}
+	format.BytesPerPixel() // Panics on an unknown format.
 	// Actual allocation is done lazily, and the lock is not needed.
 	return &Image{
 		imageImpl: &imageImpl{
 			width:     width,
 			height:    height,
 			imageType: imageType,
+			format:    format,
 		},
 	}
+}
+
+// Format returns the format the image was made with.
+func (i *Image) Format() graphicsdriver.PixelFormat {
+	return i.format
+}
+
+// backendFormat returns the format of the backend an image of format is put on.
+func backendFormat(format graphicsdriver.PixelFormat) graphicsdriver.PixelFormat {
+	if format == graphicsdriver.PixelFormatA8 && !a8Supported {
+		return graphicsdriver.PixelFormatRGBA8
+	}
+	return format
 }
 
 // NewScreenImage returns a screen image presented on surface.
@@ -758,6 +820,7 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 
 	wp := i.width + i.paddingSize()
 	hp := i.height + i.paddingSize()
+	format := backendFormat(i.format)
 
 	if !i.canBePutOnAtlas() {
 		if wp > maxSize || hp > maxSize {
@@ -767,8 +830,9 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 		i.backend = &backend{
 			width:        wp,
 			height:       hp,
-			backendImage: graphicscommand.NewImage(wp, hp, nil, ""),
+			backendImage: graphicscommand.NewImageWithFormat(wp, hp, format, ""),
 			source:       asSource,
+			format:       format,
 		}
 		i.backend.clear(image.Rect(0, 0, wp, hp))
 		theBackends = append(theBackends, i.backend)
@@ -778,7 +842,7 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 	// Check if an existing backend is available.
 loop:
 	for _, b := range theBackends {
-		if b.source != asSource {
+		if b.source != asSource || b.format != format {
 			continue
 		}
 		for _, bb := range forbiddenBackends {
@@ -818,9 +882,10 @@ loop:
 	b := &backend{
 		width:        width,
 		height:       height,
-		backendImage: graphicscommand.NewImage(width, height, nil, ""),
+		backendImage: graphicscommand.NewImageWithFormat(width, height, format, ""),
 		page:         page,
 		source:       asSource,
+		format:       format,
 	}
 	b.clear(image.Rect(0, 0, width, height))
 	theBackends = append(theBackends, b)
@@ -878,7 +943,7 @@ func EndFrame(graphicsDriver graphicsdriver.Graphics) error {
 				}
 				if !region.Empty() {
 					var err error
-					pixels = graphics.NewManagedBytes(4*region.Dx()*region.Dy(), func(bytes []byte) {
+					pixels = graphics.NewManagedBytes(b.format.BytesPerPixel()*region.Dx()*region.Dy(), func(bytes []byte) {
 						args := []graphicsdriver.PixelsArgs{
 							{
 								Pixels: bytes,
@@ -972,6 +1037,7 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 		if maxSize == 0 {
 			maxSize = floorPowerOf2(graphicscommand.MaxImageSize(graphicsDriver))
 		}
+		a8Supported = graphicscommand.SupportsPixelFormat(graphicsDriver, graphicsdriver.PixelFormatA8)
 		inited.Store(true)
 	})
 	if err != nil {
@@ -999,7 +1065,11 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 			if !b.restoreInfo.valid {
 				continue
 			}
-			b.backendImage = graphicscommand.NewImage(b.width, b.height, b.surface, "")
+			if b.screen {
+				b.backendImage = graphicscommand.NewImage(b.width, b.height, b.surface, "")
+			} else {
+				b.backendImage = graphicscommand.NewImageWithFormat(b.width, b.height, b.format, "")
+			}
 			if b.restoreInfo.region != image.Rect(0, 0, b.width, b.height) {
 				b.clear(image.Rect(0, 0, b.width, b.height))
 			}
@@ -1049,7 +1119,7 @@ func TotalGPUImageMemoryUsageInBytes() int64 {
 			continue
 		}
 		w, h := b.backendImage.InternalSize()
-		sum += 4 * int64(w) * int64(h)
+		sum += int64(b.format.BytesPerPixel()) * int64(w) * int64(h)
 	}
 	return sum
 }
@@ -1102,6 +1172,7 @@ type BackendStats struct {
 	Atlas    bool
 	Source   bool
 	Screen   bool
+	Format   graphicsdriver.PixelFormat
 	UsedArea int64
 	Images   int
 }
@@ -1114,7 +1185,7 @@ func ReadBackendStats(dst []BackendStats) []BackendStats {
 		if b.backendImage == nil {
 			continue
 		}
-		s := BackendStats{Width: b.width, Height: b.height, Source: b.source, Screen: b.screen}
+		s := BackendStats{Width: b.width, Height: b.height, Source: b.source, Screen: b.screen, Format: b.format}
 		s.InternalWidth, s.InternalHeight = b.backendImage.InternalSize()
 		if b.page != nil {
 			s.Atlas = true

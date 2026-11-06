@@ -178,7 +178,7 @@ func TestSuccessiveWritePixels(t *testing.T) {
 		t.Errorf("len(dst.BufferedWritePixelsArgsForTesting()): got %d, want: %d", got, want)
 	}
 
-	dst.WritePixels(graphics.NewManagedBytes(4, func(bs []byte) {
+	dst.WritePixels(graphics.NewManagedBytes(4*2*2, func(bs []byte) {
 		for i := range bs {
 			bs[i] = 0
 		}

@@ -69,6 +69,9 @@ type AtlasPage struct {
 	UsedPixels    int64
 	Images        int
 	Source        bool
+	// Format is the page's format on the GPU: PixelFormatAlpha only where the driver has
+	// alpha-only textures.
+	Format PixelFormat
 }
 
 // ReadDebugInfo writes debug info (e.g. the GPU memory used by images) into a provided struct.
@@ -79,8 +82,8 @@ func ReadDebugInfo(d *DebugInfo) {
 	d.Flushes, d.Commands, d.Vertices, d.QueueBufferBytes = graphicscommand.Counts()
 	d.AtlasPages, d.Isolated, d.ScreenBytes = d.AtlasPages[:0], AtlasPage{}, 0
 	for _, b := range atlas.ReadBackendStats(nil) {
-		p := AtlasPage{Width: b.Width, Height: b.Height, Bytes: 4 * int64(b.InternalWidth) * int64(b.InternalHeight),
-			UsedPixels: b.UsedArea, Images: b.Images, Source: b.Source}
+		p := AtlasPage{Width: b.Width, Height: b.Height, Bytes: int64(b.Format.BytesPerPixel()) * int64(b.InternalWidth) * int64(b.InternalHeight),
+			UsedPixels: b.UsedArea, Images: b.Images, Source: b.Source, Format: PixelFormat(b.Format)}
 		if b.Screen {
 			d.ScreenBytes += p.Bytes
 		}

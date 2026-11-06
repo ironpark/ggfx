@@ -49,9 +49,13 @@ type pixelCache struct {
 	width  int
 	height int
 
+	// bpp is the size of a pixel in bytes: 4 for RGBA8, 1 for A8.
+	bpp int
+
 	// dots is a buffer for drawing a lot of dots.
 	// An entry in this map is the primary data of pixels for ReadPixels.
 	// An entry never exists at a position whose tile is cached in tiles.
+	// An entry's first bpp bytes are the pixel.
 	dots map[image.Point][4]byte
 
 	// tiles is cached pixels keyed by the tile index.
@@ -59,15 +63,16 @@ type pixelCache struct {
 }
 
 // init initializes the cache for an image of the given size.
-func (c *pixelCache) init(width, height int) {
+func (c *pixelCache) init(width, height, bpp int) {
 	c.width = width
 	c.height = height
+	c.bpp = bpp
 }
 
 // tileSize returns the width and height in pixels of a tile.
 // For a small image, a single tile covers the whole image.
 func (c *pixelCache) tileSize() (int, int) {
-	if 4*c.width*c.height > maxPixelsCacheSize {
+	if c.bpp*c.width*c.height > maxPixelsCacheSize {
 		return dividedTileSize, dividedTileSize
 	}
 	return c.width, c.height
@@ -90,7 +95,7 @@ func (c *pixelCache) tileRegion(idx image.Point) image.Rectangle {
 func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.Graphics, pixels []byte, region image.Rectangle) (bool, error) {
 	if region.Dx() == 1 && region.Dy() == 1 {
 		if clr, ok := c.dots[region.Min]; ok {
-			copy(pixels, clr[:])
+			copy(pixels, clr[:c.bpp])
 			return true, nil
 		}
 	}
@@ -107,7 +112,7 @@ func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.
 				continue
 			}
 			r := c.tileRegion(idx)
-			pix := make([]byte, 4*r.Dx()*r.Dy())
+			pix := make([]byte, c.bpp*r.Dx()*r.Dy())
 			ok, err := img.ReadPixels(graphicsDriver, pix, r)
 			if err != nil {
 				return false, err
@@ -121,11 +126,8 @@ func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.
 				if !pos.In(r) {
 					continue
 				}
-				i := 4 * ((pos.Y-r.Min.Y)*r.Dx() + (pos.X - r.Min.X))
-				t.pixels[i] = clr[0]
-				t.pixels[i+1] = clr[1]
-				t.pixels[i+2] = clr[2]
-				t.pixels[i+3] = clr[3]
+				i := c.bpp * ((pos.Y-r.Min.Y)*r.Dx() + (pos.X - r.Min.X))
+				copy(t.pixels[i:i+c.bpp], clr[:c.bpp])
 				t.needsWriteBack = true
 				delete(c.dots, pos)
 			}
@@ -142,10 +144,10 @@ func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.
 			t := c.tiles[idx]
 			r := c.tileRegion(idx)
 			ir := r.Intersect(region)
-			lineWidth := 4 * ir.Dx()
+			lineWidth := c.bpp * ir.Dx()
 			for y := ir.Min.Y; y < ir.Max.Y; y++ {
-				srcX := 4 * ((y-r.Min.Y)*r.Dx() + (ir.Min.X - r.Min.X))
-				dstX := 4 * ((y-region.Min.Y)*region.Dx() + (ir.Min.X - region.Min.X))
+				srcX := c.bpp * ((y-r.Min.Y)*r.Dx() + (ir.Min.X - r.Min.X))
+				dstX := c.bpp * ((y-region.Min.Y)*region.Dx() + (ir.Min.X - region.Min.X))
 				copy(pixels[dstX:dstX+lineWidth], t.pixels[srcX:srcX+lineWidth])
 			}
 		}
@@ -162,11 +164,8 @@ func (c *pixelCache) writePixels(img *atlas.Image, pix []byte, region image.Rect
 		// If the tile at the position is cached, update this instead of adding an entry to dots.
 		if t, ok := c.tiles[c.tileIndex(region.Min)]; ok {
 			r := c.tileRegion(c.tileIndex(region.Min))
-			i := 4 * ((region.Min.Y-r.Min.Y)*r.Dx() + (region.Min.X - r.Min.X))
-			t.pixels[i] = pix[0]
-			t.pixels[i+1] = pix[1]
-			t.pixels[i+2] = pix[2]
-			t.pixels[i+3] = pix[3]
+			i := c.bpp * ((region.Min.Y-r.Min.Y)*r.Dx() + (region.Min.X - r.Min.X))
+			copy(t.pixels[i:i+c.bpp], pix)
 			t.needsWriteBack = true
 			delete(c.dots, region.Min)
 			return
@@ -194,10 +193,10 @@ func (c *pixelCache) writePixels(img *atlas.Image, pix []byte, region image.Rect
 		if ir.Empty() {
 			continue
 		}
-		lineWidth := 4 * ir.Dx()
+		lineWidth := c.bpp * ir.Dx()
 		for y := ir.Min.Y; y < ir.Max.Y; y++ {
-			dstX := 4 * ((y-r.Min.Y)*r.Dx() + (ir.Min.X - r.Min.X))
-			srcX := 4 * ((y-region.Min.Y)*region.Dx() + (ir.Min.X - region.Min.X))
+			dstX := c.bpp * ((y-r.Min.Y)*r.Dx() + (ir.Min.X - r.Min.X))
+			srcX := c.bpp * ((y-region.Min.Y)*region.Dx() + (ir.Min.X - region.Min.X))
 			copy(t.pixels[dstX:dstX+lineWidth], pix[srcX:srcX+lineWidth])
 		}
 		// needsWriteBack can NOT be set false as the outside pixels of the region are not written by writePixels here.
@@ -243,6 +242,10 @@ func (c *pixelCache) writeBackPixelsIfNeeded(img *atlas.Image) {
 		cgf := float32(clr[1]) / 0xff
 		cbf := float32(clr[2]) / 0xff
 		caf := float32(clr[3]) / 0xff
+		if c.bpp == 1 {
+			// An alpha dot a is drawn as (a, a, a, a), which an A8 image stores as a.
+			cgf, cbf, caf = crf, crf, crf
+		}
 
 		vidx := 4 * idx
 		iidx := 6 * idx

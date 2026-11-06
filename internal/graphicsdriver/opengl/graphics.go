@@ -192,7 +192,18 @@ func (g *Graphics) genNextShaderID() graphicsdriver.ShaderID {
 	return g.nextShaderID
 }
 
-func (g *Graphics) NewImage(width, height int) (graphicsdriver.Image, error) {
+// SupportsPixelFormat reports only PixelFormatRGBA8 for now.
+//
+// TODO: Support PixelFormatA8 on OpenGL 3.3+ and OpenGL ES 3.0+ with a GL_R8 texture swizzled
+// RRRR (GL_TEXTURE_SWIZZLE_RGBA); see graphicsdriver.PixelFormatA8. WebGL cannot swizzle.
+func (g *Graphics) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool {
+	return format == graphicsdriver.PixelFormatRGBA8
+}
+
+func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
+	if format != graphicsdriver.PixelFormatRGBA8 {
+		return nil, fmt.Errorf("opengl: unsupported pixel format %s", format)
+	}
 	i := &Image{
 		id:       g.genNextImageID(),
 		graphics: g,
@@ -257,7 +268,7 @@ func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error
 	g := s.graphics
 	var i *Image
 	if s.presenter != nil {
-		img, err := g.NewImage(width, height)
+		img, err := g.NewImage(width, height, graphicsdriver.PixelFormatRGBA8)
 		if err != nil {
 			return nil, err
 		}

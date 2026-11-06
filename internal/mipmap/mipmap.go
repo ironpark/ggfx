@@ -40,8 +40,11 @@ type Mipmap struct {
 	width     int
 	height    int
 	imageType atlas.ImageType
-	orig      *buffered.Image
-	imgs      map[int]imageWithDirtyFlag
+	// format is the pixel format of every level. The levels of an A8 image are A8 too: a
+	// linear-filtered draw of an A8 image into another stores the filtered alpha.
+	format graphicsdriver.PixelFormat
+	orig   *buffered.Image
+	imgs   map[int]imageWithDirtyFlag
 }
 
 type imageWithDirtyFlag struct {
@@ -49,13 +52,26 @@ type imageWithDirtyFlag struct {
 	dirty bool
 }
 
+// New returns an RGBA8 mipmap.
 func New(width, height int, imageType atlas.ImageType) *Mipmap {
+	return NewWithFormat(width, height, imageType, graphicsdriver.PixelFormatRGBA8)
+}
+
+// NewWithFormat returns a mipmap whose levels are of the given pixel format. WritePixels and
+// ReadPixels take pixels in that format.
+func NewWithFormat(width, height int, imageType atlas.ImageType, format graphicsdriver.PixelFormat) *Mipmap {
 	return &Mipmap{
 		width:     width,
 		height:    height,
-		orig:      buffered.NewImage(width, height, imageType),
+		orig:      buffered.NewImageWithFormat(width, height, imageType, format),
 		imageType: imageType,
+		format:    format,
 	}
+}
+
+// Format returns the pixel format of the mipmap.
+func (m *Mipmap) Format() graphicsdriver.PixelFormat {
+	return m.format
 }
 
 // NewScreen returns a mipmap for a screen image presented on surface.
@@ -228,7 +244,7 @@ func (m *Mipmap) level(level int) *buffered.Image {
 		// As s is overwritten, this doesn't have to be cleared.
 		s = img.img
 	} else {
-		s = buffered.NewImage(dstW, dstH, m.imageType)
+		s = buffered.NewImageWithFormat(dstW, dstH, m.imageType, m.format)
 	}
 
 	dstRegion := image.Rect(0, 0, dstW, dstH)
