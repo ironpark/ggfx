@@ -81,6 +81,19 @@ func MsgSend5(id objc.ID, sel objc.SEL, a1, a2, a3, a4, a5 uintptr) uintptr {
 	return msgSend(7, uintptr(id), uintptr(sel), a1, a2, a3, a4, a5)
 }
 
+// MsgSend9 sends sel to id with nine arguments, like MsgSend0 to MsgSend5. On arm64, the arguments
+// past the sixth are passed on the stack, so each must be eight bytes, as integers and pointers are.
+//
+//go:uintptrescapes
+func MsgSend9(id objc.ID, sel objc.SEL, a1, a2, a3, a4, a5, a6, a7, a8, a9 uintptr) uintptr {
+	buf := msgSendArgs.Get().(*[maxMsgSendArgs]uintptr)
+	buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6] = uintptr(id), uintptr(sel), a1, a2, a3, a4, a5
+	buf[7], buf[8], buf[9], buf[10] = a6, a7, a8, a9
+	r, _, _ := purego.SyscallN(objcMsgSend, buf[:11]...)
+	msgSendArgs.Put(buf)
+	return r
+}
+
 // msgSend calls objc_msgSend with the first n of id, sel and a1 to a5.
 func msgSend(n int, id, sel, a1, a2, a3, a4, a5 uintptr) uintptr {
 	buf := msgSendArgs.Get().(*[maxMsgSendArgs]uintptr)

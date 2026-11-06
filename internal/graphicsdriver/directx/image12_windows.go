@@ -158,27 +158,19 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		return err
 	}
 
-	var region image.Rectangle
+	// Each region has a copy footprint of its own in the upload buffer, rather than all sharing one
+	// of their union, which can be nearly as large as the texture for scattered regions.
+	bpp := i.format.BytesPerPixel()
+	var totalBytes uint64
 	for _, a := range args {
-		region = region.Union(a.Region)
+		if a.Region.Empty() {
+			continue
+		}
+		_, _, totalBytes = placeFootprint(totalBytes, a.Region.Dx(), a.Region.Dy(), bpp)
 	}
-
-	desc := _D3D12_RESOURCE_DESC{
-		Dimension:        _D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-		Alignment:        0,
-		Width:            uint64(region.Dx()),
-		Height:           uint32(region.Dy()),
-		DepthOrArraySize: 1,
-		MipLevels:        0,
-		Format:           dxgiFormat(i.format),
-		SampleDesc: _DXGI_SAMPLE_DESC{
-			Count:   1,
-			Quality: 0,
-		},
-		Layout: _D3D12_TEXTURE_LAYOUT_UNKNOWN,
-		Flags:  _D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+	if totalBytes == 0 {
+		return nil
 	}
-	layouts, _, _, totalBytes := i.graphics.device.GetCopyableFootprints(&desc, 0, 1, 0)
 	uploadingStagingBuffer, err := createBuffer(i.graphics.device, totalBytes, _D3D12_HEAP_TYPE_UPLOAD)
 	if err != nil {
 		return err
@@ -196,30 +188,43 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 
 	i.graphics.needFlushCopyCommandList = true
 
-	bpp := i.format.BytesPerPixel()
 	srcBytes := unsafe.Slice((*byte)(unsafe.Pointer(m)), totalBytes)
+	var end uint64
 	for _, a := range args {
-		copyToFootprint(srcBytes, region.Min, int(layouts.Footprint.RowPitch), a.Pixels, a.Region, bpp)
-	}
+		if a.Region.Empty() {
+			continue
+		}
+		var offset uint64
+		var rowPitch uint32
+		offset, rowPitch, end = placeFootprint(end, a.Region.Dx(), a.Region.Dy(), bpp)
+		copyToFootprint(srcBytes[offset:end], a.Region.Min, int(rowPitch), a.Pixels, a.Region, bpp)
 
-	for _, a := range args {
 		dst := _D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex{
 			pResource:        i.texture,
 			Type:             _D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
 			SubresourceIndex: 0,
 		}
 		src := _D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint{
-			pResource:       uploadingStagingBuffer,
-			Type:            _D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-			PlacedFootprint: layouts,
+			pResource: uploadingStagingBuffer,
+			Type:      _D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+			PlacedFootprint: _D3D12_PLACED_SUBRESOURCE_FOOTPRINT{
+				Offset: offset,
+				Footprint: _D3D12_SUBRESOURCE_FOOTPRINT{
+					Format:   dxgiFormat(i.format),
+					Width:    uint32(a.Region.Dx()),
+					Height:   uint32(a.Region.Dy()),
+					Depth:    1,
+					RowPitch: rowPitch,
+				},
+			},
 		}
 		i.graphics.copyCommandList.CopyTextureRegion_SubresourceIndex_PlacedFootPrint(
 			&dst, uint32(a.Region.Min.X), uint32(a.Region.Min.Y), 0, &src, &_D3D12_BOX{
-				left:   uint32(a.Region.Min.X - region.Min.X),
-				top:    uint32(a.Region.Min.Y - region.Min.Y),
+				left:   0,
+				top:    0,
 				front:  0,
-				right:  uint32(a.Region.Max.X - region.Min.X),
-				bottom: uint32(a.Region.Max.Y - region.Min.Y),
+				right:  uint32(a.Region.Dx()),
+				bottom: uint32(a.Region.Dy()),
 				back:   1,
 			})
 	}

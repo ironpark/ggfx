@@ -71,3 +71,23 @@ func copyToFootprint(dst []byte, origin image.Point, rowPitch int, src []byte, r
 		copy(dst[d:d+rowBytes], src[j*rowBytes:(j+1)*rowBytes])
 	}
 }
+
+const (
+	// textureDataPitchAlignment is D3D12_TEXTURE_DATA_PITCH_ALIGNMENT, the alignment of a copy
+	// footprint's row pitch.
+	textureDataPitchAlignment = 256
+
+	// textureDataPlacementAlignment is D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, the alignment of a
+	// placed copy footprint's offset in its buffer.
+	textureDataPlacementAlignment = 512
+)
+
+// placeFootprint lays out a copy footprint of a region of width x height pixels of bytesPerPixel
+// bytes in an upload buffer, after the first end bytes. It returns the footprint's offset, its row
+// pitch, and the end of its last row, which is not padded.
+func placeFootprint(end uint64, width, height, bytesPerPixel int) (offset uint64, rowPitch uint32, newEnd uint64) {
+	offset = (end + textureDataPlacementAlignment - 1) &^ (textureDataPlacementAlignment - 1)
+	rowBytes := uint64(bytesPerPixel * width)
+	pitch := (rowBytes + textureDataPitchAlignment - 1) &^ (textureDataPitchAlignment - 1)
+	return offset, uint32(pitch), offset + pitch*uint64(height-1) + rowBytes
+}

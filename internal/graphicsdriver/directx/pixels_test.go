@@ -31,9 +31,6 @@ func TestShaderComponentMapping(t *testing.T) {
 	}
 }
 
-// textureDataPitchAlignment is D3D12_TEXTURE_DATA_PITCH_ALIGNMENT.
-const textureDataPitchAlignment = 256
-
 // footprint returns a buffer laid out as GetCopyableFootprints lays out a w x h texture of bpp
 // bytes a pixel: rows padded to 256 bytes, the last one unpadded. Each pad byte is 0xee.
 func footprint(w, h, bpp int) ([]byte, int) {
@@ -99,5 +96,28 @@ func TestCopyFootprint(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPlaceFootprint(t *testing.T) {
+	// Each region's footprint starts on a 512-byte boundary after the last, with rows 256-byte
+	// aligned and the last row unpadded.
+	var end uint64
+	for _, tc := range []struct {
+		w, h, bpp int
+		offset    uint64
+		pitch     uint32
+		end       uint64
+	}{
+		{10, 14, 1, 0, 256, 256*13 + 10},
+		{10, 14, 4, 3584, 256, 3584 + 256*13 + 40},
+		{65, 2, 4, 7168, 512, 7168 + 512 + 260},
+		{1, 1, 1, 8192, 256, 8193},
+	} {
+		offset, pitch, newEnd := placeFootprint(end, tc.w, tc.h, tc.bpp)
+		if offset != tc.offset || pitch != tc.pitch || newEnd != tc.end {
+			t.Errorf("placeFootprint(%d, %d, %d, %d): got (%d, %d, %d), want (%d, %d, %d)", end, tc.w, tc.h, tc.bpp, offset, pitch, newEnd, tc.offset, tc.pitch, tc.end)
+		}
+		end = newEnd
 	}
 }

@@ -69,6 +69,12 @@ type Graphics struct {
 	// unusedBuffers keeps the buffers of completed frames for later frames to reuse.
 	unusedBuffers bufferPool[mtl.Buffer]
 
+	// uploadBuffer is the staging buffer WritePixels copies pixels from in frame uploadFrame, and
+	// uploadOffset where its free space begins.
+	uploadBuffer mtl.Buffer
+	uploadFrame  int64
+	uploadOffset uintptr
+
 	lastDst *Image
 
 	vb mtl.Buffer
@@ -81,7 +87,6 @@ type Graphics struct {
 	nextShaderID graphicsdriver.ShaderID
 
 	maxImageSize int
-	tmpTextures  []mtl.Texture
 
 	pool cocoa.NSAutoreleasePool
 }
@@ -528,11 +533,6 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 		s.presented(s.drawableTex)
 		s.chained, s.drawableTex = false, mtl.Texture{}
 	}
-
-	for _, t := range g.tmpTextures {
-		t.Release()
-	}
-	g.tmpTextures = g.tmpTextures[:0]
 
 	g.cb = mtl.CommandBuffer{}
 
@@ -1029,54 +1029,76 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	g := i.graphics
 
-	g.flushRenderCommandEncoderIfNeeded()
-
-	// Calculate the smallest texture size to include all the values in args.
-	var region image.Rectangle
-	for _, a := range args {
-		region = region.Union(a.Region)
-	}
-
-	// Use a temporary texture to send pixels asynchronously, whichever the memory is shared (e.g., iOS) or
-	// managed (e.g., macOS). A temporary texture is needed since ReplaceRegion tries to sync the pixel
-	// data between CPU and GPU, and doing it on the existing texture is inefficient (#1418).
-	// The texture cannot be reused until sending the pixels finishes, then create new ones for each call.
-	// The temporary texture is only a blit source: it has the image's format without a swizzle.
-	td := mtl.TextureDescriptor{
-		TextureType: mtl.TextureType2D,
-		PixelFormat: mtlPixelFormat(i.format),
-		Width:       region.Dx(),
-		Height:      region.Dy(),
-		StorageMode: storageMode,
-		Usage:       mtl.TextureUsageShaderRead | mtl.TextureUsageRenderTarget,
-	}
-	t := g.device.NewTextureWithDescriptor(td)
-	g.tmpTextures = append(g.tmpTextures, t)
-
 	bpp := i.format.BytesPerPixel()
+	var length uintptr
 	for _, a := range args {
 		if got, want := len(a.Pixels), bpp*a.Region.Dx()*a.Region.Dy(); got != want {
 			return fmt.Errorf("metal: len(pixels) must be %d but %d at WritePixels", want, got)
 		}
-		if err := t.ReplaceRegion(mtl.Region{
-			Origin: mtl.Origin{X: a.Region.Min.X - region.Min.X, Y: a.Region.Min.Y - region.Min.Y, Z: 0},
-			Size:   mtl.Size{Width: a.Region.Dx(), Height: a.Region.Dy(), Depth: 1},
-		}, 0, a.Pixels, bpp*a.Region.Dx()); err != nil {
-			return err
-		}
+		length += alignUploadOffset(uintptr(len(a.Pixels)))
+	}
+	if length == 0 {
+		return nil
 	}
 
-	g.ensureCommandBuffer()
-	bce := g.cb.BlitCommandEncoder()
+	g.flushRenderCommandEncoderIfNeeded()
+
+	// Stage the pixels in a buffer, rows tightly packed, and copy them to the texture with a blit.
+	// Writing to the texture with ReplaceRegion instead would sync the pixel data between CPU and
+	// GPU on the existing texture, which is inefficient (#1418). The buffer is not reused until the
+	// frame's command buffers complete.
+	buf, offset := g.uploadSpace(length)
+	contents := unsafe.Slice((*byte)(buf.Contents()), offset+length)
+	o := offset
 	for _, a := range args {
-		so := mtl.Origin{X: a.Region.Min.X - region.Min.X, Y: a.Region.Min.Y - region.Min.Y, Z: 0}
-		ss := mtl.Size{Width: a.Region.Dx(), Height: a.Region.Dy(), Depth: 1}
-		do := mtl.Origin{X: a.Region.Min.X, Y: a.Region.Min.Y, Z: 0}
-		bce.CopyFromTexture(t, 0, 0, so, ss, i.texture, 0, 0, do)
+		copy(contents[o:], a.Pixels)
+		o += alignUploadOffset(uintptr(len(a.Pixels)))
+	}
+	buf.DidModifyRange(offset, length)
+
+	bce := g.cb.BlitCommandEncoder()
+	o = offset
+	for _, a := range args {
+		if len(a.Pixels) == 0 {
+			continue
+		}
+		bpr := bpp * a.Region.Dx()
+		bce.CopyFromBuffer(buf, int(o), bpr, bpr*a.Region.Dy(),
+			mtl.Size{Width: a.Region.Dx(), Height: a.Region.Dy(), Depth: 1},
+			i.texture, 0, 0, mtl.Origin{X: a.Region.Min.X, Y: a.Region.Min.Y, Z: 0})
+		o += alignUploadOffset(uintptr(len(a.Pixels)))
 	}
 	bce.EndEncoding()
 
 	return nil
+}
+
+// uploadAlignment is the alignment of an upload's offset in the staging buffer, a multiple of
+// every pixel's size.
+const uploadAlignment = 16
+
+func alignUploadOffset(n uintptr) uintptr {
+	return (n + uploadAlignment - 1) &^ (uploadAlignment - 1)
+}
+
+// minUploadBufferBytes is the least a staging buffer for uploads holds, so that the uploads of a
+// frame share a few buffers.
+const minUploadBufferBytes = 256 << 10
+
+// uploadSpace returns a staging buffer and an offset in it with length bytes free for uploads. The
+// space is the frame's own: the buffer is reused only after the frame's command buffers complete.
+func (g *Graphics) uploadSpace(length uintptr) (mtl.Buffer, uintptr) {
+	if g.uploadBuffer != (mtl.Buffer{}) && g.uploadFrame == g.frame && g.uploadOffset+length <= g.uploadBuffer.Length() {
+		offset := g.uploadOffset
+		g.uploadOffset += length
+		g.ensureCommandBuffer()
+		return g.uploadBuffer, offset
+	}
+	// availableBuffer ties the buffer to the current frame.
+	g.uploadBuffer = g.availableBuffer(max(length, minUploadBufferBytes))
+	g.uploadFrame = g.frame
+	g.uploadOffset = length
+	return g.uploadBuffer, 0
 }
 
 // sampledTexture returns the texture shaders sample the image as.

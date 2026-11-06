@@ -1132,6 +1132,8 @@ func (bce BlitCommandEncoder) CopyFromTexture(sourceTexture Texture, sourceSlice
 		sourceTexture, sourceSlice, sourceLevel, sourceOrigin, sourceSize, destinationTexture, destinationSlice, destinationLevel, destinationOrigin)
 }
 
+var sel_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin = objc.RegisterName("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:")
+
 // Library is a collection of compiled graphics or compute functions.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtllibrary?language=objc.
@@ -1279,6 +1281,25 @@ func (b Buffer) CopyToContents(data unsafe.Pointer, lengthInBytes uintptr) {
 	if runtime.GOOS != "ios" {
 		// The argument is an NSRange, which is passed in two integer registers.
 		cocoa.MsgSend2(b.buffer, sel_didModifyRange, 0, lengthInBytes)
+	}
+}
+
+// Contents returns the address of the buffer's contents, which is not Go memory.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlbuffer/1515716-contents?language=objc.
+func (b Buffer) Contents() unsafe.Pointer {
+	r := cocoa.MsgSend0(b.buffer, sel_contents)
+	return *(*unsafe.Pointer)(unsafe.Pointer(&r))
+}
+
+// DidModifyRange tells Metal that length bytes of the contents from offset were modified by the CPU.
+// It does nothing where the buffer's memory is shared (iOS).
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlbuffer/1516121-didmodifyrange?language=objc.
+func (b Buffer) DidModifyRange(offset, length uintptr) {
+	if runtime.GOOS != "ios" {
+		// The argument is an NSRange, which is passed in two integer registers.
+		cocoa.MsgSend2(b.buffer, sel_didModifyRange, offset, length)
 	}
 }
 

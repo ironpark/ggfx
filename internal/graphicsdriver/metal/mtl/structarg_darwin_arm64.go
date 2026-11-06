@@ -53,3 +53,27 @@ func (rce RenderCommandEncoder) SetScissorRect(scissorRect ScissorRect) {
 	cocoa.MsgSend1(rce.commandEncoder, sel_setScissorRect, uintptr(unsafe.Pointer(arg)))
 	scissorRectArgs.Put(arg)
 }
+
+// copyFromBufferArgs holds the struct arguments of CopyFromBuffer.
+type copyFromBufferArgs struct {
+	size   Size
+	origin Origin
+}
+
+var copyFromBufferArgsPool = sync.Pool{New: func() any { return new(copyFromBufferArgs) }}
+
+// CopyFromBuffer encodes a command that copies image data from a buffer into a texture.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlblitcommandencoder/1400752-copyfrombuffer?language=objc.
+func (bce BlitCommandEncoder) CopyFromBuffer(sourceBuffer Buffer, sourceOffset, sourceBytesPerRow, sourceBytesPerImage int, sourceSize Size, destinationTexture Texture, destinationSlice, destinationLevel int, destinationOrigin Origin) {
+	// MTLSize and MTLOrigin, three integers each, are passed by reference. The arguments past the
+	// sixth, the slice, the level and the origin's address, go on the stack, eight bytes each.
+	arg := copyFromBufferArgsPool.Get().(*copyFromBufferArgs)
+	arg.size = sourceSize
+	arg.origin = destinationOrigin
+	cocoa.MsgSend9(bce.commandEncoder, sel_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin,
+		uintptr(sourceBuffer.buffer), uintptr(sourceOffset), uintptr(sourceBytesPerRow), uintptr(sourceBytesPerImage),
+		uintptr(unsafe.Pointer(&arg.size)), uintptr(destinationTexture.texture), uintptr(destinationSlice), uintptr(destinationLevel),
+		uintptr(unsafe.Pointer(&arg.origin)))
+	copyFromBufferArgsPool.Put(arg)
+}

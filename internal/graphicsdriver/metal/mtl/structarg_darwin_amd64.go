@@ -30,3 +30,14 @@ func (rce RenderCommandEncoder) SetViewport(viewport Viewport) {
 func (rce RenderCommandEncoder) SetScissorRect(scissorRect ScissorRect) {
 	rce.commandEncoder.Send(sel_setScissorRect, scissorRect)
 }
+
+// CopyFromBuffer encodes a command that copies image data from a buffer into a texture.
+//
+// On amd64, MTLSize and MTLOrigin are passed on the stack, which MsgSend cannot do, so the call
+// goes through objc.ID.Send.
+//
+// Reference: https://developer.apple.com/documentation/metal/mtlblitcommandencoder/1400752-copyfrombuffer?language=objc.
+func (bce BlitCommandEncoder) CopyFromBuffer(sourceBuffer Buffer, sourceOffset, sourceBytesPerRow, sourceBytesPerImage int, sourceSize Size, destinationTexture Texture, destinationSlice, destinationLevel int, destinationOrigin Origin) {
+	bce.commandEncoder.Send(sel_copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin,
+		sourceBuffer.buffer, sourceOffset, sourceBytesPerRow, sourceBytesPerImage, sourceSize, destinationTexture.texture, destinationSlice, destinationLevel, destinationOrigin)
+}
