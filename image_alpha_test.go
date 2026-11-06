@@ -538,3 +538,35 @@ func TestAlphaImagesShareAtlasPage(t *testing.T) {
 		t.Errorf("an alpha page exists on a driver without alpha textures")
 	}
 }
+
+// An image drawn with linear filtering mixes its first column and row with the transparent texel
+// before them, as it does its last ones with the one after, wherever the atlas puts it: an image at
+// a page's origin once read its own edge for the texel before it, so its first column and row were
+// drawn too heavy.
+func TestLinearFilterFadesTheLeftAndTopEdges(t *testing.T) {
+	for _, format := range []ggfx.PixelFormat{ggfx.PixelFormatRGBA, ggfx.PixelFormatAlpha} {
+		for _, n := range []int{8, 600} {
+			src := ggfx.NewImageWithOptions(image.Rect(0, 0, n, n), &ggfx.NewImageOptions{Format: format})
+			src.Fill(color.White)
+			dst := ggfx.NewImage(n+4, n+4)
+			op := &ggfx.DrawImageOptions{Filter: ggfx.FilterLinear}
+			op.GeoM.Translate(1.3, 1.3)
+			dst.DrawImage(src, op)
+			pix := readRGBA(dst)
+			w := n + 4
+			alpha := func(x, y int) int { return int(pix[4*(y*w+x)+3]) }
+			// Pixel 1's center reads the image at 0.2: 0.3 of the texel before it, 0.7 of the first.
+			const want = 178 // 0.7 × 255
+			for name, a := range map[string]int{"left": alpha(1, n/2), "top": alpha(n/2, 1)} {
+				if a < want-3 || a > want+3 {
+					t.Errorf("%v %d×%d: the %s edge is %d, want about %d", format, n, n, name, a, want)
+				}
+			}
+			if alpha(n/2, n/2) != 0xff {
+				t.Errorf("%v %d×%d: the middle is %d", format, n, n, alpha(n/2, n/2))
+			}
+			src.Deallocate()
+			dst.Deallocate()
+		}
+	}
+}

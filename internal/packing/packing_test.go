@@ -456,12 +456,13 @@ func TestAllocWithOverhang(t *testing.T) {
 	p := packing.NewPage(1024, 1024, 4096, overhang)
 	w, h := p.Size()
 
-	// A node can stick out of the page by the overhang, and the page is not extended for this.
-	n0 := p.Alloc(w+overhang, h+overhang)
+	// A node can stick out of the page by the overhang, past the first overhang columns and rows
+	// the page keeps empty, and the page is not extended for this.
+	n0 := p.Alloc(w, h)
 	if n0 == nil {
-		t.Fatalf("p.Alloc failed: width: %d, height: %d", w+overhang, h+overhang)
+		t.Fatalf("p.Alloc failed: width: %d, height: %d", w, h)
 	}
-	if got, want := n0.Region(), image.Rect(0, 0, w+overhang, h+overhang); got != want {
+	if got, want := n0.Region(), image.Rect(overhang, overhang, w+overhang, h+overhang); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 	if gotW, gotH := p.Size(); gotW != w || gotH != h {
@@ -473,7 +474,7 @@ func TestAllocWithOverhang(t *testing.T) {
 	if n1 == nil {
 		t.Fatalf("p.Alloc failed: width: %d, height: %d", 16, 16)
 	}
-	if got, want := n0.Region(), image.Rect(0, 0, w+overhang, h+overhang); got != want {
+	if got, want := n0.Region(), image.Rect(overhang, overhang, w+overhang, h+overhang); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 	if n0.Region().Overlaps(n1.Region()) {
@@ -487,13 +488,38 @@ func TestAllocatedRegionWithOverhang(t *testing.T) {
 	p := packing.NewPage(1024, 1024, 4096, overhang)
 	w, h := p.Size()
 
-	if p.Alloc(w+overhang, h+overhang) == nil {
-		t.Fatalf("p.Alloc failed: width: %d, height: %d", w+overhang, h+overhang)
+	// The page keeps its first overhang columns and rows empty, and a node sticks out past its
+	// right and bottom edges by overhang: the largest node it holds without growing is w×h.
+	n := p.Alloc(w, h)
+	if n == nil {
+		t.Fatalf("p.Alloc failed: width: %d, height: %d", w, h)
+	}
+	if got, want := n.Region(), image.Rect(overhang, overhang, w+overhang, h+overhang); got != want {
+		t.Errorf("node: got: %v, want: %v", got, want)
+	}
+	if pw, ph := p.Size(); pw != w || ph != h {
+		t.Errorf("the page grew to %d×%d", pw, ph)
 	}
 
 	// The allocated region never sticks out of the page.
-	if got, want := p.AllocatedRegion(), image.Rect(0, 0, w, h); got != want {
+	if got, want := p.AllocatedRegion(), image.Rect(overhang, overhang, w, h); got != want {
 		t.Errorf("got: %v, want: %v", got, want)
+	}
+}
+
+// A page with an overhang keeps its first column and row empty, however it grows, so that the
+// nodes at its left and top edges have the padding the others have from their neighbors.
+func TestOverhangKeepsTheFirstColumnAndRowEmpty(t *testing.T) {
+	const overhang = 1
+	p := packing.NewPage(16, 16, 1024, overhang)
+	for range 200 {
+		n := p.Alloc(7, 5)
+		if n == nil {
+			t.Fatal("p.Alloc failed")
+		}
+		if r := n.Region(); r.Min.X < overhang || r.Min.Y < overhang {
+			t.Fatalf("a node at %v takes the page's first column or row", r)
+		}
 	}
 }
 

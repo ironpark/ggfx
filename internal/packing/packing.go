@@ -38,7 +38,10 @@ func isPositivePowerOf2(x int) bool {
 
 // NewPage returns a new Page.
 //
-// A node can stick out of the page by overhang pixels at the right and the bottom edges.
+// A node can stick out of the page by overhang pixels at the right and the bottom edges. The
+// first overhang columns and rows of the page are never allocated, so a node at the left or the
+// top edge has as much empty space before it as a node next to another has after it: each node's
+// overhang is the padding of the one beyond it, and the page's edge is the padding of the first.
 func NewPage(initWidth, initHeight int, maxSize int, overhang int) *Page {
 	if !isPositivePowerOf2(initWidth) {
 		panic(fmt.Sprintf("packing: initWidth must be a positive power of 2 but %d", initWidth))
@@ -59,6 +62,10 @@ func NewPage(initWidth, initHeight int, maxSize int, overhang int) *Page {
 		overhang: overhang,
 	}
 }
+
+// inset is where the allocatable region starts on each axis: the empty columns and rows before
+// the first node.
+func (p *Page) inset() int { return p.overhang }
 
 // allocatableSize returns the size of the region where nodes can be allocated.
 func (p *Page) allocatableSize() (int, int) {
@@ -176,8 +183,9 @@ func (p *Page) Alloc(width, height int) *Node {
 
 	if p.root == nil {
 		w, h := p.allocatableSize()
+		in := p.inset()
 		p.root = &Node{
-			region: image.Rect(0, 0, w, h),
+			region: image.Rect(in, in, w, h),
 		}
 	}
 	return p.extendAndAlloc(width, height)
@@ -289,6 +297,7 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 	}
 
 	var rollback func()
+	in := p.inset()
 
 	if edgeAllocated {
 		// As there is at least one allocated on the edge.
@@ -301,10 +310,10 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 		if newHeight-p.height > 0 {
 			upper := p.root
 			lower := &Node{
-				region: image.Rect(0, allocatableHeight, allocatableWidth, newAllocatableHeight),
+				region: image.Rect(in, allocatableHeight, allocatableWidth, newAllocatableHeight),
 			}
 			p.root = &Node{
-				region: image.Rect(0, 0, allocatableWidth, newAllocatableHeight),
+				region: image.Rect(in, in, allocatableWidth, newAllocatableHeight),
 				child0: upper,
 				child1: lower,
 			}
@@ -316,10 +325,10 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 		if newWidth-p.width > 0 {
 			left := p.root
 			right := &Node{
-				region: image.Rect(allocatableWidth, 0, newAllocatableWidth, newAllocatableHeight),
+				region: image.Rect(allocatableWidth, in, newAllocatableWidth, newAllocatableHeight),
 			}
 			p.root = &Node{
-				region: image.Rect(0, 0, newAllocatableWidth, newAllocatableHeight),
+				region: image.Rect(in, in, newAllocatableWidth, newAllocatableHeight),
 				child0: left,
 				child1: right,
 			}

@@ -413,7 +413,7 @@ func (i *imageImpl) regionWithPadding() image.Rectangle {
 		panic("atlas: backend must not be nil: not allocated yet?")
 	}
 	if !i.isOnAtlas() {
-		return image.Rect(0, 0, i.width+i.paddingSize(), i.height+i.paddingSize())
+		return image.Rect(0, 0, i.width+i.paddingSize(), i.height+i.paddingSize()).Intersect(image.Rect(0, 0, i.backend.width, i.backend.height))
 	}
 	// A node at the right or the bottom edge of the page sticks out of the backend image by its padding.
 	return i.node.Region().Intersect(image.Rect(0, 0, i.backend.width, i.backend.height))
@@ -784,7 +784,9 @@ func (i *Image) canBePutOnAtlas() bool {
 	if i.imageType != ImageTypeRegular {
 		return false
 	}
-	return i.width <= maxSize && i.height <= maxSize
+	// A page keeps its first column and row empty, as the padding of the images at its left and
+	// top edges (see packing.NewPage), so an image and its padding take at most maxSize.
+	return i.width+i.paddingSize() <= maxSize && i.height+i.paddingSize() <= maxSize
 }
 
 func (i *imageImpl) cleanup() {
@@ -823,10 +825,13 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 	format := backendFormat(i.format)
 
 	if !i.canBePutOnAtlas() {
-		if wp > maxSize || hp > maxSize {
+		if i.width > maxSize || i.height > maxSize {
 			panic(fmt.Sprintf("atlas: the image being put on an atlas is too big: width: %d, height: %d", i.width, i.height))
 		}
 
+		// A regular image as large as a texture can be has no room for its padding: it goes
+		// without, as one at the right or the bottom of a page does.
+		wp, hp := min(wp, maxSize), min(hp, maxSize)
 		i.backend = &backend{
 			width:        wp,
 			height:       hp,
@@ -864,13 +869,14 @@ loop:
 	} else {
 		width, height = minDestinationSize, minDestinationSize
 	}
-	for i.width > width {
+	// The page keeps its first column and row empty, so the image and its padding must fit.
+	for wp > width {
 		if width == maxSize {
 			panic(fmt.Sprintf("atlas: the image being put on an atlas is too big: width: %d, height: %d", i.width, i.height))
 		}
 		width *= 2
 	}
-	for i.height > height {
+	for hp > height {
 		if height == maxSize {
 			panic(fmt.Sprintf("atlas: the image being put on an atlas is too big: width: %d, height: %d", i.width, i.height))
 		}
