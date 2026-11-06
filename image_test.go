@@ -4250,3 +4250,35 @@ func TestSubImageDrawImageInOppositeDirections(t *testing.T) {
 	})
 	wg.Wait()
 }
+
+// A frame that switches destinations thousands of times, each switch a render pass, draws every
+// one: the driver may commit its work in parts, but not lose or reorder any.
+func TestManyDestinationsInOneFrame(t *testing.T) {
+	const n = 2000
+	src := ggfx.NewImage(4, 4)
+	defer src.Deallocate()
+	src.Fill(color.White)
+	dsts := make([]*ggfx.Image, n)
+	for i := range dsts {
+		dsts[i] = ggfx.NewImage(4, 4)
+		defer dsts[i].Deallocate()
+	}
+	// Each draw goes to another image than the last, and each image is drawn twice, the second
+	// draw over the first, so that an out of order pass shows.
+	for pass := range 2 {
+		for i, dst := range dsts {
+			op := &ggfx.DrawImageOptions{}
+			if pass == 1 {
+				op.ColorScale.Scale(0, float32(i%256)/255, 0, 1)
+			}
+			dst.DrawImage(src, op)
+		}
+	}
+	for i, dst := range dsts {
+		got := dst.At(1, 1).(color.RGBA)
+		want := color.RGBA{G: uint8(i % 256), A: 0xff}
+		if d := int(got.G) - int(want.G); got.R != 0 || got.A != 0xff || max(d, -d) > 1 {
+			t.Fatalf("image %d: got %v, want %v", i, got, want)
+		}
+	}
+}

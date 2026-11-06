@@ -52,6 +52,9 @@ type Graphics struct {
 	cb  mtl.CommandBuffer
 	rce mtl.RenderCommandEncoder
 
+	// encoders is how many encoders cb has begun.
+	encoders int
+
 	// rceState is the state set on rce. It is zero whenever rce is.
 	rceState rceState
 
@@ -229,8 +232,7 @@ func (s *Surface) startFrom(tex mtl.Texture, previous bool) bool {
 	}
 	g := s.graphics
 	g.flushRenderCommandEncoderIfNeeded()
-	g.ensureCommandBuffer()
-	bce := g.cb.BlitCommandEncoder()
+	bce := g.encoderCommandBuffer().BlitCommandEncoder()
 	for _, r := range copies {
 		r = r.Intersect(image.Rect(0, 0, w, h))
 		if r.Empty() {
@@ -451,11 +453,29 @@ func (g *Graphics) ensureCommandBuffer() {
 		return
 	}
 	g.cb = g.cq.CommandBuffer()
+	g.encoders = 0
 	if g.frameToCB == nil {
 		g.frameToCB = map[int64][]mtl.CommandBuffer{}
 	}
 	g.frameToCB[g.frame] = append(g.frameToCB[g.frame], g.cb)
 	g.cb.Retain()
+}
+
+// maxEncodersPerCommandBuffer is how many encoders a command buffer begins before it is committed
+// and another takes its place. A frame commits its command buffer at its end, but one that
+// switches destinations or uploads tens of thousands of times would otherwise build a command
+// buffer the GPU runs out of shared memory for.
+const maxEncodersPerCommandBuffer = 512
+
+// encoderCommandBuffer returns the command buffer the next encoder begins in, committing the
+// current one first if it has begun maxEncodersPerCommandBuffer. No encoder may be open.
+func (g *Graphics) encoderCommandBuffer() mtl.CommandBuffer {
+	if g.cb != (mtl.CommandBuffer{}) && g.encoders >= maxEncodersPerCommandBuffer {
+		g.flushCommandBufferIfNeeded(false)
+	}
+	g.ensureCommandBuffer()
+	g.encoders++
+	return g.cb
 }
 
 func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
@@ -771,8 +791,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		rpd.ColorAttachments[0].Texture = t
 		rpd.ColorAttachments[0].ClearColor = mtl.ClearColor{}
 
-		g.ensureCommandBuffer()
-		g.rce = g.cb.RenderCommandEncoderWithDescriptor(rpd)
+		g.rce = g.encoderCommandBuffer().RenderCommandEncoderWithDescriptor(rpd)
 	}
 
 	st := &g.rceState
@@ -1056,7 +1075,7 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	}
 	buf.DidModifyRange(offset, length)
 
-	bce := g.cb.BlitCommandEncoder()
+	bce := g.encoderCommandBuffer().BlitCommandEncoder()
 	o = offset
 	for _, a := range args {
 		if len(a.Pixels) == 0 {
