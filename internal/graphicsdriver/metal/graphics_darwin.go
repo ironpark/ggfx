@@ -287,6 +287,11 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 	return s, nil
 }
 
+// Readable reports that the screen image can be a rendering source. The texture a frame draws
+// into, the swap chain's or a drawable's (the layer is not framebuffer only), is sampled as any
+// other, and Metal orders a draw that reads it after the passes that wrote it before.
+func (s *Surface) Readable() bool { return true }
+
 func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
 	g := s.graphics
 	s.view.setDrawableSize(width, height)
@@ -675,6 +680,19 @@ type rceState struct {
 }
 
 func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs [graphics.ShaderSrcImageCount]*Image, indexOffset int, shader *Shader, uniforms []uint32, blend graphicsdriver.Blend) error {
+	// A screen read as a source takes its texture before an encoder begins: acquiring it can
+	// encode a copy of the last frame (see startFrom). Without a drawable there is nothing to read.
+	var srcTextures [graphics.ShaderSrcImageCount]mtl.Texture
+	for i, src := range srcs {
+		if src == nil {
+			continue
+		}
+		srcTextures[i] = src.mtlTexture()
+		if src.screen && srcTextures[i] == (mtl.Texture{}) {
+			return nil
+		}
+	}
+
 	// In order to create a separate command buffer for the screen, flush the current command buffer.
 	// It's because a drawable will not be released as long as the CommandBuffer referencing it is alive,
 	// it is more efficient to separate CommandBuffers that use the drawable from those that do not.
@@ -754,11 +772,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		g.rce.SetFragmentBytes(unsafe.Pointer(head), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
 	}
 
-	for i, src := range srcs {
-		var t mtl.Texture
-		if src != nil {
-			t = src.texture
-		}
+	for i, t := range srcTextures {
 		if st.textures[i] != t {
 			g.rce.SetFragmentTexture(t, i)
 			st.textures[i] = t

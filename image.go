@@ -976,6 +976,14 @@ func (i *Image) Bounds() image.Rectangle {
 	return i.bounds
 }
 
+// CanBeSource reports whether the image can be the source of a draw, such as the image given to
+// [Image.DrawImage]. Every image can but a screen whose graphics driver cannot sample it: the
+// screen of a Metal surface can, and a draw from it reads what the frame drew to it before. A
+// sub-image answers for its image. A disposed image cannot.
+func (i *Image) CanBeSource() bool {
+	return !i.isDisposed() && i.image.CanBeSource()
+}
+
 // ColorModel returns the color model of the image.
 //
 // ColorModel implements the standard image.Image's ColorModel.

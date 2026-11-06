@@ -23,6 +23,7 @@ import (
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/mipmap"
 )
@@ -43,6 +44,9 @@ type Image struct {
 	width     int
 	height    int
 	imageType atlas.ImageType
+
+	// readable reports whether a screen image can be a rendering source (see CanBeSource).
+	readable bool
 
 	// id determines the order to lock mu among multiple images.
 	id int64
@@ -69,7 +73,15 @@ func NewImage(width, height int, imageType atlas.ImageType) *Image {
 
 // NewScreenImage returns the image presented on surface.
 func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
-	return newImage(mipmap.NewScreen(width, height, surface), width, height, atlas.ImageTypeScreen)
+	i := newImage(mipmap.NewScreen(width, height, surface), width, height, atlas.ImageTypeScreen)
+	i.readable = graphicscommand.ScreenReadable(surface)
+	return i
+}
+
+// CanBeSource reports whether i can be a rendering source: every image can but a screen whose
+// graphics driver cannot read it.
+func (i *Image) CanBeSource() bool {
+	return i.imageType != atlas.ImageTypeScreen || i.readable
 }
 
 // Size returns the image's size in pixels.

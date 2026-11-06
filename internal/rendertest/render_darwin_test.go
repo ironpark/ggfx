@@ -37,6 +37,7 @@ func TestMain(m *testing.M) {
 	if err := host.Init(&host.Options{GraphicsLibrary: host.GraphicsLibraryMetal}); err != nil {
 		panic(err)
 	}
+	newViewSurface()
 	code := m.Run()
 	host.Terminate()
 	os.Exit(code)

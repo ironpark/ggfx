@@ -38,6 +38,9 @@ type Image struct {
 	internalHeight int
 	screen         bool
 
+	// readable reports whether the screen image can be a rendering source (see ScreenReadable).
+	readable bool
+
 	// attribute is used only for logs.
 	attribute string
 
@@ -65,6 +68,7 @@ func NewImage(width, height int, surface graphicsdriver.Surface, attribute strin
 		width:     width,
 		height:    height,
 		screen:    surface != nil,
+		readable:  surface != nil && ScreenReadable(surface),
 		id:        genNextImageID(),
 		attribute: attribute,
 	}
@@ -77,6 +81,20 @@ func NewImage(width, height int, surface graphicsdriver.Surface, attribute strin
 	}
 	theCommandQueueManager.enqueueCommand(c)
 	return i
+}
+
+// readableSurface is a surface whose screen image can be a rendering source.
+type readableSurface interface {
+	// Readable reports whether the screen image can be a rendering source within a frame: a
+	// draw from it reads what the frame drew to it before, in the order the commands are queued.
+	Readable() bool
+}
+
+// ScreenReadable reports whether the screen image of surface can be a rendering source. Only a
+// driver whose screen is a texture it can sample says so; the others' screens are never a source.
+func ScreenReadable(surface graphicsdriver.Surface) bool {
+	r, ok := surface.(readableSurface)
+	return ok && r.Readable()
 }
 
 func (i *Image) flushBufferedWritePixels() {
@@ -140,7 +158,7 @@ func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 		if src == nil {
 			continue
 		}
-		if src.screen {
+		if src.screen && !src.readable {
 			panic("graphicscommand: the screen image cannot be the rendering source")
 		}
 		src.flushBufferedWritePixels()

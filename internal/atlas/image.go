@@ -741,9 +741,8 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 	i.cleanup = runtime.AddCleanup(i, (*imageImpl).cleanup, i.imageImpl)
 
 	if i.imageType == ImageTypeScreen {
-		if asSource {
-			panic("atlas: a screen image cannot be created as a source")
-		}
+		// A screen image is a source only where the driver can read it (see
+		// graphicscommand.ScreenReadable), and never on a source backend: asSource does not apply.
 		// A screen image doesn't have a padding.
 		i.backend = &backend{
 			width:        i.width,
