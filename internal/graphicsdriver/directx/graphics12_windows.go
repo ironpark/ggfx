@@ -76,8 +76,9 @@ type graphics12 struct {
 	vertices [frameCount][]*resourceWithSize
 	indices  [frameCount][]*resourceWithSize
 
-	// verticesUse and indicesUse track the bytes recent batches sent, and batchesUse how many
-	// batches recent frames sent, so that the buffers give back the room a large frame took.
+	// verticesUse and indicesUse track the bytes the batches of recent frames sent, and batchesUse
+	// how many batches recent frames sent, so that the buffers give back the room a large frame
+	// took.
 	verticesUse recent.Peak
 	indicesUse  recent.Peak
 	batchesUse  recent.Peak
@@ -851,7 +852,7 @@ func (g *graphics12) resetVerticesAndIndices(frameIndex int, release bool) {
 	if !release {
 		// Release the buffers of the slots recent frames did not use: a frame of many batches
 		// would otherwise keep its buffers for good. The GPU has completed the frame.
-		g.batchesUse.Add(len(g.vertices[frameIndex]))
+		g.batchesUse.ObserveNow(len(g.vertices[frameIndex]))
 		keep := max(g.batchesUse.Max(), 1)
 		for _, bs := range [][]*resourceWithSize{g.vertices[frameIndex], g.indices[frameIndex]} {
 			bs = bs[:cap(bs)]
@@ -983,7 +984,7 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	if b := g.vertices[g.frameIndex][vidx]; b != nil {
 		curvsize = int(b.sizeInBytes)
 	}
-	vsize := uint32(g.verticesUse.Capacity(curvsize, len(vertices)*int(unsafe.Sizeof(vertices[0])), minVertexBufferBytes))
+	vsize := uint32(g.verticesUse.Capacity(curvsize, len(vertices)*int(unsafe.Sizeof(vertices[0])), graphicsdriver.MinVertexBufferBytes))
 	if g.vertices[g.frameIndex][vidx] != nil && g.vertices[g.frameIndex][vidx].sizeInBytes != vsize {
 		g.vertices[g.frameIndex][vidx].release()
 		g.vertices[g.frameIndex][vidx] = nil
@@ -1017,7 +1018,7 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	if b := g.indices[g.frameIndex][iidx]; b != nil {
 		curisize = int(b.sizeInBytes)
 	}
-	isize := uint32(g.indicesUse.Capacity(curisize, len(indices)*int(unsafe.Sizeof(indices[0])), minVertexBufferBytes))
+	isize := uint32(g.indicesUse.Capacity(curisize, len(indices)*int(unsafe.Sizeof(indices[0])), graphicsdriver.MinVertexBufferBytes))
 	if g.indices[g.frameIndex][iidx] != nil && g.indices[g.frameIndex][iidx].sizeInBytes != isize {
 		g.indices[g.frameIndex][iidx].release()
 		g.indices[g.frameIndex][iidx] = nil

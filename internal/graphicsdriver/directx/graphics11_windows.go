@@ -145,8 +145,8 @@ type graphics11 struct {
 	indexBuffer            *_ID3D11Buffer
 	indexBufferSizeInBytes uint32
 
-	// vertexBufferUse and indexBufferUse track the bytes recent batches sent, so that the buffers
-	// give back the room a large batch took.
+	// vertexBufferUse and indexBufferUse track the bytes the batches of recent frames sent, so that
+	// the buffers give back the room a large batch took.
 	vertexBufferUse recent.Peak
 	indexBufferUse  recent.Peak
 
@@ -372,7 +372,7 @@ func (g *graphics11) SupportsDirectComposition() bool {
 
 func (g *graphics11) SetVertices(vertices []float32, indices []uint32) error {
 	// The buffers are mapped with WRITE_DISCARD, so replacing one does not wait for the GPU.
-	if size := uint32(g.vertexBufferUse.Capacity(int(g.vertexBufferSizeInBytes), len(vertices)*int(unsafe.Sizeof(vertices[0])), minVertexBufferBytes)); g.vertexBuffer == nil || g.vertexBufferSizeInBytes != size {
+	if size := uint32(g.vertexBufferUse.Capacity(int(g.vertexBufferSizeInBytes), len(vertices)*int(unsafe.Sizeof(vertices[0])), graphicsdriver.MinVertexBufferBytes)); g.vertexBuffer == nil || g.vertexBufferSizeInBytes != size {
 		if g.vertexBuffer != nil {
 			g.vertexBuffer.Release()
 			g.vertexBuffer = nil
@@ -391,7 +391,7 @@ func (g *graphics11) SetVertices(vertices []float32, indices []uint32) error {
 		g.deviceContext.IASetVertexBuffers(0, []*_ID3D11Buffer{g.vertexBuffer},
 			[]uint32{graphics.VertexFloatCount * uint32(unsafe.Sizeof(vertices[0]))}, []uint32{0})
 	}
-	if size := uint32(g.indexBufferUse.Capacity(int(g.indexBufferSizeInBytes), len(indices)*int(unsafe.Sizeof(indices[0])), minVertexBufferBytes)); g.indexBuffer == nil || g.indexBufferSizeInBytes != size {
+	if size := uint32(g.indexBufferUse.Capacity(int(g.indexBufferSizeInBytes), len(indices)*int(unsafe.Sizeof(indices[0])), graphicsdriver.MinVertexBufferBytes)); g.indexBuffer == nil || g.indexBufferSizeInBytes != size {
 		if g.indexBuffer != nil {
 			g.indexBuffer.Release()
 			g.indexBuffer = nil

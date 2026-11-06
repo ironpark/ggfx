@@ -21,6 +21,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 type frameDriver struct {
@@ -46,25 +47,22 @@ func (g *frameDriver) End(mode graphicsdriver.FlushMode) error {
 func TestCompleteFramesWithoutPresenting(t *testing.T) {
 	var q graphicscommand.CommandQueueForTesting
 	var driver frameDriver
-	var finalized int
 	const frames = 10
 	for frame := range frames {
 		q.AllocUniformsForTesting(16)
-		q.AddFinalizerForTesting(func() { finalized++ })
+		q.AddUploadedBytesForTesting(make([]byte, 16))
 		if err := q.FlushForTesting(&driver, graphicsdriver.FlushModeIntermediate); err != nil {
 			t.Fatal(err)
 		}
-		if finalized != frame {
-			t.Errorf("frame %d after intermediate flush: finalized = %d, want %d", frame, finalized, frame)
+		// An intermediate flush keeps the frame's resources.
+		if uniforms, uploaded := q.PendingResourcesForTesting(); uniforms == 0 || uploaded != 1 {
+			t.Errorf("frame %d after intermediate flush: pending uniforms = %d, uploaded bytes = %d; want > 0, 1", frame, uniforms, uploaded)
 		}
 		if err := q.FlushForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
 			t.Fatal(err)
 		}
-		if finalized != frame+1 {
-			t.Errorf("frame %d after completion: finalized = %d, want %d", frame, finalized, frame+1)
-		}
-		if uniforms, finalizers := q.PendingResourcesForTesting(); uniforms != 0 || finalizers != 0 {
-			t.Errorf("frame %d after completion: pending uniforms = %d, finalizers = %d; want 0, 0", frame, uniforms, finalizers)
+		if uniforms, uploaded := q.PendingResourcesForTesting(); uniforms != 0 || uploaded != 0 {
+			t.Errorf("frame %d after completion: pending uniforms = %d, uploaded bytes = %d; want 0, 0", frame, uniforms, uploaded)
 		}
 	}
 	if driver.frames != frames || driver.presents != 0 {
@@ -147,6 +145,8 @@ func TestQueueShrinksAfterALargeFrame(t *testing.T) {
 		if err := q.FlushForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
 			t.Fatal(err)
 		}
+		// End the frame, as render.Flush does.
+		recent.Advance()
 	}
 
 	// The uniforms of a frame may span several arrays until one holds a whole frame.

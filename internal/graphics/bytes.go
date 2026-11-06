@@ -130,25 +130,17 @@ type bytesPool struct {
 
 var theBytesPool bytesPool
 
-// AdvanceBytesPoolFrame tells the pool of upload bytes that a frame ended, and gives back the arrays
-// recent frames did not need. It can be called from any goroutine.
+// AdvanceBytesPoolFrame tells the pool of upload bytes that a frame's uploads are done, and gives
+// back the arrays recent frames did not need. The pool ages by the frame clock, recent.Now, so
+// calling it more than once a frame does not age it faster. It can be called from any goroutine.
 func AdvanceBytesPoolFrame() {
 	theBytesPool.advanceFrame()
 }
 
 func (b *bytesPool) get(size int) *ManagedBytes {
-	bs := b.getFromCache(size)
+	bs, newCap := b.getFromCache(size)
 	if bs == nil {
-		// A small array has the capacity of the power of two that holds it, so that any array
-		// of its class serves a later request of the same class.
-		c := size
-		if size <= maxRoundedBytes {
-			c = 1 << bits.Len(uint(max(size, 1)-1))
-		}
-		bs = make([]byte, size, c)
-		b.m.Lock()
-		b.taken += c
-		b.m.Unlock()
+		bs = make([]byte, size, newCap)
 	}
 	return &ManagedBytes{
 		bytes: bs,
@@ -162,9 +154,9 @@ func bytesClass(c int) int {
 }
 
 // getFromCache returns an array in the pool that holds size bytes and is at most maxWasteFactor
-// times as large, sliced to size, or nil if there is none. It takes the last given back of the
-// smallest class that has one.
-func (b *bytesPool) getFromCache(size int) []byte {
+// times as large, sliced to size: the last given back of the smallest class that has one. If there
+// is none, it returns nil and the capacity to make a new array with, which it counts as taken.
+func (b *bytesPool) getFromCache(size int) (bs []byte, newCap int) {
 	b.m.Lock()
 	defer b.m.Unlock()
 
@@ -183,11 +175,19 @@ func (b *bytesPool) getFromCache(size int) []byte {
 				b.total -= cap(bs)
 				b.count--
 				b.taken += cap(bs)
-				return bs[:size]
+				return bs[:size], 0
 			}
 		}
 	}
-	return nil
+
+	// A small array has the capacity of the power of two that holds it, so that any array of its
+	// class serves a later request of the same class.
+	newCap = size
+	if size <= maxRoundedBytes {
+		newCap = recent.NextPowerOf2(size)
+	}
+	b.taken += newCap
+	return nil, newCap
 }
 
 func (b *bytesPool) put(bs []byte) {
@@ -243,7 +243,7 @@ func (b *bytesPool) advanceFrame() {
 	b.m.Lock()
 	defer b.m.Unlock()
 
-	b.use.Add(b.taken)
+	b.use.ObserveNow(b.taken)
 	b.taken = 0
 	b.trim(min(maxPooledBytes, b.use.Max()))
 }

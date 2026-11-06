@@ -14,6 +14,8 @@
 
 package metal
 
+import "github.com/ironpark/ggfx/internal/recent"
+
 const (
 	// maxIdleBufferFrames is how many frames a pooled buffer may go unused before it is released.
 	maxIdleBufferFrames = 120
@@ -57,7 +59,7 @@ func (p *bufferPool[B]) put(buf B, length uintptr, frame int64) {
 // get takes out the smallest buffer at least length bytes long and not too much longer, and
 // reports whether there was one.
 func (p *bufferPool[B]) get(length uintptr) (B, bool) {
-	limit := max(pow2(length)*maxBufferWaste, minReusedBufferBytes)
+	limit := max(recent.NextPowerOf2(length)*maxBufferWaste, minReusedBufferBytes)
 	best := -1
 	for i, b := range p.bufs {
 		if b.length < length || b.length > limit {

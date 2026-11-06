@@ -53,7 +53,10 @@ type Image struct {
 	// have its graphicsdriver.Image.
 	id int
 
+	// bufferedWritePixelsArgs are the writes not enqueued yet, and bufferedBounds the union of their
+	// regions, or more.
 	bufferedWritePixelsArgs []writePixelsCommandArgs
+	bufferedBounds          image.Rectangle
 
 	// pendingWrite is the last write-pixels command enqueued for the image, which later writes may
 	// join while it is in the current queue, of generation pendingWriteGeneration. touched is the
@@ -61,12 +64,8 @@ type Image struct {
 	// none of them can join pendingWrite, as running it there instead of now changes nothing.
 	pendingWrite           *writePixelsCommand
 	pendingWriteGeneration uint64
-	touched                []image.Rectangle
+	touched                touchedSet
 }
-
-// maxTouchedRegions is the most regions an image records after its pending write-pixels command.
-// Past it, the next write enqueues a command of its own, so that the overlap checks stay cheap.
-const maxTouchedRegions = 1024
 
 var nextImageID = 1
 
@@ -144,51 +143,67 @@ func (i *Image) flushBufferedWritePixels() {
 	if i.canJoinPendingWrite() {
 		c := i.pendingWrite
 		for _, arg := range i.bufferedWritePixelsArgs {
-			// Release the pending pixels the new region covers, as WritePixels does.
-			var cur int
-			for _, a := range c.args {
-				if a.region.In(arg.region) {
-					a.pixels.Release()
-					continue
-				}
-				c.args[cur] = a
-				cur++
-			}
-			clear(c.args[cur:])
-			c.args = append(c.args[:cur], arg)
+			c.args = appendReplacing(c.args, &c.bounds, arg)
 		}
-		clear(i.bufferedWritePixelsArgs)
-		i.bufferedWritePixelsArgs = keepSmall(i.bufferedWritePixelsArgs)
-		return
+	} else {
+		c := theCommandQueueManager.newWritePixelsCommand()
+		c.dst = i
+		c.args = append(c.args, i.bufferedWritePixelsArgs...)
+		c.bounds = i.bufferedBounds
+		theCommandQueueManager.enqueueCommand(c)
+
+		i.pendingWrite = c
+		i.pendingWriteGeneration = theCommandQueueManager.generation
+		w, h := i.InternalSize()
+		i.touched.reset(w, h)
 	}
 
-	c := theCommandQueueManager.newWritePixelsCommand()
-	c.dst = i
-	c.args = append(c.args, i.bufferedWritePixelsArgs...)
-	theCommandQueueManager.enqueueCommand(c)
-
 	clear(i.bufferedWritePixelsArgs)
-	i.bufferedWritePixelsArgs = keepSmall(i.bufferedWritePixelsArgs)
-	i.pendingWrite = c
-	i.pendingWriteGeneration = theCommandQueueManager.generation
-	i.touched = i.touched[:0]
+	i.bufferedWritePixelsArgs = keepSmall(i.bufferedWritePixelsArgs, maxKeptWrites)
+	i.bufferedBounds = image.Rectangle{}
+}
+
+// appendReplacing appends arg to args, the writes of one image in order, and releases and removes
+// the writes before it whose regions arg's covers. bounds is the union of the regions of args, or
+// more, and is kept so: when arg's region misses it, no write is covered, and none is looked at.
+func appendReplacing(args []writePixelsCommandArgs, bounds *image.Rectangle, arg writePixelsCommandArgs) []writePixelsCommandArgs {
+	if len(args) > 0 && arg.region.Overlaps(*bounds) {
+		var cur int
+		for _, a := range args {
+			if a.region.In(arg.region) {
+				a.pixels.Release()
+				continue
+			}
+			args[cur] = a
+			cur++
+		}
+		clear(args[cur:])
+		args = args[:cur]
+	}
+	if len(args) == 0 {
+		*bounds = arg.region
+	} else {
+		*bounds = bounds.Union(arg.region)
+	}
+	return append(args, arg)
+}
+
+// hasPendingWrite reports whether the image's pending write-pixels command is still in the current
+// queue, so that later writes may join it.
+func (i *Image) hasPendingWrite() bool {
+	return i.pendingWrite != nil && i.pendingWriteGeneration == theCommandQueueManager.generation
 }
 
 // canJoinPendingWrite reports whether the buffered writes can join the pending write-pixels
 // command: it is still in the current queue, and no command after it read or drew into the
 // buffered regions.
 func (i *Image) canJoinPendingWrite() bool {
-	if i.pendingWrite == nil || i.pendingWriteGeneration != theCommandQueueManager.generation {
-		return false
-	}
-	if len(i.touched) > maxTouchedRegions {
+	if !i.hasPendingWrite() {
 		return false
 	}
 	for _, arg := range i.bufferedWritePixelsArgs {
-		for _, r := range i.touched {
-			if arg.region.Overlaps(r) {
-				return false
-			}
+		if i.touched.overlaps(arg.region) {
+			return false
 		}
 	}
 	return true
@@ -198,10 +213,7 @@ func (i *Image) canJoinPendingWrite() bool {
 // write could otherwise join the pending write-pixels command before it. An empty region stands
 // for the whole image.
 func (i *Image) touch(region image.Rectangle) {
-	if i.pendingWrite == nil || i.pendingWriteGeneration != theCommandQueueManager.generation {
-		return
-	}
-	if len(i.touched) > maxTouchedRegions {
+	if !i.hasPendingWrite() {
 		return
 	}
 	if region.Empty() {
@@ -211,13 +223,13 @@ func (i *Image) touch(region image.Rectangle) {
 		// Filtering may read a pixel past the region's edges.
 		region = region.Inset(-1)
 	}
-	i.touched = append(i.touched, region)
+	i.touched.add(region)
 }
 
 func (i *Image) Dispose() {
 	i.bufferedWritePixelsArgs = nil
 	i.pendingWrite = nil
-	i.touched = nil
+	i.touched = touchedSet{}
 	c := &disposeImageCommand{
 		target: i,
 	}
@@ -303,20 +315,7 @@ func (i *Image) WritePixels(pixels *graphics.ManagedBytes, region image.Rectangl
 	// Release the previous pixels if the region is included by the new region.
 	// Successive WritePixels calls might accumulate the pixels and never release,
 	// especially when the image is unmanaged (#3036).
-	var cur int
-	for idx := 0; idx < len(i.bufferedWritePixelsArgs); idx++ {
-		arg := i.bufferedWritePixelsArgs[idx]
-		if arg.region.In(region) {
-			arg.pixels.Release()
-			continue
-		}
-		i.bufferedWritePixelsArgs[cur] = arg
-		cur++
-	}
-	for idx := cur; idx < len(i.bufferedWritePixelsArgs); idx++ {
-		i.bufferedWritePixelsArgs[idx] = writePixelsCommandArgs{}
-	}
-	i.bufferedWritePixelsArgs = append(i.bufferedWritePixelsArgs[:cur], writePixelsCommandArgs{
+	i.bufferedWritePixelsArgs = appendReplacing(i.bufferedWritePixelsArgs, &i.bufferedBounds, writePixelsCommandArgs{
 		pixels: pixels,
 		region: region,
 	})

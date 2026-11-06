@@ -62,8 +62,8 @@ type commandQueue struct {
 	vertices []float32
 	indices  []uint32
 
-	// verticesUse and indicesUse track how many vertices and indices recent flushes held, so
-	// that the slices give back the room a large flush took.
+	// verticesUse and indicesUse track how many vertices and indices the flushes of recent frames
+	// held, so that the slices give back the room a large flush took.
 	verticesUse recent.Peak
 	indicesUse  recent.Peak
 
@@ -78,7 +78,6 @@ type commandQueue struct {
 	tmpPixelsArgs []graphicsdriver.PixelsArgs
 
 	uint32sBuffer uint32sBuffer
-	finalizers    []func()
 
 	// flushDriver, flushMode, flushSync and flushLogger are the arguments of the flush in
 	// progress, flushErr its error when it is synchronous, and runFlushFunc q.runFlush, bound once.
@@ -90,12 +89,6 @@ type commandQueue struct {
 	runFlushFunc func()
 
 	err atomic.Value
-}
-
-// addFinalizer adds a finalizer function to this queue.
-// A finalizer is executed when the command queue is flushed at the end of the frame.
-func (q *commandQueue) addFinalizer(f func()) {
-	q.finalizers = append(q.finalizers, f)
 }
 
 func (q *commandQueue) appendIndices(indices []uint32, offset uint32) {
@@ -294,21 +287,13 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 
 		if mode != graphicsdriver.FlushModeIntermediate {
 			q.uint32sBuffer.reset()
-			for i, f := range q.finalizers {
-				f()
-				q.finalizers[i] = nil
-			}
-			q.finalizers = q.finalizers[:0]
 			for i, bs := range q.uploadedBytes {
 				graphics.PutBytes(bs)
 				q.uploadedBytes[i] = nil
 			}
-			if cap(q.uploadedBytes) > 4*maxKeptWrites {
-				q.uploadedBytes = nil
-			} else {
-				q.uploadedBytes = q.uploadedBytes[:0]
-			}
-			// The finalizers gave the frame's upload bytes back.
+			// The slice holds the bytes of all the frame's writes, which span several commands.
+			q.uploadedBytes = keepSmall(q.uploadedBytes, 4*maxKeptWrites)
+			// The frame's upload bytes are back in the pool.
 			graphics.AdvanceBytesPoolFrame()
 		}
 	}()
@@ -552,18 +537,10 @@ type uint32sBuffer struct {
 	use recent.Peak
 }
 
-func roundUpPower2(x int) int {
-	p2 := 1
-	for p2 < x {
-		p2 *= 2
-	}
-	return p2
-}
-
 func (b *uint32sBuffer) alloc(n int) []uint32 {
 	buf := b.buf
 	if len(buf)+n > cap(buf) {
-		buf = make([]uint32, 0, max(roundUpPower2(len(buf)+n), 16))
+		buf = make([]uint32, 0, max(recent.NextPowerOf2(len(buf)+n), 16))
 	}
 	s := buf[len(buf) : len(buf)+n]
 	b.buf = buf[:len(buf)+n]
@@ -584,7 +561,7 @@ func (b *uint32sBuffer) free(s []uint32) {
 
 // reset frees all the allocated slices; it must be called only when none of them is used any more.
 func (b *uint32sBuffer) reset() {
-	b.use.Add(b.used)
+	b.use.ObserveNow(b.used)
 	b.used = 0
 	limit := max(b.use.Max(), minRetainedElements)
 	if cap(b.buf) > recent.ShrinkFactor*limit {
@@ -606,7 +583,7 @@ const minRetainedElements = 4096
 // than recent uses needed, the returned slice is a smaller one. Slices of s may still be held
 // elsewhere; they keep the old array alive by themselves.
 func shrinkToRecentUse[T any](s []T, use *recent.Peak) []T {
-	use.Add(len(s))
+	use.ObserveNow(len(s))
 	limit := max(use.Max(), minRetainedElements)
 	if cap(s) > recent.ShrinkFactor*limit {
 		return make([]T, 0, retainedFor(limit))

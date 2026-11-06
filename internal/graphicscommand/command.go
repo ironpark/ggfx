@@ -241,6 +241,8 @@ func dstRegionFromVertices(vertices []float32) (minX, minY, maxX, maxY float32) 
 type writePixelsCommand struct {
 	dst  *Image
 	args []writePixelsCommandArgs
+	// bounds is the union of the regions of args, or more (see appendReplacing).
+	bounds image.Rectangle
 }
 
 type writePixelsCommandArgs struct {
@@ -274,7 +276,7 @@ func (c *writePixelsCommand) Exec(commandQueue *commandQueue, graphicsDriver gra
 	}
 	err := c.dst.image.WritePixels(args)
 	clear(args)
-	commandQueue.tmpPixelsArgs = keepSmall(args)
+	commandQueue.tmpPixelsArgs = keepSmall(args, maxKeptWrites)
 	return err
 }
 
@@ -282,9 +284,9 @@ func (c *writePixelsCommand) Exec(commandQueue *commandQueue, graphicsDriver gra
 // rare burst of writes, is dropped rather than kept for good.
 const maxKeptWrites = 512
 
-// keepSmall returns s emptied, or nil if it has more room than maxKeptWrites.
-func keepSmall[T any](s []T) []T {
-	if cap(s) > maxKeptWrites {
+// keepSmall returns s emptied, or nil if it has room for more than limit elements.
+func keepSmall[T any](s []T, limit int) []T {
+	if cap(s) > limit {
 		return nil
 	}
 	return s[:0]
@@ -307,8 +309,9 @@ func (p *writePixelsCommandPool) get() *writePixelsCommand {
 
 func (p *writePixelsCommandPool) put(c *writePixelsCommand) {
 	c.dst = nil
+	c.bounds = image.Rectangle{}
 	clear(c.args)
-	c.args = keepSmall(c.args)
+	c.args = keepSmall(c.args, maxKeptWrites)
 	p.pool = append(p.pool, c)
 }
 

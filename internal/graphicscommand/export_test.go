@@ -38,16 +38,18 @@ func (q *commandQueue) FlushForTesting(driver graphicsdriver.Graphics, mode grap
 	return q.flush(driver, mode, debug.SwitchFrameLogger())
 }
 
-func (q *commandQueue) AddFinalizerForTesting(f func()) {
-	q.addFinalizer(f)
+// AddUploadedBytesForTesting adds bytes as a write-pixels command uploads them, to be given back
+// at the end of the frame.
+func (q *commandQueue) AddUploadedBytesForTesting(bs []byte) {
+	q.uploadedBytes = append(q.uploadedBytes, bs)
 }
 
 func (q *commandQueue) AllocUniformsForTesting(n int) {
 	q.uint32sBuffer.alloc(n)
 }
 
-func (q *commandQueue) PendingResourcesForTesting() (uniforms, finalizers int) {
-	return q.uint32sBuffer.used, len(q.finalizers)
+func (q *commandQueue) PendingResourcesForTesting() (uniforms, uploadedBytes int) {
+	return q.uint32sBuffer.used, len(q.uploadedBytes)
 }
 
 // PoolForTesting puts a command that drew an image over regions clip

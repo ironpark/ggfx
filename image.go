@@ -31,6 +31,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/pool"
+	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/internal/scratch"
 )
@@ -914,7 +915,7 @@ func (i *Image) SubImage(r image.Rectangle) image.Image {
 		i.subImageGCLastTick = tick
 
 		for _, img := range i.subImageCache {
-			if img.atime.Load()+60 < tick {
+			if img.atime.Load()+recent.Window < tick {
 				delete(i.subImageCache, img.bounds)
 			}
 		}

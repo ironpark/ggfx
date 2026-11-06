@@ -72,11 +72,13 @@ func TestMipmapLevelsDropped(t *testing.T) {
 	}
 
 	// They go once no draw uses them for a while.
-	for range recent.Window + 2 {
+	// They may go a window after their last draw, and are looked at every quarter window.
+	const idle = recent.Window + recent.Window/4 + 2
+	for range idle {
 		frame(t, func() {})
 	}
 	if got := atlasImages(); got != base {
-		t.Errorf("images after %d idle frames: got %d, want %d", recent.Window+2, got, base)
+		t.Errorf("images after %d idle frames: got %d, want %d", idle, got, base)
 	}
 
 	// A draw needs them again: they are made from the image's current pixels.

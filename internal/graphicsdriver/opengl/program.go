@@ -18,11 +18,11 @@ package opengl
 
 import (
 	"fmt"
-	"math"
 	"runtime"
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
 	"github.com/ironpark/ggfx/internal/recent"
 )
@@ -142,8 +142,8 @@ type openGLState struct {
 
 	elementArrayBufferSizeInBytes int
 
-	// arrayBufferUse and elementArrayBufferUse track the bytes recent batches sent, so that the
-	// buffers give back the room a large batch took.
+	// arrayBufferUse and elementArrayBufferUse track the bytes the batches of recent frames sent,
+	// so that the buffers give back the room a large batch took.
 	arrayBufferUse        recent.Peak
 	elementArrayBufferUse recent.Peak
 
@@ -193,21 +193,6 @@ func (s *openGLState) reset(context *context) error {
 	return nil
 }
 
-func pow2(x int) int {
-	if x > (math.MaxInt+1)/2 {
-		return math.MaxInt
-	}
-
-	p2 := 1
-	for p2 < x {
-		p2 *= 2
-	}
-	return p2
-}
-
-// minVertexBufferBytes is the room the vertex and the index buffer may always keep.
-const minVertexBufferBytes = 64 << 10
-
 // orphanVertexBuffers reports whether the vertex and the index buffer are orphaned, given new
 // storage of the same size, before they are written. Writing a buffer the GPU may still read from
 // a previous draw otherwise waits for that draw. WebGL has no such wait to avoid, and would clear
@@ -221,7 +206,7 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 	context.ctx.BindVertexArray(s.vertexArray)
 
 	size := len(vertices) * int(unsafe.Sizeof(vertices[0]))
-	if c := s.arrayBufferUse.Capacity(s.arrayBufferSizeInBytes, size, minVertexBufferBytes); s.arrayBuffer == 0 || c != s.arrayBufferSizeInBytes {
+	if c := s.arrayBufferUse.Capacity(s.arrayBufferSizeInBytes, size, graphicsdriver.MinVertexBufferBytes); s.arrayBuffer == 0 || c != s.arrayBufferSizeInBytes {
 		if s.arrayBuffer != 0 {
 			context.ctx.DeleteBuffer(uint32(s.arrayBuffer))
 		}
@@ -237,7 +222,7 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 	}
 
 	size = len(indices) * int(unsafe.Sizeof(indices[0]))
-	if c := s.elementArrayBufferUse.Capacity(s.elementArrayBufferSizeInBytes, size, minVertexBufferBytes); s.elementArrayBuffer == 0 || c != s.elementArrayBufferSizeInBytes {
+	if c := s.elementArrayBufferUse.Capacity(s.elementArrayBufferSizeInBytes, size, graphicsdriver.MinVertexBufferBytes); s.elementArrayBuffer == 0 || c != s.elementArrayBufferSizeInBytes {
 		if s.elementArrayBuffer != 0 {
 			context.ctx.DeleteBuffer(uint32(s.elementArrayBuffer))
 		}
@@ -276,7 +261,7 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
 			if s.uniformBuffers[i] != 0 {
 				context.ctx.DeleteBuffer(uint32(s.uniformBuffers[i]))
 			}
-			newSize := pow2(size)
+			newSize := recent.NextPowerOf2(size)
 			s.uniformBuffers[i] = context.newUniformBuffer(newSize)
 			s.uniformBufferSizesInBytes[i] = newSize
 			s.lastUniforms[i] = s.lastUniforms[i][:0]

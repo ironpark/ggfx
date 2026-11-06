@@ -29,6 +29,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/packing"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 var (
@@ -878,24 +879,10 @@ loop:
 		}
 	}
 
-	var width, height int
-	if asSource {
-		width, height = minSourceSize, minSourceSize
-	} else {
-		width, height = minDestinationSize, minDestinationSize
-	}
 	// The page keeps its first column and row empty, so the image and its padding must fit.
-	for wp > width {
-		if width == maxSize {
-			panic(fmt.Sprintf("atlas: the image being put on an atlas is too big: width: %d, height: %d", i.width, i.height))
-		}
-		width *= 2
-	}
-	for hp > height {
-		if height == maxSize {
-			panic(fmt.Sprintf("atlas: the image being put on an atlas is too big: width: %d, height: %d", i.width, i.height))
-		}
-		height *= 2
+	width, height, ok := initialPageSize(asSource, wp, hp)
+	if !ok {
+		panic(fmt.Sprintf("atlas: the image being put on an atlas is too big: width: %d, height: %d", i.width, i.height))
 	}
 
 	// Only a regular image can be put on an atlas, so every image on this page has the same padding.
@@ -1112,8 +1099,7 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 	flushDeferred()
 	putImagesOnSourceBackend()
 
-	frameCount++
-	compactPages(frameCount)
+	compactPages(recent.Now())
 
 	return nil
 }

@@ -39,9 +39,6 @@ const (
 	compactShrinkDivisor = 2
 )
 
-// frameCount counts the frames begun, the clock pages are compacted by.
-var frameCount int64
-
 // addImage records that i was put on the page b.
 func (b *backend) addImage(i *imageImpl) {
 	i.pageIndex = len(b.images)
@@ -73,12 +70,32 @@ func (b *backend) replaceImage(i, new *imageImpl) {
 	}
 }
 
-// minPageSize returns the width and height a page like b starts at.
-func (b *backend) minPageSize() int {
-	if b.source {
+// minPageSize returns the width and height a source or a destination page starts at.
+func minPageSize(source bool) int {
+	if source {
 		return minSourceSize
 	}
 	return minDestinationSize
+}
+
+// initialPageSize returns the size a new page starts at to hold an image of w x h pixels, its
+// padding included: the minimum size, doubled until the image fits. It reports false if the image
+// does not fit a page of maxSize.
+func initialPageSize(source bool, w, h int) (width, height int, ok bool) {
+	width, height = minPageSize(source), minPageSize(source)
+	for w > width {
+		if width >= maxSize {
+			return 0, 0, false
+		}
+		width *= 2
+	}
+	for h > height {
+		if height >= maxSize {
+			return 0, 0, false
+		}
+		height *= 2
+	}
+	return width, height, true
 }
 
 // compactPages compacts the pages that have been mostly empty since recent.Window frames before
@@ -90,7 +107,7 @@ func compactPages(now int64) {
 			continue
 		}
 		area := int64(b.width) * int64(b.height)
-		minSize := int64(b.minPageSize())
+		minSize := int64(minPageSize(b.source))
 		if b.usedArea*compactUsageDivisor >= area || area <= minSize*minSize {
 			b.lowSince = 0
 			continue
@@ -109,8 +126,8 @@ func compactPages(now int64) {
 }
 
 // compact packs b's images anew on a page of their own size, if that is at most
-// 1/compactShrinkDivisor of b's, and copies them there.
-func (b *backend) compact() bool {
+// 1/compactShrinkDivisor of b's, and copies them there; otherwise it leaves b as it is.
+func (b *backend) compact() {
 	imgs := slices.Clone(b.images)
 	// Pack the tallest first, then the widest; break ties by the places on the old page, so that
 	// the order does not depend on the order the images came in.
@@ -125,15 +142,14 @@ func (b *backend) compact() bool {
 	})
 
 	// Start as allocate does for the first image, at the minimum size grown to fit the largest.
-	width, height := b.minPageSize(), b.minPageSize()
+	var maxW, maxH int
 	for _, i := range imgs {
 		r := i.node.Region()
-		for r.Dx() > width && width < maxSize {
-			width *= 2
-		}
-		for r.Dy() > height && height < maxSize {
-			height *= 2
-		}
+		maxW, maxH = max(maxW, r.Dx()), max(maxH, r.Dy())
+	}
+	width, height, ok := initialPageSize(b.source, maxW, maxH)
+	if !ok {
+		return
 	}
 	// The new page has the old one's overhang: the padding of the images on it.
 	page := packing.NewPage(width, height, maxSize, b.page.Overhang())
@@ -142,13 +158,13 @@ func (b *backend) compact() bool {
 		r := i.node.Region()
 		n := page.Alloc(r.Dx(), r.Dy())
 		if n == nil {
-			return false
+			return
 		}
 		nodes[k] = n
 	}
 	newW, newH := page.Size()
 	if int64(newW)*int64(newH)*compactShrinkDivisor > int64(b.width)*int64(b.height) {
-		return false
+		return
 	}
 
 	newImg := graphicscommand.NewImageWithFormat(newW, newH, b.format, "")
@@ -185,5 +201,4 @@ func (b *backend) compact() bool {
 		i.node = nodes[k]
 	}
 	// The images keep their places in b.images, which imgs is a sorted copy of.
-	return true
 }

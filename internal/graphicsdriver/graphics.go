@@ -184,3 +184,7 @@ type Shader interface {
 }
 
 type ShaderID int
+
+// MinVertexBufferBytes is the room a driver's vertex or index buffer may always keep, however
+// little recent frames needed.
+const MinVertexBufferBytes = 64 << 10

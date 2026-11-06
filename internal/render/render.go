@@ -27,7 +27,7 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/mipmap"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 var (
@@ -48,7 +48,6 @@ var (
 	renderThreadDone chan struct{}
 
 	theErr atomic.Pointer[error]
-	tick   atomic.Int64
 
 	// funcsInFrameCh carries functions that must run inside a frame, like reading pixels.
 	funcsInFrameCh = make(chan func())
@@ -196,9 +195,10 @@ func Occluded() bool {
 }
 
 // Flush runs the graphics commands queued in the frames since the last flush, and presents every
-// surface whose screen was drawn to when present is set. It advances the tick.
+// surface whose screen was drawn to when present is set. It ends a frame: it advances the frame
+// clock, recent.Now.
 func Flush(present bool) error {
-	mipmap.SetTick(tick.Add(1))
+	recent.Advance()
 	dropUnusedMipmapLevels()
 	return atlas.FlushCommands(driver, present)
 }
@@ -230,10 +230,10 @@ func setError(e error) {
 	}
 }
 
-// Tick returns the number of flushes: the clock that the image GC and the glyph caches expire
-// against.
+// Tick returns the frame clock, recent.Now: the clock that the image GC, the glyph caches and every
+// buffer that gives back unused room age by.
 func Tick() int64 {
-	return tick.Load()
+	return recent.Now()
 }
 
 // BeginFrame begins a frame. Screens are drawn between BeginFrame and EndFrame, which is called

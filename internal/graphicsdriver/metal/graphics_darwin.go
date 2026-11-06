@@ -17,7 +17,6 @@ package metal
 import (
 	"fmt"
 	"image"
-	"math"
 	"slices"
 	"sync"
 	"unsafe"
@@ -30,6 +29,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
+	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/shader"
 )
 
@@ -408,18 +408,6 @@ func (g *Graphics) SetMainThreadRunner(f func(func())) {
 	}
 }
 
-func pow2(x uintptr) uintptr {
-	if x > (math.MaxUint+1)/2 {
-		return math.MaxUint
-	}
-
-	var p2 uintptr = 1
-	for p2 < x {
-		p2 *= 2
-	}
-	return p2
-}
-
 // frameResources are a frame's command buffers and the buffers its commands use.
 type frameResources struct {
 	frame   int64
@@ -513,7 +501,7 @@ func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
 
 	newBuf, ok := g.unusedBuffers.get(length)
 	if !ok {
-		newBuf = g.device.NewBufferWithLength(pow2(length), resourceStorageMode)
+		newBuf = g.device.NewBufferWithLength(recent.NextPowerOf2(length), resourceStorageMode)
 	}
 
 	r := g.currentFrameResources()

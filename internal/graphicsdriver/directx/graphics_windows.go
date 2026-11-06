@@ -33,9 +33,6 @@ import (
 
 const frameCount = 2
 
-// minVertexBufferBytes is the room a vertex or an index buffer may always keep.
-const minVertexBufferBytes = 64 << 10
-
 func parseFeatureLevel(str string) (_D3D_FEATURE_LEVEL, bool) {
 	switch str {
 	case "11_0":

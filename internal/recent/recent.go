@@ -13,8 +13,25 @@
 // limitations under the License.
 
 // Package recent tracks the most a reused buffer recently had to hold, so that the buffer can give
-// back the room a rare large use took.
+// back the room a rare large use took. It also keeps the frame clock that it, and whatever else
+// ages by frames, counts time in.
 package recent
+
+import "sync/atomic"
+
+// now is the frame clock.
+var now atomic.Int64
+
+// Now returns the frame clock: how many frames have ended. It can be called from any goroutine.
+func Now() int64 {
+	return now.Load()
+}
+
+// Advance tells the clock that a frame ended, and returns the new time. Only the frame loop calls
+// it, once a frame.
+func Advance() int64 {
+	return now.Add(1)
+}
 
 const (
 	// Window is how many ticks a Peak covers at least; it covers up to twice as many.
@@ -26,8 +43,8 @@ const (
 	ShrinkFactor = 2
 )
 
-// Peak tracks the largest value observed over the last Window to 2*Window ticks, in a clock of its
-// own (Add) or one it is told the time of (AdvanceTo).
+// Peak tracks the largest value observed over the last Window to 2*Window ticks, in the frame clock
+// (ObserveNow) or a clock it is told the time of (AdvanceTo).
 type Peak struct {
 	current  int
 	previous int
@@ -58,10 +75,13 @@ func (p *Peak) AdvanceTo(now int64) {
 	p.start = now - d%Window
 }
 
-// Add records n, and then that one tick went by.
-func (p *Peak) Add(n int) {
+// ObserveNow records n at the frame clock's time: values are recorded as often as they come, and
+// age by frames.
+func (p *Peak) ObserveNow(n int) {
+	if t := Now(); t > p.now {
+		p.AdvanceTo(t)
+	}
 	p.Observe(n)
-	p.AdvanceTo(p.now + 1)
 }
 
 // Max reports the largest value observed over the last Window to 2*Window ticks.
@@ -69,20 +89,29 @@ func (p *Peak) Max() int {
 	return max(p.current, p.previous)
 }
 
-// Capacity records n, the size a reused buffer must hold now, as one tick of p's own clock, and
+// Capacity records n, the size a reused buffer must hold now, at the frame clock's time, and
 // returns the capacity the buffer should have. It is capacity itself while that holds n and is no
 // more than ShrinkFactor times the recent peak, or minimum if larger; otherwise it is the power of
 // two that holds the recent peak, so a buffer grown for a rare large use gives its room back once
 // the use is out of the window.
 func (p *Peak) Capacity(capacity, n, minimum int) int {
-	p.Add(n)
+	p.ObserveNow(n)
 	limit := max(p.Max(), minimum)
 	if capacity >= n && capacity <= ShrinkFactor*limit {
 		return capacity
 	}
-	c := 1
-	for c < limit {
-		c *= 2
+	return NextPowerOf2(limit)
+}
+
+// NextPowerOf2 returns the least power of two that is x or more, or x itself if no power of two of
+// its type is.
+func NextPowerOf2[T ~int | ~uintptr](x T) T {
+	p := T(1)
+	for p < x {
+		if p<<1 <= p {
+			return x
+		}
+		p <<= 1
 	}
-	return c
+	return p
 }

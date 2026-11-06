@@ -27,13 +27,13 @@ func TestBytesPoolBestFit(t *testing.T) {
 	p.put(make([]byte, 1024))
 
 	// A small request takes neither the 1 MiB nor the 4 KiB array, too large for it.
-	if bs := p.getFromCache(140); bs != nil {
+	if bs := cached(&p, 140); bs != nil {
 		t.Errorf("getFromCache(140): got an array of cap %d, want none", cap(bs))
 	}
-	if bs := p.getFromCache(300); cap(bs) != 1024 {
+	if bs := cached(&p, 300); cap(bs) != 1024 {
 		t.Errorf("getFromCache(300): got cap %d, want 1024", cap(bs))
 	}
-	if bs := p.getFromCache(3000); cap(bs) != 4096 {
+	if bs := cached(&p, 3000); cap(bs) != 4096 {
 		t.Errorf("getFromCache(3000): got cap %d, want 4096", cap(bs))
 	}
 	if got, want := p.total, 1<<20; got != want {
@@ -71,12 +71,12 @@ func TestBytesPoolAgesOut(t *testing.T) {
 	if p.total == 0 {
 		t.Fatalf("the array was not kept")
 	}
-	p.advanceFrame()
+	advanceFrame(&p)
 	if p.total == 0 {
 		t.Fatalf("the array was given back in the frame that used it")
 	}
 	for range 2 * recent.Window {
-		p.advanceFrame()
+		advanceFrame(&p)
 	}
 	if p.total != 0 {
 		t.Errorf("total after %d idle frames: got %d, want 0", 2*recent.Window, p.total)
@@ -95,9 +95,9 @@ func TestBytesPoolManySmall(t *testing.T) {
 	for _, b := range bs {
 		p.put(b)
 	}
-	p.advanceFrame()
+	advanceFrame(&p)
 	for k := range n {
-		if got := p.getFromCache(sizes(k)); got == nil {
+		if got := cached(&p, sizes(k)); got == nil {
 			t.Fatalf("upload %d of %d bytes: no array in the pool", k, sizes(k))
 		}
 	}
@@ -113,12 +113,24 @@ func TestBytesPoolTrimsOldest(t *testing.T) {
 	for range 3 * recent.Window {
 		bs := p.get(5000).Take()
 		p.put(bs)
-		p.advanceFrame()
+		advanceFrame(&p)
 	}
-	if got := p.getFromCache(5000); got == nil {
+	if got := cached(&p, 5000); got == nil {
 		t.Errorf("the array given back every frame was dropped")
 	}
 	if p.count != 0 {
 		t.Errorf("arrays left: got %d, want 0", p.count)
 	}
+}
+
+// advanceFrame ends a frame for p, as the frame loop and the command queue do.
+func advanceFrame(p *bytesPool) {
+	recent.Advance()
+	p.advanceFrame()
+}
+
+// cached returns what p.getFromCache returns from its pool.
+func cached(p *bytesPool, size int) []byte {
+	bs, _ := p.getFromCache(size)
+	return bs
 }

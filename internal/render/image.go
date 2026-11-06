@@ -27,6 +27,7 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/mipmap"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 // panicOnErrorOnReadingPixels indicates whether reading pixels panics on an error or not.
@@ -80,7 +81,13 @@ type levelsRegistry struct {
 	imgs map[weak.Pointer[Image]]struct{}
 	// tmp is the scratch dropUnusedMipmapLevels copies imgs to.
 	tmp []weak.Pointer[Image]
+	// lastSweep is the frame dropUnusedMipmapLevels last looked at the images.
+	lastSweep int64
 }
+
+// levelsSweepInterval is how many frames apart dropUnusedMipmapLevels looks at the images. A level
+// goes recent.Window to recent.Window+levelsSweepInterval frames after its last draw.
+const levelsSweepInterval = recent.Window / 4
 
 var theLevelsRegistry levelsRegistry
 
@@ -100,37 +107,45 @@ func (i *Image) registerLevels() {
 }
 
 // dropUnusedMipmapLevels drops the mipmap levels not drawn from for a while, of every image that
-// holds some. No image's mutex may be held.
+// holds some. It looks at the images only every levelsSweepInterval frames, as no level can expire
+// sooner. No image's mutex may be held.
 func dropUnusedMipmapLevels() {
 	r := &theLevelsRegistry
+	now := recent.Now()
 	r.m.Lock()
+	if now-r.lastSweep < levelsSweepInterval || len(r.imgs) == 0 {
+		r.m.Unlock()
+		return
+	}
+	r.lastSweep = now
 	ps := r.tmp[:0]
 	for p := range r.imgs {
 		ps = append(ps, p)
 	}
 	r.m.Unlock()
 
-	for _, p := range ps {
-		img := p.Value()
-		keep := false
-		if img != nil {
+	// Keep the images that still hold levels at the front of ps, and the others after.
+	kept := 0
+	for k, p := range ps {
+		if img := p.Value(); img != nil {
 			img.mu.Lock()
-			if img.mipmap != nil && img.mipmap.DropUnusedLevels() {
-				keep = true
-			} else {
+			keep := img.mipmap != nil && img.mipmap.DropUnusedLevels()
+			if !keep {
 				img.inLevelsRegistry = false
 			}
 			img.mu.Unlock()
-		}
-		if !keep {
-			r.m.Lock()
-			delete(r.imgs, p)
-			r.m.Unlock()
+			if keep {
+				ps[kept], ps[k] = ps[k], ps[kept]
+				kept++
+			}
 		}
 	}
 
-	clear(ps)
 	r.m.Lock()
+	for _, p := range ps[kept:] {
+		delete(r.imgs, p)
+	}
+	clear(ps)
 	r.tmp = ps[:0]
 	r.m.Unlock()
 }

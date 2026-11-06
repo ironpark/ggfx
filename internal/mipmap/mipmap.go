@@ -19,7 +19,6 @@ import (
 	"image"
 	"math"
 	"sync"
-	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/buffered"
@@ -56,14 +55,6 @@ type imageWithDirtyFlag struct {
 	used int64
 }
 
-// now is the tick levels are aged by, the frames render counts (see SetTick).
-var now atomic.Int64
-
-// SetTick sets the tick levels are aged by. It must not go back.
-func SetTick(tick int64) {
-	now.Store(tick)
-}
-
 // maxUnusedLevelTicks is how many ticks a level may go undrawn from before DropUnusedLevels drops it.
 const maxUnusedLevelTicks = recent.Window
 
@@ -75,7 +66,7 @@ func (m *Mipmap) HasLevels() bool {
 // DropUnusedLevels deallocates the levels not drawn from for maxUnusedLevelTicks ticks, and reports
 // whether any level is left. A level drawn again later is made again.
 func (m *Mipmap) DropUnusedLevels() bool {
-	t := now.Load()
+	t := recent.Now()
 	for level, img := range m.imgs {
 		if t-img.used <= maxUnusedLevelTicks {
 			continue
@@ -220,7 +211,7 @@ func (m *Mipmap) setImg(level int, img *buffered.Image) {
 	m.imgs[level] = imageWithDirtyFlag{
 		img:   img,
 		dirty: false,
-		used:  now.Load(),
+		used:  recent.Now(),
 	}
 }
 
@@ -235,7 +226,7 @@ func (m *Mipmap) level(level int) *buffered.Image {
 
 	img, ok := m.imgs[level]
 	if ok && !img.dirty {
-		img.used = now.Load()
+		img.used = recent.Now()
 		m.imgs[level] = img
 		return img.img
 	}
