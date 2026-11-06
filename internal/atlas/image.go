@@ -133,6 +133,13 @@ type backend struct {
 
 	// restoreInfo is information for restoration from a context loss.
 	restoreInfo restoreInfo
+
+	// images are the images on the page, and usedArea the pixels their nodes cover, for a page.
+	images   []*imageImpl
+	usedArea int64
+
+	// lowSince is the frame since which the page has been mostly empty, or 0 (see compactPages).
+	lowSince int64
 }
 
 type restoreInfo struct {
@@ -255,6 +262,9 @@ type imageImpl struct {
 
 	node *packing.Node
 
+	// pageIndex is the image's index in its page's images, while it is on a page.
+	pageIndex int
+
 	// usedAsSourceCount represents how long the image is used as a rendering source and kept not modified with
 	// DrawTriangles.
 	// In the current implementation, if an image is being modified by DrawTriangles, the image is separated from
@@ -285,6 +295,9 @@ func (i *Image) moveTo(dst *Image) {
 
 	impl := *i.imageImpl
 	dst.imageImpl = &impl
+	if impl.backend != nil && impl.node != nil {
+		impl.backend.replaceImage(i.imageImpl, &impl)
+	}
 	if dst.backend != nil {
 		dst.cleanup = runtime.AddCleanup(dst, (*imageImpl).cleanup, dst.imageImpl)
 	}
@@ -688,6 +701,7 @@ func (i *imageImpl) deallocateImpl() {
 	}
 
 	if i.isOnAtlas() {
+		i.backend.removeImage(i)
 		i.backend.page.Free(i.node)
 		if !i.backend.page.IsEmpty() {
 			// As this part can be reused, this should be cleared explicitly.
@@ -859,6 +873,7 @@ loop:
 		if n, ok := b.tryAlloc(wp, hp); ok {
 			i.backend = b
 			i.node = n
+			b.addImage(i.imageImpl)
 			return
 		}
 	}
@@ -902,6 +917,7 @@ loop:
 	}
 	i.backend = b
 	i.node = n
+	b.addImage(i.imageImpl)
 }
 
 func (i *Image) DumpScreenshot(graphicsDriver graphicsdriver.Graphics, path string, blackbg bool) (string, error) {
@@ -1095,6 +1111,9 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 
 	flushDeferred()
 	putImagesOnSourceBackend()
+
+	frameCount++
+	compactPages(frameCount)
 
 	return nil
 }

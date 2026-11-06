@@ -134,3 +134,22 @@ func (i *Image) SharesBackendForTesting(j *Image) bool {
 	defer backendsM.Unlock()
 	return i.backend != nil && i.backend == j.backend
 }
+
+// CompactPagesForTesting runs the page compaction as the frame now would begin.
+func CompactPagesForTesting(now int64) {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	compactPages(now)
+}
+
+// BackendUsedAreaForTesting returns the pixels the images on i's page cover, as the page tracks
+// them, and as the page's nodes cover them.
+func (i *Image) BackendUsedAreaForTesting() (tracked, nodes int64) {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	if i.backend == nil || i.backend.page == nil {
+		return 0, 0
+	}
+	nodes, _ = i.backend.page.UsedArea()
+	return i.backend.usedArea, nodes
+}

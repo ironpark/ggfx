@@ -67,6 +67,9 @@ func NewPage(initWidth, initHeight int, maxSize int, overhang int) *Page {
 // the first node.
 func (p *Page) inset() int { return p.overhang }
 
+// Overhang returns how far a node can stick out of the page, as NewPage was given.
+func (p *Page) Overhang() int { return p.overhang }
+
 // allocatableSize returns the size of the region where nodes can be allocated.
 func (p *Page) allocatableSize() (int, int) {
 	return p.width + p.overhang, p.height + p.overhang
