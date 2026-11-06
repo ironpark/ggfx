@@ -18,6 +18,9 @@ import (
 	"fmt"
 	"image"
 	"strings"
+
+	"github.com/ironpark/ggfx/internal/recent"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 type Point struct {
@@ -117,7 +120,7 @@ type AtlasRegion struct {
 // A path without a region has a zero AtlasRegion.
 func AtlasRegions(dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) []AtlasRegion {
 	var a atlas
-	a.setPaths(dstBounds, paths, bounds, antialias)
+	a.setPaths(0, dstBounds, paths, bounds, antialias)
 	defer a.dispose()
 	regions := make([]AtlasRegion, len(paths))
 	for i := range paths {
@@ -149,31 +152,41 @@ func AtlasRegions(dstBounds image.Rectangle, paths []*Path, bounds []image.Recta
 // PathRenderingBounds returns the bounds in which a path is rendered, as the atlas computes them.
 func PathRenderingBounds(dstBounds image.Rectangle, path *Path, bounds image.Rectangle) image.Rectangle {
 	var a atlas
-	a.setPaths(dstBounds, []*Path{path}, []image.Rectangle{bounds}, false)
+	a.setPaths(0, dstBounds, []*Path{path}, []image.Rectangle{bounds}, false)
 	defer a.dispose()
 	return a.pathRenderingBounds[0]
 }
 
-// AtlasRecentWindow is how many flushes a stencil atlas's recent peak covers at least.
-const AtlasRecentWindow = atlasRecentWindow
+// AtlasRecentWindow is how many frames a stencil atlas's recent peak covers at least.
+const AtlasRecentWindow = recent.Window
 
-// StencilAtlas is a stencil atlas with its own clock, in flushes, that the test advances.
+// StencilAtlas is a stencil atlas with its own clock, in frames, that the test advances.
 type StencilAtlas struct {
 	a   atlas
 	now int64
 }
 
 func NewStencilAtlas() *StencilAtlas {
-	s := &StencilAtlas{}
-	s.a.clock = func() int64 { return s.now }
-	return s
+	return &StencilAtlas{}
 }
 
-// Advance makes n flushes go by.
+// Advance makes n frames go by.
 func (s *StencilAtlas) Advance(n int64) { s.now += n }
 
 func (s *StencilAtlas) SetPaths(dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) {
-	s.a.setPaths(dstBounds, paths, bounds, antialias)
+	s.a.setPaths(s.now, dstBounds, paths, bounds, antialias)
+}
+
+// NextFrame ends the frame the test runs in and begins another, which advances the shared
+// stencil atlas's clock.
+func NextFrame() error {
+	if err := render.EndFrame(); err != nil {
+		return err
+	}
+	if err := render.Flush(false); err != nil {
+		return err
+	}
+	return render.BeginFrame()
 }
 
 // ImageSizes returns the sizes of the atlas images kept, with a zero size for one not allocated.

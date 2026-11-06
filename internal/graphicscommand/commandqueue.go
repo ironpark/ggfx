@@ -26,6 +26,7 @@ import (
 	"github.com/ironpark/ggfx/internal/debug"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 const (
@@ -63,8 +64,8 @@ type commandQueue struct {
 
 	// verticesUse and indicesUse track how many vertices and indices recent flushes held, so
 	// that the slices give back the room a large flush took.
-	verticesUse recentUse
-	indicesUse  recentUse
+	verticesUse recent.Peak
+	indicesUse  recent.Peak
 
 	tmpNumVertexFloats int
 
@@ -487,7 +488,7 @@ type uint32sBuffer struct {
 	// used is how many uint32s were allocated since the last reset, over all the arrays buf used.
 	used int
 	// use tracks used over recent frames.
-	use recentUse
+	use recent.Peak
 }
 
 func roundUpPower2(x int) int {
@@ -522,10 +523,10 @@ func (b *uint32sBuffer) free(s []uint32) {
 
 // reset frees all the allocated slices; it must be called only when none of them is used any more.
 func (b *uint32sBuffer) reset() {
-	b.use.add(b.used)
+	b.use.Add(b.used)
 	b.used = 0
-	limit := max(b.use.peak(), minRetainedElements)
-	if cap(b.buf) > shrinkFactor*limit {
+	limit := max(b.use.Max(), minRetainedElements)
+	if cap(b.buf) > recent.ShrinkFactor*limit {
 		// Slices still held elsewhere keep the old array alive by themselves.
 		b.buf = make([]uint32, 0, retainedFor(limit))
 		return
@@ -533,51 +534,20 @@ func (b *uint32sBuffer) reset() {
 	b.buf = b.buf[:0]
 }
 
-const (
-	// recentUseWindow is how many observations a recentUse covers at least; it covers up to twice
-	// as many.
-	recentUseWindow = 60
-
-	// shrinkFactor is how many times larger than its recent peak a reused slice may grow before
-	// its room is given back, down to a quarter more than the peak (see retainedFor): a large
-	// slice grows by about a quarter when appended past its room, so a frame as large as the
-	// peak again fits in what is kept, and the queues, two of them, hold their vertices for a
-	// screenful of glyphs at 1.25 times its size rather than up to 4.
-	shrinkFactor = 2
-
-	// minRetainedElements is the room a reused slice may always keep.
-	minRetainedElements = 4096
-)
-
-// recentUse tracks the most a reused slice held over recent flushes or frames.
-type recentUse struct {
-	current  int
-	previous int
-	count    int
-}
-
-// add records that n elements were used.
-func (r *recentUse) add(n int) {
-	r.current = max(r.current, n)
-	r.count++
-	if r.count >= recentUseWindow {
-		r.previous, r.current, r.count = r.current, 0, 0
-	}
-}
-
-// peak reports the most elements used over the last recentUseWindow to 2*recentUseWindow
-// observations.
-func (r *recentUse) peak() int {
-	return max(r.current, r.previous)
-}
+// minRetainedElements is the room a reused slice may always keep. A slice larger than
+// recent.ShrinkFactor times its recent peak gives its room back, down to a quarter more than the
+// peak (see retainedFor): a large slice grows by about a quarter when appended past its room, so
+// a frame as large as the peak again fits in what is kept, and the queues, two of them, hold
+// their vertices for a screenful of glyphs at 1.25 times its size rather than up to 4.
+const minRetainedElements = 4096
 
 // shrinkToRecentUse records the use of s in use, and returns s emptied. If s has far more room
 // than recent uses needed, the returned slice is a smaller one. Slices of s may still be held
 // elsewhere; they keep the old array alive by themselves.
-func shrinkToRecentUse[T any](s []T, use *recentUse) []T {
-	use.add(len(s))
-	limit := max(use.peak(), minRetainedElements)
-	if cap(s) > shrinkFactor*limit {
+func shrinkToRecentUse[T any](s []T, use *recent.Peak) []T {
+	use.Add(len(s))
+	limit := max(use.Max(), minRetainedElements)
+	if cap(s) > recent.ShrinkFactor*limit {
 		return make([]T, 0, retainedFor(limit))
 	}
 	return s[:0]

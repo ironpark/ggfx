@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx"
-	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 type atlasRegion struct {
@@ -43,17 +43,10 @@ type atlas struct {
 	atlasImages []*ggfx.Image
 	// images are the atlas images kept, which may be more than the current paths need.
 	images []*ggfx.Image
-	// sizePeaks track the size images[i] recently had to have, and countPeak, in its X, how
-	// many images were recently needed.
-	sizePeaks []recentPeak
-	countPeak recentPeak
-
-	// clock reports the time, in flushes of the command queue; it is graphicscommand's flush
-	// count if nil. epoch is the time setPaths last ran at, and clockStarted reports whether it
-	// has.
-	clock        func() int64
-	epoch        int64
-	clockStarted bool
+	// sizePeaks track the size images[i] recently had to have, and countPeak how many images
+	// were recently needed.
+	sizePeaks []sizePeak
+	countPeak recent.Peak
 
 	// allocations counts the atlas images allocated, for testing.
 	allocations int
@@ -61,67 +54,30 @@ type atlas struct {
 	bytes atomic.Int64
 }
 
-// The stencil atlas images are sized to what recent fills needed, and the time is counted in
-// flushes of the command queue rather than in calls of setPaths: a frame may fill any number of
-// batches, but it flushes at least once, so a window of flushes spans about the same time, a
-// second or two, however the frames are drawn. A flush with no fill counts too, so the sizes
-// decay while the frames fill nothing; no image is given back before the next fill, though.
-const (
-	// atlasRecentWindow is how many flushes a recentPeak covers at least; it covers up to twice
-	// as many.
-	atlasRecentWindow = 60
+// The stencil atlas images are sized to what the fills of the last recent.Window to
+// 2*recent.Window frames needed. The time is counted in frames, render's ticks, rather than in
+// calls of setPaths or in flushes of the command queue: a frame may fill any number of batches,
+// and reading pixels flushes the queue, but a window of frames spans about the same time, a second
+// or two, however the frames are drawn. A frame with no fill counts too, so the sizes decay while
+// the frames fill nothing; no image is given back before the next fill, though.
 
-	// atlasShrinkFactor is how many times larger in bytes than its recent peak needs an atlas
-	// image may be before it is reallocated smaller. Sizes that alternate within the window
-	// keep the peak, so they never reallocate.
-	atlasShrinkFactor = 2
-)
-
-// recentPeak tracks the largest size, per dimension, observed over recent flushes. It mirrors
-// graphicscommand's recentUse, but in two dimensions and ticked by elapsed flushes.
-type recentPeak struct {
-	current  image.Point
-	previous image.Point
-	ticks    int64
+// sizePeak tracks the size an atlas image recently had to have, per dimension.
+type sizePeak struct {
+	x, y recent.Peak
 }
 
-// observe records that size p was needed in this flush.
-func (r *recentPeak) observe(p image.Point) {
-	r.current.X = max(r.current.X, p.X)
-	r.current.Y = max(r.current.Y, p.Y)
+func (p *sizePeak) advanceTo(now int64) {
+	p.x.AdvanceTo(now)
+	p.y.AdvanceTo(now)
 }
 
-// advance records that n flushes went by.
-func (r *recentPeak) advance(n int64) {
-	if n <= 0 {
-		return
-	}
-	r.ticks += n
-	if r.ticks < atlasRecentWindow {
-		return
-	}
-	if r.ticks < 2*atlasRecentWindow {
-		r.previous = r.current
-	} else {
-		// A whole window passed with nothing observed.
-		r.previous = image.Point{}
-	}
-	r.current = image.Point{}
-	r.ticks %= atlasRecentWindow
+func (p *sizePeak) observe(s image.Point) {
+	p.x.Observe(s.X)
+	p.y.Observe(s.Y)
 }
 
-// peak reports the largest size observed over the last atlasRecentWindow to 2*atlasRecentWindow
-// flushes.
-func (r *recentPeak) peak() image.Point {
-	return image.Point{X: max(r.current.X, r.previous.X), Y: max(r.current.Y, r.previous.Y)}
-}
-
-func (a *atlas) now() int64 {
-	if a.clock != nil {
-		return a.clock()
-	}
-	flushes, _, _, _ := graphicscommand.Counts()
-	return flushes
+func (p *sizePeak) peak() image.Point {
+	return image.Pt(p.x.Max(), p.y.Max())
 }
 
 func roundUpAtlasSize(size int) int {
@@ -135,7 +91,8 @@ func roundUp16(x int) int {
 	return (x + 15) &^ 15
 }
 
-func (a *atlas) setPaths(dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) {
+// setPaths lays out paths in the atlas at time now, in frames.
+func (a *atlas) setPaths(now int64, dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) {
 	// Reset the members.
 	a.pathRenderingBounds = slices.Delete(a.pathRenderingBounds, 0, len(a.pathRenderingBounds))
 	a.atlasRegions = slices.Delete(a.atlasRegions, 0, len(a.atlasRegions))
@@ -236,7 +193,7 @@ func (a *atlas) setPaths(dstBounds image.Rectangle, paths []*Path, bounds []imag
 		atlasImageCount = atlasImageIndex + 1
 	}
 
-	a.ensureImages(atlasImageCount, maxImageSize)
+	a.ensureImages(now, atlasImageCount, maxImageSize)
 }
 
 // ensureImages makes atlasImages count cleared images at least as large as atlasSizes, up to
@@ -250,22 +207,15 @@ func (a *atlas) setPaths(dstBounds image.Rectangle, paths []*Path, bounds []imag
 // destination it is drawn to would make the atlas move one of them. An unmanaged image is
 // exactly its size. A stencil image is the only source of the draws reading it, and the stencil
 // draws into it are batched per image anyway, so being off the atlas costs no batching.
-func (a *atlas) ensureImages(count int, maxImageSize int) {
-	now := a.now()
-	var elapsed int64
-	if a.clockStarted {
-		elapsed = now - a.epoch
-	}
-	a.epoch, a.clockStarted = now, true
-
-	a.countPeak.advance(elapsed)
-	a.countPeak.observe(image.Pt(count, 0))
+func (a *atlas) ensureImages(now int64, count int, maxImageSize int) {
+	a.countPeak.AdvanceTo(now)
+	a.countPeak.Observe(count)
 	for len(a.images) < count {
 		a.images = append(a.images, nil)
-		a.sizePeaks = append(a.sizePeaks, recentPeak{})
+		a.sizePeaks = append(a.sizePeaks, sizePeak{})
 	}
 	for i := range a.sizePeaks {
-		a.sizePeaks[i].advance(elapsed)
+		a.sizePeaks[i].advanceTo(now)
 	}
 
 	for i := range count {
@@ -287,20 +237,19 @@ func (a *atlas) ensureImages(count int, maxImageSize int) {
 				// Too small. Keep a larger dimension, so that sizes alternating between wide
 				// and tall ones settle on an image fitting both.
 				want = image.Pt(min(maxImageSize, max(want.X, cur.X)), min(maxImageSize, max(want.Y, cur.Y)))
-			case cur.X*cur.Y > atlasShrinkFactor*want.X*want.Y:
+			case cur.X*cur.Y > recent.ShrinkFactor*want.X*want.Y:
 				// Far larger than the recent fills needed.
 			default:
 				img.Clear()
 				continue
 			}
 			img.Deallocate()
-			a.images[i] = nil
 		}
 		a.images[i] = ggfx.NewImageWithOptions(image.Rectangle{Max: want}, &ggfx.NewImageOptions{Unmanaged: true})
 		a.allocations++
 	}
 
-	keep := max(count, a.countPeak.peak().X)
+	keep := max(count, a.countPeak.Max())
 	for i := keep; i < len(a.images); i++ {
 		if a.images[i] != nil {
 			a.images[i].Deallocate()

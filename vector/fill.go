@@ -25,6 +25,7 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/pool"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 // FillRule is the rule whether an overlapped region is rendered or not.
@@ -342,7 +343,7 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 		theIndices = is
 	}()
 
-	theAtlas.setPaths(dst.Bounds(), f.paths, f.bounds, f.antialias)
+	theAtlas.setPaths(render.Tick(), dst.Bounds(), f.paths, f.bounds, f.antialias)
 
 	offsetAndColors := offsetAndColorsNonAA
 	if f.antialias {
@@ -620,7 +621,7 @@ func (f *fillPathsState) appendCoverQuad(vs []ggfx.Vertex, is []uint32, dst *ggf
 }
 
 // StencilBytes reports the size in bytes of the GPU images FillPath and the other fills keep as
-// stencil buffers. They are sized to what the fills of the last second or two needed.
+// stencil buffers. They are sized to what the fills of the last 60 to 120 frames needed.
 func StencilBytes() int64 {
 	return theAtlas.bytes.Load()
 }

@@ -24,7 +24,7 @@ import (
 )
 
 // benchmarkFill fills paths small paths, and a large one every largeEvery iterations if it is
-// positive, per iteration; the queue is flushed every 16 iterations, as frames would.
+// positive, per iteration; a frame ends every 16 iterations.
 func benchmarkFill(b *testing.B, paths int, largeEvery int, antialias bool) {
 	const w, h = 1440, 900
 	dst := ggfx.NewImage(w, h)
@@ -60,7 +60,9 @@ func benchmarkFill(b *testing.B, paths int, largeEvery int, antialias bool) {
 		// Using dst runs the fills.
 		sink.DrawImage(dst, nil)
 		if i%16 == 15 {
-			_ = sink.At(0, 0)
+			if err := vector.NextFrame(); err != nil {
+				b.Fatal(err)
+			}
 		}
 	}
 }

@@ -91,7 +91,7 @@ func TestStencilAtlasKeepsSizeWithinWindow(t *testing.T) {
 func TestStencilAtlasNoThrash(t *testing.T) {
 	for _, period := range []int64{0, 1, 2, vector.AtlasRecentWindow / 2, vector.AtlasRecentWindow} {
 		a := vector.NewStencilAtlas()
-		// Alternate within a flush, or every period flushes.
+		// Alternate within a frame, or every period frames.
 		for i := range 20 * vector.AtlasRecentWindow {
 			r := smallRect
 			if (period == 0 && i%2 == 0) || (period > 0 && int64(i)%period == 0) {
@@ -150,12 +150,12 @@ func TestStencilAtlasFreesUnusedImages(t *testing.T) {
 	}
 }
 
-func TestStencilAtlasIdleFlushesAge(t *testing.T) {
+func TestStencilAtlasIdleFramesAge(t *testing.T) {
 	a := vector.NewStencilAtlas()
 	defer a.Dispose()
 
 	setRects(a, hidpiScreen, largeRect)
-	// Flushes without any fill count as time too.
+	// Frames without any fill count as time too.
 	a.Advance(3 * vector.AtlasRecentWindow)
 	setRects(a, hidpiScreen, smallRect)
 	if s := a.ImageSizes()[0]; s.X > 512 || s.Y > 512 {
@@ -163,7 +163,7 @@ func TestStencilAtlasIdleFlushesAge(t *testing.T) {
 	}
 }
 
-// TestFillAfterStencilShrink fills a large path, and then small ones over many flushes, through
+// TestFillAfterStencilShrink fills a large path, and then small ones over many frames, through
 // the shared stencil atlas, and checks the pixels and that the stencil atlas shrank.
 func TestFillAfterStencilShrink(t *testing.T) {
 	const w, h = 2000, 1200
@@ -183,9 +183,12 @@ func TestFillAfterStencilShrink(t *testing.T) {
 	for i := range 3 * vector.AtlasRecentWindow {
 		x := float32(i % 100 * 16)
 		vector.FillRect(dst, x, 16, 16, 16, red, true)
-		// Reading flushes the command queue, which is the stencil atlas's clock.
 		if got := dst.At(int(x)+8, 24); got != red {
 			t.Fatalf("small fill %d: got %v, want %v", i, got, red)
+		}
+		// Frames are the stencil atlas's clock.
+		if err := vector.NextFrame(); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if got := vector.StencilBytes(); got*10 > large {
