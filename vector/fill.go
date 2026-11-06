@@ -618,3 +618,9 @@ func (f *fillPathsState) appendCoverQuad(vs []ggfx.Vertex, is []uint32, dst *ggf
 	is = append(is, idx, idx+1, idx+2, idx+1, idx+2, idx+3)
 	return vs, is
 }
+
+// StencilBytes reports the size in bytes of the GPU images FillPath and the other fills keep as
+// stencil buffers. They are sized to what the fills of the last second or two needed.
+func StencilBytes() int64 {
+	return theAtlas.bytes.Load()
+}

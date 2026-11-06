@@ -118,11 +118,7 @@ type AtlasRegion struct {
 func AtlasRegions(dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) []AtlasRegion {
 	var a atlas
 	a.setPaths(dstBounds, paths, bounds, antialias)
-	defer func() {
-		for _, img := range a.atlasImages {
-			img.Deallocate()
-		}
-	}()
+	defer a.dispose()
 	regions := make([]AtlasRegion, len(paths))
 	for i := range paths {
 		ar := a.atlasRegions[a.pathIndexToAtlasRegionIndex[i]]
@@ -154,10 +150,51 @@ func AtlasRegions(dstBounds image.Rectangle, paths []*Path, bounds []image.Recta
 func PathRenderingBounds(dstBounds image.Rectangle, path *Path, bounds image.Rectangle) image.Rectangle {
 	var a atlas
 	a.setPaths(dstBounds, []*Path{path}, []image.Rectangle{bounds}, false)
-	defer func() {
-		for _, img := range a.atlasImages {
-			img.Deallocate()
-		}
-	}()
+	defer a.dispose()
 	return a.pathRenderingBounds[0]
 }
+
+// AtlasRecentWindow is how many flushes a stencil atlas's recent peak covers at least.
+const AtlasRecentWindow = atlasRecentWindow
+
+// StencilAtlas is a stencil atlas with its own clock, in flushes, that the test advances.
+type StencilAtlas struct {
+	a   atlas
+	now int64
+}
+
+func NewStencilAtlas() *StencilAtlas {
+	s := &StencilAtlas{}
+	s.a.clock = func() int64 { return s.now }
+	return s
+}
+
+// Advance makes n flushes go by.
+func (s *StencilAtlas) Advance(n int64) { s.now += n }
+
+func (s *StencilAtlas) SetPaths(dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) {
+	s.a.setPaths(dstBounds, paths, bounds, antialias)
+}
+
+// ImageSizes returns the sizes of the atlas images kept, with a zero size for one not allocated.
+func (s *StencilAtlas) ImageSizes() []image.Point {
+	var sizes []image.Point
+	for _, img := range s.a.images {
+		var p image.Point
+		if img != nil {
+			p = img.Bounds().Size()
+		}
+		sizes = append(sizes, p)
+	}
+	return sizes
+}
+
+// ActiveImageCount returns how many atlas images the current paths are on.
+func (s *StencilAtlas) ActiveImageCount() int { return len(s.a.atlasImages) }
+
+// Allocations returns how many atlas images were allocated.
+func (s *StencilAtlas) Allocations() int { return s.a.allocations }
+
+func (s *StencilAtlas) Bytes() int64 { return s.a.bytes.Load() }
+
+func (s *StencilAtlas) Dispose() { s.a.dispose() }
