@@ -27,6 +27,7 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/mipmap"
 )
 
 var (
@@ -197,7 +198,8 @@ func Occluded() bool {
 // Flush runs the graphics commands queued in the frames since the last flush, and presents every
 // surface whose screen was drawn to when present is set. It advances the tick.
 func Flush(present bool) error {
-	tick.Add(1)
+	mipmap.SetTick(tick.Add(1))
+	dropUnusedMipmapLevels()
 	return atlas.FlushCommands(driver, present)
 }
 

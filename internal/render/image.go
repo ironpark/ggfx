@@ -20,6 +20,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"weak"
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -66,6 +67,72 @@ type Image struct {
 	modifyCallback func()
 
 	tmpVerticesForFill []float32
+
+	// inLevelsRegistry reports whether the image is in theLevelsRegistry.
+	inLevelsRegistry bool
+}
+
+// levelsRegistry holds the images whose mipmaps hold levels, so that the levels not drawn from for a
+// while are dropped (see dropUnusedMipmapLevels). It holds them weakly: an image no one holds is
+// not kept for its levels.
+type levelsRegistry struct {
+	m    sync.Mutex
+	imgs map[weak.Pointer[Image]]struct{}
+	// tmp is the scratch dropUnusedMipmapLevels copies imgs to.
+	tmp []weak.Pointer[Image]
+}
+
+var theLevelsRegistry levelsRegistry
+
+// registerLevels adds i to theLevelsRegistry if its mipmap holds levels. i's mutex must be held.
+func (i *Image) registerLevels() {
+	if i.inLevelsRegistry || i.mipmap == nil || !i.mipmap.HasLevels() {
+		return
+	}
+	i.inLevelsRegistry = true
+	r := &theLevelsRegistry
+	r.m.Lock()
+	defer r.m.Unlock()
+	if r.imgs == nil {
+		r.imgs = map[weak.Pointer[Image]]struct{}{}
+	}
+	r.imgs[weak.Make(i)] = struct{}{}
+}
+
+// dropUnusedMipmapLevels drops the mipmap levels not drawn from for a while, of every image that
+// holds some. No image's mutex may be held.
+func dropUnusedMipmapLevels() {
+	r := &theLevelsRegistry
+	r.m.Lock()
+	ps := r.tmp[:0]
+	for p := range r.imgs {
+		ps = append(ps, p)
+	}
+	r.m.Unlock()
+
+	for _, p := range ps {
+		img := p.Value()
+		keep := false
+		if img != nil {
+			img.mu.Lock()
+			if img.mipmap != nil && img.mipmap.DropUnusedLevels() {
+				keep = true
+			} else {
+				img.inLevelsRegistry = false
+			}
+			img.mu.Unlock()
+		}
+		if !keep {
+			r.m.Lock()
+			delete(r.imgs, p)
+			r.m.Unlock()
+		}
+	}
+
+	clear(ps)
+	r.m.Lock()
+	r.tmp = ps[:0]
+	r.m.Unlock()
 }
 
 // NewImage returns an RGBA8 image.
@@ -225,6 +292,12 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 	}
 
 	i.mipmap.DrawTriangles(srcMipmaps, vertices, indices, blend, dstRegion, srcRegions, shader.shader, uniforms, canSkipMipmap)
+
+	for _, src := range srcs {
+		if src != nil {
+			src.registerLevels()
+		}
+	}
 }
 
 func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
