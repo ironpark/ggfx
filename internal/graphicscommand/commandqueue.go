@@ -442,6 +442,10 @@ func (c *commandQueuePool) put(queue *commandQueue) {
 type commandQueueManager struct {
 	pool    commandQueuePool
 	current *commandQueue
+
+	// generation counts the flushes, so that an image can tell whether a command it enqueued is
+	// still in the current queue.
+	generation uint64
 }
 
 var theCommandQueueManager commandQueueManager
@@ -473,6 +477,7 @@ func (c *commandQueueManager) flush(graphicsDriver graphicsdriver.Graphics, mode
 		return err
 	}
 	c.current = q
+	c.generation++
 
 	if prev == nil {
 		return nil

@@ -88,3 +88,19 @@ func NewFakeImageForTesting(width, height int) *Image {
 func (s *Shader) FakeForTesting() *Shader {
 	return &Shader{shader: fakeDriverShader{}, ir: s.ir}
 }
+
+// QueuedWritePixelsCommandsForTesting reports how many write-pixels commands the current queue
+// holds, and how many writes they hold in all.
+func QueuedWritePixelsCommandsForTesting() (commands, writes int) {
+	q := theCommandQueueManager.current
+	if q == nil {
+		return 0, 0
+	}
+	for _, c := range q.commands {
+		if c, ok := c.(*writePixelsCommand); ok {
+			commands++
+			writes += len(c.args)
+		}
+	}
+	return commands, writes
+}

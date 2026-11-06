@@ -54,7 +54,19 @@ type Image struct {
 	id int
 
 	bufferedWritePixelsArgs []writePixelsCommandArgs
+
+	// pendingWrite is the last write-pixels command enqueued for the image, which later writes may
+	// join while it is in the current queue, of generation pendingWriteGeneration. touched is the
+	// regions of the image the commands enqueued after it read or draw into; a write that overlaps
+	// none of them can join pendingWrite, as running it there instead of now changes nothing.
+	pendingWrite           *writePixelsCommand
+	pendingWriteGeneration uint64
+	touched                []image.Rectangle
 }
+
+// maxTouchedRegions is the most regions an image records after its pending write-pixels command.
+// Past it, the next write enqueues a command of its own, so that the overlap checks stay cheap.
+const maxTouchedRegions = 1024
 
 var nextImageID = 1
 
@@ -118,8 +130,35 @@ func ScreenReadable(surface graphicsdriver.Surface) bool {
 	return ok && r.Readable()
 }
 
+// flushBufferedWritePixels makes the buffered writes run before the commands enqueued after this
+// call. The writes join the image's pending write-pixels command, earlier in the queue, when no
+// command since it read or drew into their regions; otherwise they make a new command. Hoisting
+// writes this way lets a renderer that creates an image and draws it right away, as a text
+// renderer does with each glyph, upload many images in one command rather than one each, with
+// the draws between them merged.
 func (i *Image) flushBufferedWritePixels() {
 	if len(i.bufferedWritePixelsArgs) == 0 {
+		return
+	}
+
+	if i.canJoinPendingWrite() {
+		c := i.pendingWrite
+		for _, arg := range i.bufferedWritePixelsArgs {
+			// Release the pending pixels the new region covers, as WritePixels does.
+			var cur int
+			for _, a := range c.args {
+				if a.region.In(arg.region) {
+					a.pixels.Release()
+					continue
+				}
+				c.args[cur] = a
+				cur++
+			}
+			clear(c.args[cur:])
+			c.args = append(c.args[:cur], arg)
+		}
+		clear(i.bufferedWritePixelsArgs)
+		i.bufferedWritePixelsArgs = i.bufferedWritePixelsArgs[:0]
 		return
 	}
 
@@ -130,10 +169,55 @@ func (i *Image) flushBufferedWritePixels() {
 	theCommandQueueManager.enqueueCommand(c)
 
 	i.bufferedWritePixelsArgs = nil
+	i.pendingWrite = c
+	i.pendingWriteGeneration = theCommandQueueManager.generation
+	i.touched = i.touched[:0]
+}
+
+// canJoinPendingWrite reports whether the buffered writes can join the pending write-pixels
+// command: it is still in the current queue, and no command after it read or drew into the
+// buffered regions.
+func (i *Image) canJoinPendingWrite() bool {
+	if i.pendingWrite == nil || i.pendingWriteGeneration != theCommandQueueManager.generation {
+		return false
+	}
+	if len(i.touched) > maxTouchedRegions {
+		return false
+	}
+	for _, arg := range i.bufferedWritePixelsArgs {
+		for _, r := range i.touched {
+			if arg.region.Overlaps(r) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// touch records that a command enqueued now reads or draws into region of the image, if a later
+// write could otherwise join the pending write-pixels command before it. An empty region stands
+// for the whole image.
+func (i *Image) touch(region image.Rectangle) {
+	if i.pendingWrite == nil || i.pendingWriteGeneration != theCommandQueueManager.generation {
+		return
+	}
+	if len(i.touched) > maxTouchedRegions {
+		return
+	}
+	if region.Empty() {
+		w, h := i.InternalSize()
+		region = image.Rect(0, 0, w, h)
+	} else {
+		// Filtering may read a pixel past the region's edges.
+		region = region.Inset(-1)
+	}
+	i.touched = append(i.touched, region)
 }
 
 func (i *Image) Dispose() {
 	i.bufferedWritePixelsArgs = nil
+	i.pendingWrite = nil
+	i.touched = nil
 	c := &disposeImageCommand{
 		target: i,
 	}
@@ -185,6 +269,13 @@ func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 		src.flushBufferedWritePixels()
 	}
 	i.flushBufferedWritePixels()
+
+	for k, src := range srcs {
+		if src != nil {
+			src.touch(srcRegions[k])
+		}
+	}
+	i.touch(dstRegion)
 
 	theCommandQueueManager.enqueueDrawTrianglesCommand(i, srcs, vertices, indices, blend, dstRegion, srcRegions, shader, uniforms)
 }
