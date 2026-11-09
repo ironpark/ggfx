@@ -62,9 +62,23 @@ func checkCompactTestImage(t *testing.T, img *atlas.Image, format graphicsdriver
 	}
 }
 
+// compactTestClock is the last frame the compaction checks of these tests began at. A page outlives
+// a test, and remembers the frame it was first seen mostly empty at, so the frames these tests give
+// only go forward, whatever order the tests run in. They start far after the frame clock, which
+// stays put while the tests run in one frame.
+var compactTestClock int64 = 1 << 30
+
+// compactTestFrames returns a frame to begin a run of compaction checks at, a hundred windows after
+// the last one, so a run can use the frames up to there.
+func compactTestFrames() int64 {
+	compactTestClock += 100 * recent.Window
+	return compactTestClock
+}
+
 // compactAfterWindow runs the compaction check as a page that stays as it is would see it over a
-// whole window of frames, starting at frame start.
-func compactAfterWindow(start int64) {
+// whole window of frames.
+func compactAfterWindow() {
+	start := compactTestFrames()
 	atlas.CompactPagesForTesting(start)
 	atlas.CompactPagesForTesting(start + recent.Window)
 }
@@ -100,7 +114,7 @@ func TestCompactPage(t *testing.T) {
 				t.Fatalf("used area: tracked %d, the nodes cover %d", tracked, nodes)
 			}
 
-			compactAfterWindow(1)
+			compactAfterWindow()
 
 			newW, newH := first.BackendSizeForTesting()
 			if newW*newH*2 > oldW*oldH {
@@ -154,32 +168,57 @@ func TestCompactPageNotEarly(t *testing.T) {
 			}
 		}
 	}()
-	oldW, oldH := imgs[0].BackendSizeForTesting()
+	// imgs[1] stays to the end, so the page can be looked at through it.
+	used := func() int64 {
+		u, _ := imgs[1].BackendUsedAreaForTesting()
+		return u
+	}
 
-	// Free a half: the page stays.
-	for k := 0; k < n; k += 2 {
+	// The images may have gone on a page an earlier test left larger than they need: let it be
+	// compacted first, so the page is one they use well.
+	compactAfterWindow()
+	oldW, oldH := imgs[1].BackendSizeForTesting()
+	area := int64(oldW) * int64(oldH)
+	if used()*4 < area {
+		t.Fatalf("page %dx%d: used %d before any image went, want a quarter or more", oldW, oldH, used())
+	}
+
+	// Free images while a quarter of the page or more stays used: the page stays.
+	before := used()
+	imgs[0].Deallocate()
+	imgs[0] = nil
+	each := before - used()
+	freed := 1
+	for k := 2; k < n && (used()-each)*4 >= area; k += 2 {
 		imgs[k].Deallocate()
 		imgs[k] = nil
+		freed++
 	}
-	compactAfterWindow(1000)
+	if used()*4 < area {
+		t.Fatalf("page %dx%d: used %d after %d images went, want a quarter or more", oldW, oldH, used(), freed)
+	}
+	compactAfterWindow()
 	if gotW, gotH := imgs[1].BackendSizeForTesting(); gotW != oldW || gotH != oldH {
-		t.Errorf("page half used after a window: %dx%d, want %dx%d", gotW, gotH, oldW, oldH)
+		t.Errorf("page used %d of %dx%d after a window: %dx%d, want %dx%d", used(), oldW, oldH, gotW, gotH, oldW, oldH)
 	}
 
 	// Free most: the page stays until a window passes.
-	for k := 1; k < n; k += 2 {
-		if k%20 == 1 {
-			continue
+	for k, img := range imgs {
+		if img != nil && k%20 != 1 {
+			img.Deallocate()
+			imgs[k] = nil
 		}
-		imgs[k].Deallocate()
-		imgs[k] = nil
 	}
-	atlas.CompactPagesForTesting(2000)
-	atlas.CompactPagesForTesting(2000 + recent.Window - 1)
+	if used()*4 >= area {
+		t.Fatalf("page %dx%d: used %d after most images went, want less than a quarter", oldW, oldH, used())
+	}
+	start := compactTestFrames()
+	atlas.CompactPagesForTesting(start)
+	atlas.CompactPagesForTesting(start + recent.Window - 1)
 	if gotW, gotH := imgs[1].BackendSizeForTesting(); gotW != oldW || gotH != oldH {
 		t.Errorf("page mostly empty for less than a window: %dx%d, want %dx%d", gotW, gotH, oldW, oldH)
 	}
-	atlas.CompactPagesForTesting(2000 + recent.Window)
+	atlas.CompactPagesForTesting(start + recent.Window)
 	if gotW, gotH := imgs[1].BackendSizeForTesting(); gotW*gotH*2 > oldW*oldH {
 		t.Errorf("page mostly empty for a window: %dx%d, want it compacted", gotW, gotH)
 	}
@@ -196,8 +235,8 @@ func TestCompactPageNotEarly(t *testing.T) {
 			imgs[k] = nil
 		}
 	}
-	compactAfterWindow(3000)
-	compactAfterWindow(4000)
+	compactAfterWindow()
+	compactAfterWindow()
 	if gotW, gotH := imgs[1].BackendSizeForTesting(); gotW*gotH < 256*256 {
 		t.Errorf("page: %dx%d, want at least the minimum 256x256", gotW, gotH)
 	}
