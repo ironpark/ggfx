@@ -26,7 +26,8 @@ import (
 // if it does not handle an element found in the icon file. Ignore warnings is
 // the default if no ErrorMode value is provided.
 func ReadIconStream(stream io.Reader, errMode ...ErrorMode) (*SvgIcon, error) {
-	icon := &SvgIcon{Defs: make(map[string][]definition), Grads: make(map[string]*rasterx.Gradient), Transform: rasterx.Identity}
+	icon := &SvgIcon{Defs: make(map[string][]definition), Grads: make(map[string]*rasterx.Gradient), Transform: rasterx.Identity,
+		clips: map[string]*captured{}, markers: map[string]*captured{}}
 	cursor := &IconCursor{StyleStack: []PathStyle{DefaultStyle}, icon: icon}
 	if len(errMode) > 0 {
 		cursor.ErrorMode = errMode[0]
@@ -60,6 +61,9 @@ func ReadIconStream(stream io.Reader, errMode ...ErrorMode) (*SvgIcon, error) {
 		case xml.EndElement:
 			// pop style
 			cursor.StyleStack = cursor.StyleStack[:len(cursor.StyleStack)-1]
+			if cursor.endCapture(se) {
+				continue
+			}
 			switch se.Name.Local {
 			case "g":
 				if cursor.inDefs {

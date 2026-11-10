@@ -75,6 +75,7 @@ var (
 	gF    svgFunc = func(*IconCursor, []xml.Attr) error { return nil } // g does nothing but push the style
 	rectF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
 		var x, y, w, h, rx, ry float64
+		var setRx, setRy bool
 		var err error
 		for _, attr := range attrs {
 			switch attr.Name.Local {
@@ -88,8 +89,10 @@ var (
 				h, err = parseFloat(attr.Value, 64)
 			case "rx":
 				rx, err = parseFloat(attr.Value, 64)
+				setRx = true
 			case "ry":
 				ry, err = parseFloat(attr.Value, 64)
+				setRy = true
 			}
 			if err != nil {
 				return err
@@ -97,6 +100,12 @@ var (
 		}
 		if w == 0 || h == 0 {
 			return nil
+		}
+		// One radius given is both, as the specification has it.
+		if setRx && !setRy {
+			ry = rx
+		} else if setRy && !setRx {
+			rx = ry
 		}
 		rasterx.AddRoundRect(x, y, w+x, h+y, rx, ry, 0, rasterx.RoundGap, &c.Path)
 		return nil
@@ -345,51 +354,50 @@ var (
 		if !ok {
 			return errors.New("href ID in use statement was not found in saved defs")
 		}
-		// Bound the expansion: a cyclic reference recurses until the stack
-		// overflows, and nested use tags can expand exponentially.
-		const maxUseExpansions = 10000
-		c.useExpansions += len(defs)
-		if c.useExpansions > maxUseExpansions {
-			return errors.New("too many elements expanded by use tags")
-		}
-		for _, def := range defs {
-			if def.Tag == "endg" {
-				// pop style
-				c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
-				continue
-			}
-			if err = c.PushStyle(def.Attrs); err != nil {
-				return err
-			}
-			df, ok := drawFuncs[def.Tag]
-			if !ok {
-				errStr := "Cannot process svg element " + def.Tag
-				if c.ErrorMode == StrictErrorMode {
-					return errors.New(errStr)
-				} else if c.ErrorMode == WarnErrorMode {
-					log.Println(errStr)
-				}
-				return nil
-			}
-			if err := df(c, def.Attrs); err != nil {
-				return err
-			}
-			//Did c.Path get added to during the drawFunction call iteration?
-			if len(c.Path) > 0 {
-				//The cursor parsed a path from the xml element
-				pathCopy := make(rasterx.Path, len(c.Path))
-				copy(pathCopy, c.Path)
-				c.icon.SVGPaths = append(c.icon.SVGPaths, SvgPath{c.StyleStack[len(c.StyleStack)-1], pathCopy})
-				c.Path = c.Path[:0]
-			}
-			if def.Tag != "g" {
-				// pop style
-				c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
-			}
-		}
-		return nil
+		return c.expandDefs(defs)
 	}
 )
+
+// expandDefs draws a definition's elements where it is used, as a use, a
+// clip, a mask or a marker expands one, each under the style on top of the
+// stack. The expansion is bounded: a cyclic reference recurses until the
+// stack overflows, and nested uses expand exponentially.
+func (c *IconCursor) expandDefs(defs []definition) error {
+	const maxUseExpansions = 10000
+	c.useExpansions += len(defs)
+	if c.useExpansions > maxUseExpansions {
+		return errors.New("too many elements expanded by use tags")
+	}
+	for _, def := range defs {
+		if def.Tag == "endg" {
+			// pop style
+			c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
+			continue
+		}
+		if err := c.PushStyle(def.Attrs); err != nil {
+			return err
+		}
+		df, ok := drawFuncs[def.Tag]
+		if !ok {
+			errStr := "Cannot process svg element " + def.Tag
+			if c.ErrorMode == StrictErrorMode {
+				return errors.New(errStr)
+			} else if c.ErrorMode == WarnErrorMode {
+				log.Println(errStr)
+			}
+			return nil
+		}
+		if err := df(c, def.Attrs); err != nil {
+			return err
+		}
+		c.addPath(def.Tag)
+		if def.Tag != "g" {
+			// pop style
+			c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
+		}
+	}
+	return nil
+}
 
 func init() {
 	// avoids cyclical static declaration

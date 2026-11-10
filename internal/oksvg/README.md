@@ -37,6 +37,26 @@ included.
   such as `hsl(0,,)` or `rgb(0,,0)` panicked with an out-of-range index
   instead of failing to parse. Slicing also dropped the last digit of a
   component written without a `%`.
+- A rect given only `rx`, or only `ry`, takes it for both, as the
+  specification defines. The original left the other radius zero, and
+  `AddRoundRect` then drew the rect square.
+- `<clipPath>` and `<mask>`, and the `clip-path` and `mask` properties. A
+  clip's or mask's content is kept where it is defined, compiled where a
+  style names it in the naming element's user space, and drawn once per
+  drawing into an alpha image the size of the target: a clip's shapes by
+  their coverage, a mask's by their light. Each shape under it has its
+  paint scaled at each pixel by that alpha, through a `rasterx.ColorFunc`.
+  A group is so clipped shape by shape, which is exact for a clip and, for
+  a mask, differs only where the group's shapes overlap where the mask is
+  partly light, as group opacity already does here. `clipPathUnits` and
+  `maskUnits` of `objectBoundingBox`, and a mask's region, are not read.
+- `<marker>`, and `marker-start`, `marker-mid`, `marker-end` and `marker`
+  on paths, lines, polylines and polygons. A marker's shapes are drawn
+  after the shape at each vertex it is for, turned as the shape runs there
+  or as `orient` says (`auto-start-reverse` included), scaled by the
+  stroke width and the marker's `viewBox` into `markerWidth` by
+  `markerHeight`, with `refX`, `refY` on the vertex. They take the default
+  style, not the shape's.
 - Mechanical modernizations applied by `go fix` (e.g. `interface{}` to
   `any`).
 - The original license headers are replaced with SPDX-style headers
@@ -55,8 +75,6 @@ failing.
 
 Required by the OpenType SVG specification but not implemented:
 
-- `<clipPath>` elements and the `clip-path` property. The specification
-  names clipping paths as must-support alongside gradients and opacity.
 - `currentColor`. The specification requires it, initialized to the text
   foreground color. `ReadReplacingCurrentColor` substitutes it textually
   before parsing, but the `svg` package and ggui's glyph drawing use `ReadIconStream`, and
@@ -87,13 +105,8 @@ gradients, and presentation attributes. The implementation cost varies:
 
 - `<filter>`: a raster-effects pipeline (blur, compositing, lighting)
   requiring off-screen buffers; by far the most expensive to implement.
-- `<mask>`: requires rendering to an off-screen alpha buffer and
-  compositing; rasterx draws scanlines directly to the target, so this is
-  an architectural change, not a parser addition.
 - `<pattern>`: requires rendering a tile and exposing it as a paint
   source, similar plumbing to gradients but with an image lookup.
-- `<marker>`: arrowheads on stroke vertices, aimed at diagrams; no known
-  use in fonts.
 - `<symbol>`: roughly `<defs>` plus `<use>` with its own viewport; easy,
   but never needed because emoji pipelines inline everything.
 - CSS stylesheets: correct support means selector matching, specificity,

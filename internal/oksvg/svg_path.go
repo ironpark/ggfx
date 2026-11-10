@@ -5,6 +5,7 @@
 package oksvg
 
 import (
+	"image"
 	"image/color"
 
 	"github.com/srwiley/rasterx"
@@ -24,6 +25,12 @@ func (svgp *SvgPath) Draw(r *rasterx.Dasher, opacity float64) {
 
 // DrawTransformed draws the compiled SvgPath into the Dasher while applying transform t.
 func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D) {
+	svgp.drawThrough(r, opacity, t, nil)
+}
+
+// drawThrough draws the path as DrawTransformed does, its paint let
+// through mask where it is not nil; see clip.go.
+func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D, mask *image.Alpha) {
 	m := svgp.mAdder.M
 	svgp.mAdder.M = t.Mult(m)
 	defer func() { svgp.mAdder.M = m }() // Restore untransformed matrix
@@ -36,7 +43,7 @@ func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t raste
 
 		switch fillerColor := svgp.fillerColor.(type) {
 		case color.Color:
-			rf.SetColor(rasterx.ApplyOpacity(fillerColor, svgp.FillOpacity*opacity))
+			rf.SetColor(through(rasterx.ApplyOpacity(fillerColor, svgp.FillOpacity*opacity), mask))
 		case rasterx.Gradient:
 			if fillerColor.Units == rasterx.ObjectBoundingBox {
 				fRect := rf.Scanner.GetPathExtent()
@@ -45,7 +52,7 @@ func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t raste
 				fillerColor.Bounds.X, fillerColor.Bounds.Y = mnx, mny
 				fillerColor.Bounds.W, fillerColor.Bounds.H = mxx-mnx, mxy-mny
 			}
-			rf.SetColor(fillerColor.GetColorFunctionUS(svgp.FillOpacity*opacity, svgp.mAdder.M))
+			rf.SetColor(through(fillerColor.GetColorFunctionUS(svgp.FillOpacity*opacity, svgp.mAdder.M), mask))
 		}
 		rf.Draw()
 		// default is true
@@ -72,7 +79,7 @@ func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t raste
 		svgp.Path.AddTo(&svgp.mAdder)
 		switch linerColor := svgp.linerColor.(type) {
 		case color.Color:
-			r.SetColor(rasterx.ApplyOpacity(linerColor, svgp.LineOpacity*opacity))
+			r.SetColor(through(rasterx.ApplyOpacity(linerColor, svgp.LineOpacity*opacity), mask))
 		case rasterx.Gradient:
 			if linerColor.Units == rasterx.ObjectBoundingBox {
 				fRect := r.Scanner.GetPathExtent()
@@ -81,7 +88,7 @@ func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t raste
 				linerColor.Bounds.X, linerColor.Bounds.Y = mnx, mny
 				linerColor.Bounds.W, linerColor.Bounds.H = mxx-mnx, mxy-mny
 			}
-			r.SetColor(linerColor.GetColorFunctionUS(svgp.LineOpacity*opacity, svgp.mAdder.M))
+			r.SetColor(through(linerColor.GetColorFunctionUS(svgp.LineOpacity*opacity, svgp.mAdder.M), mask))
 		}
 		r.Draw()
 	}

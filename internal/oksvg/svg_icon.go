@@ -5,6 +5,8 @@
 package oksvg
 
 import (
+	"image"
+
 	"github.com/srwiley/rasterx"
 )
 
@@ -16,6 +18,8 @@ type SvgIcon struct {
 	Grads        map[string]*rasterx.Gradient
 	Defs         map[string][]definition
 	SVGPaths     []SvgPath
+	clips        map[string]*captured // clipPath and mask elements, by id
+	markers      map[string]*captured // marker elements, by id
 	Transform    rasterx.Matrix2D
 	classes      map[string]styleAttribute
 }
@@ -23,8 +27,22 @@ type SvgIcon struct {
 // Draw the compiled SVG icon into the GraphicContext.
 // All elements should be contained by the Bounds rectangle of the SvgIcon.
 func (s *SvgIcon) Draw(r *rasterx.Dasher, opacity float64) {
+	// Each clip or mask is drawn once a drawing, for every shape under it.
+	var masks map[*clipUse]*image.Alpha
 	for _, svgp := range s.SVGPaths {
-		svgp.DrawTransformed(r, opacity, s.Transform)
+		if svgp.clip == nil {
+			svgp.DrawTransformed(r, opacity, s.Transform)
+			continue
+		}
+		mask, ok := masks[svgp.clip]
+		if !ok {
+			mask = svgp.clip.maskImage(r, s.Transform)
+			if masks == nil {
+				masks = map[*clipUse]*image.Alpha{}
+			}
+			masks[svgp.clip] = mask
+		}
+		svgp.drawThrough(r, opacity, s.Transform, mask)
 	}
 }
 
