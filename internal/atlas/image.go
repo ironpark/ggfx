@@ -907,17 +907,6 @@ loop:
 	b.addImage(i.imageImpl)
 }
 
-func (i *Image) DumpScreenshot(graphicsDriver graphicsdriver.Graphics, path string, blackbg bool) (string, error) {
-	backendsM.Lock()
-	defer backendsM.Unlock()
-
-	if !inFrame {
-		panic("atlas: DumpScreenshot must be called in between BeginFrame and EndFrame")
-	}
-
-	return i.backend.backendImage.Dump(graphicsDriver, path, blackbg, image.Rect(0, 0, i.width, i.height))
-}
-
 func EndFrame(graphicsDriver graphicsdriver.Graphics) error {
 	backendsM.Lock()
 	defer backendsM.Unlock()
@@ -1102,24 +1091,6 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 	compactPages(recent.Now())
 
 	return nil
-}
-
-func DumpImages(graphicsDriver graphicsdriver.Graphics, dir string) (string, error) {
-	backendsM.Lock()
-	defer backendsM.Unlock()
-
-	if !inFrame {
-		panic("atlas: DumpImages must be called in between BeginFrame and EndFrame")
-	}
-
-	images := make([]*graphicscommand.Image, 0, len(theBackends))
-	for _, backend := range theBackends {
-		if backend.backendImage == nil {
-			continue
-		}
-		images = append(images, backend.backendImage)
-	}
-	return graphicscommand.DumpImages(images, graphicsDriver, dir)
 }
 
 func TotalGPUImageMemoryUsageInBytes() int64 {

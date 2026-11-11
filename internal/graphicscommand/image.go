@@ -18,15 +18,11 @@ import (
 	"cmp"
 	"fmt"
 	"image"
-	"io"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/ironpark/ggfx/internal/debug"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/png"
 )
 
 // Image represents an image that is implemented with OpenGL.
@@ -319,52 +315,6 @@ func (i *Image) WritePixels(pixels *graphics.ManagedBytes, region image.Rectangl
 		pixels: pixels,
 		region: region,
 	})
-}
-
-func (i *Image) dumpName(path string) string {
-	return strings.ReplaceAll(path, "*", strconv.Itoa(i.id))
-}
-
-// dumpTo dumps the image to the specified writer.
-//
-// If blackbg is true, any alpha values in the dumped image will be 255.
-//
-// This is for testing usage.
-func (i *Image) dumpTo(w io.Writer, graphicsDriver graphicsdriver.Graphics, blackbg bool, rect image.Rectangle) error {
-	if i.screen {
-		return fmt.Errorf("graphicscommand: a screen image cannot be dumped")
-	}
-
-	pix := make([]byte, i.format.BytesPerPixel()*i.width*i.height)
-	if err := i.ReadPixels(graphicsDriver, []graphicsdriver.PixelsArgs{
-		{
-			Pixels: pix,
-			Region: image.Rect(0, 0, i.width, i.height),
-		},
-	}); err != nil {
-		return err
-	}
-	if i.format == graphicsdriver.PixelFormatA8 {
-		rgba := make([]byte, 4*len(pix))
-		graphics.ExpandAlpha(rgba, pix)
-		pix = rgba
-	}
-
-	if blackbg {
-		for i := range len(pix) / 4 {
-			pix[4*i+3] = 0xff
-		}
-	}
-
-	if err := png.Encode(w, (&image.RGBA{
-		Pix:    pix,
-		Stride: 4 * i.width,
-		Rect:   image.Rect(0, 0, i.width, i.height),
-	}).SubImage(rect)); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func LogImagesInfo(images []*Image) {
