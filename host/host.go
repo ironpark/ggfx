@@ -186,7 +186,7 @@ func (f Frame) Screen(s *Surface, width, height int) *ggfx.Image {
 	if !f.begun {
 		panic("host: Screen is called outside a frame")
 	}
-	s.screen = bridge.ScreenImage(s.screen, s.surface.Screen(width, height)).(*ggfx.Image)
+	s.screen = bridge.Image[*ggfx.Image]().ScreenImage(s.screen, s.surface.Screen(width, height))
 	return s.screen
 }
 

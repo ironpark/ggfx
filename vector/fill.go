@@ -20,10 +20,10 @@ import (
 	"runtime"
 	"slices"
 	"sync"
-	_ "unsafe"
 	"weak"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/bridge"
 	"github.com/ironpark/ggfx/internal/pool"
 	"github.com/ironpark/ggfx/internal/render"
 )
@@ -184,14 +184,20 @@ type fillDst struct {
 	cleanup runtime.Cleanup
 }
 
-//go:linkname originalImage github.com/ironpark/ggfx.originalImage
-func originalImage(img *ggfx.Image) *ggfx.Image
+// imageHooks are what vector needs of ggfx.Image that ggfx does not export.
+var imageHooks = bridge.Image[*ggfx.Image]()
 
-//go:linkname addUsageCallback github.com/ironpark/ggfx.addUsageCallback
-func addUsageCallback(img *ggfx.Image, fn func(img *ggfx.Image)) int64
+func originalImage(img *ggfx.Image) *ggfx.Image {
+	return imageHooks.Original(img)
+}
 
-//go:linkname removeUsageCallback github.com/ironpark/ggfx.removeUsageCallback
-func removeUsageCallback(img *ggfx.Image, token int64)
+func addUsageCallback(img *ggfx.Image, fn func(img *ggfx.Image)) int64 {
+	return imageHooks.AddUsageCallback(img, fn)
+}
+
+func removeUsageCallback(img *ggfx.Image, token int64) {
+	imageHooks.RemoveUsageCallback(img, token)
+}
 
 type offsetAndColor struct {
 	offsetX    float32

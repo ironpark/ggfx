@@ -12,11 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package bridge carries to ggfx/host what it needs of ggfx that ggfx does not export.
+// Package bridge carries to ggfx's other packages, host and vector, what they need of ggfx that
+// ggfx does not export. It cannot name ggfx's types, which it would import in a cycle, so they
+// are its type parameters.
 package bridge
 
 import "github.com/ironpark/ggfx/internal/render"
 
-// ScreenImage returns the *ggfx.Image of a surface's screen img: cur, a *ggfx.Image or nil, when
-// it already is img's, and a new one when the surface replaced its screen. ggfx sets it.
-var ScreenImage func(cur any, img *render.Image) any
+// ImageHooks are the functions of ggfx's Image, I being *ggfx.Image.
+type ImageHooks[I any] struct {
+	// ScreenImage returns the image of a surface's screen img: cur, which may be nil, when it
+	// already is img's, and a new one when the surface replaced its screen.
+	ScreenImage func(cur I, img *render.Image) I
+
+	// Original returns the image img is a sub-image of, or img itself.
+	Original func(img I) I
+
+	// AddUsageCallback makes fn run before the next use of img or of a sub-image of it, with the
+	// original image, and returns the token RemoveUsageCallback removes it by.
+	AddUsageCallback func(img I, fn func(img I)) int64
+
+	// RemoveUsageCallback removes the callback AddUsageCallback returned token for.
+	RemoveUsageCallback func(img I, token int64)
+}
+
+// hooks is the *ImageHooks[*ggfx.Image] ggfx set.
+var hooks any
+
+// SetImageHooks sets the hooks. ggfx calls it when it is initialized, which is before any
+// package that imports it is.
+func SetImageHooks[I any](h *ImageHooks[I]) {
+	hooks = h
+}
+
+// Image returns the hooks ggfx set. I must be *ggfx.Image.
+func Image[I any]() *ImageHooks[I] {
+	return hooks.(*ImageHooks[I])
+}
