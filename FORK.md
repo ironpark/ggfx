@@ -328,6 +328,12 @@ from an RGBA image's alpha there; source-over, copy, clear, lighter and destinat
   rasterizes, which that renderer does differently. CI skips the two tests there. To do: find
   whether a GPU's driver differs too (Mesa's llvmpipe, other vendors), and either make the
   batching exact for any rasterizer that follows the pixel-center rules or batch only where it is.
+- Apple's software OpenGL renderer drops some of the pixels of a triangle that a scissor box cuts:
+  drawing a 16x16 image to an 8x9 sub-image of a 16x16 one leaves one triangle of the quad out,
+  for 66 of 1024 such clips, while the same draw without the scissor is whole. No GPU's driver was
+  seen doing it. CI skips `TestImageClip` and `TestFillRects`, whose paths off the destination's
+  top are filled through clipped stencil buffers, there; `GGFX_TEST_GL_SOFTWARE=1` makes the tests' CGL
+  context use that renderer on a Mac with a GPU.
 - To do: make an OpenGL context for the tests on Linux, with EGL's surfaceless platform
   (`EGL_MESA_platform_surfaceless`) and Mesa's llvmpipe, in `internal/testing` beside
   `glcontext_darwin.go`, so that CI runs the drawing tests on Linux OpenGL and OpenGL ES too.

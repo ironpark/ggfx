@@ -68,11 +68,14 @@ jobs:
           go test -shuffle=on -v -skip '^TestImageBlendFactor$' ./...
 
       # OpenGL draws with Apple's software renderer here, on which the batched vector fill does
-      # not match the unbatched one pixel for pixel; those two tests run on Metal and DirectX.
+      # not match the unbatched one pixel for pixel, and which drops some pixels of a triangle a
+      # scissor box cuts, as TestImageClip's sub-image destination and TestFillRects's clipped
+      # stencil buffers do; those tests run on Metal and DirectX. GGFX_TEST_GL_SOFTWARE=1 picks
+      # that renderer on a Mac with a GPU.
       - name: go test (macOS OpenGL)
         if: runner.os == 'macOS'
         run: |
-          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v -skip '^TestFillPathBatching(WithGeneratedPaths|IsExact)$' . ./internal/atlas ./internal/graphicscommand ./internal/render ./vector
+          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v -skip '^(TestFillPathBatching(WithGeneratedPaths|IsExact)|TestImageClip|TestFillRects)$' . ./internal/atlas ./internal/graphicscommand ./internal/render ./vector
 
       # Runners have no GPU, so DirectX draws with WARP, its software rasterizer.
       - name: go test (Windows DirectX 11)

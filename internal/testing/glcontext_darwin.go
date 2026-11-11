@@ -16,6 +16,7 @@ package testing
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/ebitengine/purego"
 )
@@ -41,19 +42,27 @@ func newGLContext() (*glContext, error) {
 	purego.RegisterLibFunc(&cglSetCurrentContext, lib, "CGLSetCurrentContext")
 
 	const (
-		kCGLPFAAccelerated       = 73
-		kCGLPFAOpenGLProfile     = 99
-		kCGLOGLPVersion_3_2_Core = 0x3200
+		kCGLPFAAccelerated         = 73
+		kCGLPFAOpenGLProfile       = 99
+		kCGLOGLPVersion_3_2_Core   = 0x3200
+		kCGLPFARendererID          = 70
+		kCGLRendererGenericFloatID = 0x00020400
 	)
 	// A machine without a GPU, like a CI runner, has only Apple's software renderer, which is not
 	// accelerated: no accelerated format is kCGLBadPixelFormat there.
 	var pix uintptr
 	var npix int32
 	var e int32
-	for _, attribs := range [][]int32{
+	candidates := [][]int32{
 		{kCGLPFAOpenGLProfile, kCGLOGLPVersion_3_2_Core, kCGLPFAAccelerated, 0},
 		{kCGLPFAOpenGLProfile, kCGLOGLPVersion_3_2_Core, 0},
-	} {
+	}
+	// GGFX_TEST_GL_SOFTWARE picks Apple's software renderer even where a GPU is, to see what CI
+	// sees.
+	if os.Getenv("GGFX_TEST_GL_SOFTWARE") != "" {
+		candidates = [][]int32{{kCGLPFAOpenGLProfile, kCGLOGLPVersion_3_2_Core, kCGLPFARendererID, kCGLRendererGenericFloatID, 0}}
+	}
+	for _, attribs := range candidates {
 		if e = cglChoosePixelFormat(&attribs[0], &pix, &npix); e == 0 && pix != 0 {
 			break
 		}
