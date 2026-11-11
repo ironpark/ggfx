@@ -659,12 +659,31 @@ func TestImageTooManyFill(t *testing.T) {
 	}
 }
 
+// flushDraws runs the draws queued so far, as the end of a frame does. The tests run in one frame,
+// so a benchmark that never flushed would measure the growth of an ever longer queue instead of
+// its draws. It reads a pixel of dst, which nothing but a flush can answer after a draw.
+//
+// The flush itself waits for the GPU, so it is kept out of the benchmark's time.
+func flushDraws(b *testing.B, dst *ggfx.Image) {
+	b.StopTimer()
+	defer b.StartTimer()
+	var pix [4]byte
+	dst.SubImage(image.Rect(0, 0, 1, 1)).(*ggfx.Image).ReadPixels(pix[:])
+}
+
+// drawsPerFlush is how many draws a benchmark queues between flushes: a frame's worth.
+const drawsPerFlush = 1024
+
 func BenchmarkDrawImage(b *testing.B) {
 	img0 := ggfx.NewImage(16, 16)
 	img1 := ggfx.NewImage(16, 16)
 	op := &ggfx.DrawImageOptions{}
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		img0.DrawImage(img1, op)
+		if i%drawsPerFlush == drawsPerFlush-1 {
+			flushDraws(b, img0)
+		}
 	}
 }
 
@@ -725,8 +744,11 @@ func benchmarkDrawTriangles[I ggfx.Index](b *testing.B, is []I) {
 		},
 	}
 	b.ReportAllocs()
-	for range b.N {
+	for i := range b.N {
 		img0.DrawTriangles(vs, is, img1, op)
+		if i%drawsPerFlush == drawsPerFlush-1 {
+			flushDraws(b, img0)
+		}
 	}
 }
 

@@ -109,17 +109,25 @@ func BenchmarkDrawImagesGlyphs(b *testing.B) {
 	}
 	op := &ggfx.DrawImageOptions{}
 	b.Run("DrawImage", func(b *testing.B) {
-		for b.Loop() {
+		b.ReportAllocs()
+		for i := 0; b.Loop(); i++ {
 			for _, d := range draws {
 				o := *op
 				o.GeoM.Translate(d.X, d.Y)
 				dst.DrawImage(d.Image, &o)
 			}
+			if i%16 == 15 {
+				flushDraws(b, dst)
+			}
 		}
 	})
 	b.Run("DrawImages", func(b *testing.B) {
-		for b.Loop() {
+		b.ReportAllocs()
+		for i := 0; b.Loop(); i++ {
 			dst.DrawImages(draws, op)
+			if i%16 == 15 {
+				flushDraws(b, dst)
+			}
 		}
 	})
 }

@@ -210,6 +210,9 @@ func benchmarkUniforms(b *testing.B, block bool) {
 			u.Set("count", uint32(4))
 			u.SetSlice("tint", tint)
 			dst.DrawRectShader(w, h, s, &ggfx.DrawRectShaderOptions{UniformBlock: u})
+			if n%drawsPerFlush == drawsPerFlush-1 {
+				flushDraws(b, dst)
+			}
 			continue
 		}
 		dst.DrawRectShader(w, h, s, &ggfx.DrawRectShaderOptions{Uniforms: map[string]any{
@@ -221,6 +224,9 @@ func benchmarkUniforms(b *testing.B, block bool) {
 			"count":  uint32(4),
 			"tint":   tint,
 		}})
+		if n%drawsPerFlush == drawsPerFlush-1 {
+			flushDraws(b, dst)
+		}
 	}
 }
 
