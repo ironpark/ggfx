@@ -89,6 +89,50 @@ type Node struct {
 	parent *Node
 	child0 *Node
 	child1 *Node
+
+	// freeW and freeH bound what can be allocated under the node: no free leaf under it is wider
+	// than freeW or taller than freeH. alloc skips a subtree by them without walking it.
+	freeW int
+	freeH int
+}
+
+// newLeaf returns a free leaf of region.
+func newLeaf(region image.Rectangle, parent *Node) *Node {
+	return &Node{
+		region: region,
+		parent: parent,
+		freeW:  region.Dx(),
+		freeH:  region.Dy(),
+	}
+}
+
+// updateFree sets n's freeW and freeH from its own state and its children's.
+func (n *Node) updateFree() {
+	switch {
+	case n.child0 != nil:
+		n.freeW = max(n.child0.freeW, n.child1.freeW)
+		n.freeH = max(n.child0.freeH, n.child1.freeH)
+	case n.used:
+		n.freeW, n.freeH = 0, 0
+	default:
+		n.freeW, n.freeH = n.region.Dx(), n.region.Dy()
+	}
+}
+
+// updateFreeUp updates freeW and freeH of n and its ancestors, after n changed.
+func (n *Node) updateFreeUp() {
+	for ; n != nil; n = n.parent {
+		n.updateFree()
+	}
+}
+
+// refreshFree updates freeW and freeH of every node under n, after regions changed.
+func (n *Node) refreshFree() {
+	if n.child0 != nil {
+		n.child0.refreshFree()
+		n.child1.refreshFree()
+	}
+	n.updateFree()
 }
 
 func (n *Node) canFree() bool {
@@ -118,7 +162,20 @@ func square(width, height int) float64 {
 	return float64(height) / float64(width)
 }
 
+// alloc allocates a node of width x height under n, the first that fits in the order of the tree.
 func alloc(n *Node, width, height int) *Node {
+	node := find(n, width, height)
+	if node != nil {
+		node.updateFreeUp()
+	}
+	return node
+}
+
+// find is alloc without the update of freeW and freeH above the node it returns.
+func find(n *Node, width, height int) *Node {
+	if n.freeW < width || n.freeH < height {
+		return nil
+	}
 	if n.region.Dx() < width || n.region.Dy() < height {
 		return nil
 	}
@@ -132,24 +189,12 @@ func alloc(n *Node, width, height int) *Node {
 		}
 		if square(n.region.Dx()-width, n.region.Dy()) >= square(n.region.Dx(), n.region.Dy()-height) {
 			// Split vertically
-			n.child0 = &Node{
-				region: image.Rect(n.region.Min.X, n.region.Min.Y, n.region.Min.X+width, n.region.Max.Y),
-				parent: n,
-			}
-			n.child1 = &Node{
-				region: image.Rect(n.region.Min.X+width, n.region.Min.Y, n.region.Max.X, n.region.Max.Y),
-				parent: n,
-			}
+			n.child0 = newLeaf(image.Rect(n.region.Min.X, n.region.Min.Y, n.region.Min.X+width, n.region.Max.Y), n)
+			n.child1 = newLeaf(image.Rect(n.region.Min.X+width, n.region.Min.Y, n.region.Max.X, n.region.Max.Y), n)
 		} else {
 			// Split horizontally
-			n.child0 = &Node{
-				region: image.Rect(n.region.Min.X, n.region.Min.Y, n.region.Max.X, n.region.Min.Y+height),
-				parent: n,
-			}
-			n.child1 = &Node{
-				region: image.Rect(n.region.Min.X, n.region.Min.Y+height, n.region.Max.X, n.region.Max.Y),
-				parent: n,
-			}
+			n.child0 = newLeaf(image.Rect(n.region.Min.X, n.region.Min.Y, n.region.Max.X, n.region.Min.Y+height), n)
+			n.child1 = newLeaf(image.Rect(n.region.Min.X, n.region.Min.Y+height, n.region.Max.X, n.region.Max.Y), n)
 		}
 		// Note: it now MUST fit, due to above preconditions (repeated here).
 		if n.child0.region.Dx() < width || n.child0.region.Dy() < height {
@@ -157,7 +202,7 @@ func alloc(n *Node, width, height int) *Node {
 		}
 		// Thus, alloc can't return nil, but it may do another split along the other dimension
 		// to get a node with the exact size (width, height).
-		node := alloc(n.child0, width, height)
+		node := find(n.child0, width, height)
 		if node == nil {
 			panic(fmt.Sprintf("packing: could not allocate the requested size (%d, %d) in the newly created child node (%d, %d)", width, height, n.child0.region.Dx(), n.child0.region.Dy()))
 		}
@@ -166,10 +211,10 @@ func alloc(n *Node, width, height int) *Node {
 	if n.child0 == nil || n.child1 == nil {
 		panic("packing: both two children must not be nil at alloc")
 	}
-	if node := alloc(n.child0, width, height); node != nil {
+	if node := find(n.child0, width, height); node != nil {
 		return node
 	}
-	if node := alloc(n.child1, width, height); node != nil {
+	if node := find(n.child1, width, height); node != nil {
 		return node
 	}
 	return nil
@@ -187,20 +232,24 @@ func (p *Page) Alloc(width, height int) *Node {
 	if p.root == nil {
 		w, h := p.allocatableSize()
 		in := p.inset()
-		p.root = &Node{
-			region: image.Rect(in, in, w, h),
-		}
+		p.root = newLeaf(image.Rect(in, in, w, h), nil)
 	}
 	return p.extendAndAlloc(width, height)
 }
 
 func (p *Page) Free(node *Node) {
+	p.free(node).updateFreeUp()
+}
+
+// free is Free without the update of freeW and freeH, which the node it returns and its ancestors
+// need.
+func (p *Page) free(node *Node) *Node {
 	if node.child0 != nil || node.child1 != nil {
 		panic("packing: can't free the node including children")
 	}
 	node.used = false
 	if node.parent == nil {
-		return
+		return node
 	}
 	if node.parent.child0 == nil || node.parent.child1 == nil {
 		panic("packing: both two children must not be nil at Free: double free happened?")
@@ -208,8 +257,9 @@ func (p *Page) Free(node *Node) {
 	if node.parent.child0.canFree() && node.parent.child1.canFree() {
 		node.parent.child0 = nil
 		node.parent.child1 = nil
-		p.Free(node.parent)
+		return p.free(node.parent)
 	}
+	return node
 }
 
 var (
@@ -380,8 +430,12 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 
 	p.width = newWidth
 	p.height = newHeight
+	p.root.refreshFree()
 
-	return rollback
+	return func() {
+		rollback()
+		p.root.refreshFree()
+	}
 }
 
 func (p *Page) AllocatedRegion() image.Rectangle {
