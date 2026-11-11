@@ -60,9 +60,13 @@ func frame(t *testing.T, f func()) {
 }
 
 func TestDrawWithoutWindow(t *testing.T) {
+	// The images are deallocated rather than left to the garbage collector, which would take
+	// them from the atlas in the middle of a later test that counts its images.
 	src := ggfx.NewImage(4, 4)
+	defer src.Deallocate()
 	src.Fill(color.RGBA{0xff, 0, 0, 0xff})
 	dst := ggfx.NewImage(8, 8)
+	defer dst.Deallocate()
 
 	frame(t, func() {
 		op := &ggfx.DrawImageOptions{}

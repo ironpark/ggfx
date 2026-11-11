@@ -51,7 +51,9 @@ func TestScreenAsSource(t *testing.T) {
 	green := color.RGBA{0, 0xff, 0, 0xff}
 	blue := color.RGBA{0, 0, 0xff, 0xff}
 	dst := ggfx.NewImage(8, 8)
+	defer dst.Deallocate()
 	kept := ggfx.NewImage(1, 1)
+	defer kept.Deallocate()
 	for n := range 3 {
 		fr, err := host.BeginFrame()
 		if err != nil {
