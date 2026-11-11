@@ -3,7 +3,8 @@
 ggfx is a fork of [Ebitengine](https://github.com/hajimehoshi/ebiten),
 made to become the rendering and windowing runtime of
 [ggui](https://github.com/ironpark/ggui). It is not a general-purpose game
-engine and does not track Ebitengine releases.
+engine, and it no longer follows Ebitengine: no release is tracked and no
+commit is cherry-picked. See "Upstream" below.
 
 ## Provenance
 
@@ -11,13 +12,11 @@ engine and does not track Ebitengine releases.
 |---|---|
 | Upstream | `https://github.com/hajimehoshi/ebiten` |
 | Forked at | tag `v2.10.2`, commit `221aa13ad` |
-| Upstream remote | `upstream` (kept for cherry-picks) |
 | License | Apache-2.0, unchanged. See `LICENSE` and `NOTICE.md`. |
 | Go | 1.27 or later; the fork uses generic methods. |
 
 The module path is `github.com/ironpark/ggfx` and the root package is
-`ggfx`. Everything else keeps its upstream file layout so that upstream
-commits to the retained packages can be cherry-picked.
+`ggfx`.
 
 ## Shaders: WGSL through naga instead of Kage
 
@@ -44,8 +43,7 @@ shader contract. What changed for the drivers:
 - The built-in, vector stencil and test shaders are rewritten in
   WGSL. The texel unit (`//kage:unit texels`) is gone; all positions are
   pixels.
-- `vector/stencilshader.go` and `stencilbuffer.go` changed with it, so those
-  files no longer merge cleanly from upstream.
+- `vector/stencilshader.go` and `stencilbuffer.go` changed with it.
 
 ## What was removed and why
 
@@ -166,18 +164,37 @@ Linux and the BSDs (OpenGL through glfw; cgo required), and the browser
 (WebGL through `js`/`wasm`). Only macOS was built and tested in the fork
 pass; Windows and wasm were cross-compiled; Linux and BSD were not built.
 
-## Upstream policy
+## Upstream
 
-Do not merge upstream wholesale. Cherry-pick fixes to the layers that are
-kept close to upstream: `internal/graphicsdriver` (except the shader files),
-`internal/graphicscommand`, `internal/atlas`, `internal/restorable`,
-`vector` (except the stencil shaders and the batched fill in
-`fill.go` and `atlas.go`). The oksvg fork moved from `text/v2/internal/oksvg` to
-`internal/oksvg`, so that the `svg` package can draw SVG documents with it; a commit to it
-needs its paths rewritten. `text/v2` moved to ggui as `internal/text`, with a copy of the oksvg
-fork, and upstream commits to it go there. The Metal driver's per-draw calls also diverge;
-see "Draw call cost" below. The shader stack and `internal/render` diverge and are not
-expected to merge; the windowing and the run loop are ggwd's.
+ggfx does not follow Ebitengine any more. Nothing is merged or cherry-picked
+from it, and no file keeps its upstream layout for the sake of a merge: the
+code is ggfx's to restructure. A fix upstream makes is read and written
+again here if it applies. What follows from that so far:
+
+- `internal/mipmap` and `internal/buffered` are part of `internal/render`.
+  A `render.Image` holds its atlas image, the pixel cache
+  (`pixelcache.go`) and the mipmap levels (`mipmap.go`) itself, where three
+  objects wrapped one another; the levels are bare atlas images, as nothing
+  reads or writes their pixels. A draw locks once and converts its sources
+  once, and `DrawQuads` lost the two process-wide mutexes the layers between
+  kept their scratch under.
+- `internal/packing` keeps, on each node, a bound of what can be allocated
+  under it, so an allocation skips the subtrees that are full instead of
+  walking them. The nodes it finds are the ones it found before.
+- The command queue tells that a draw merges with the last from what its
+  uniforms are made of — the regions, as far as the shader reads them, and
+  the user's block — before it makes them (`sameUniformsAsLast`).
+- The image dumper's remains went: `atlas.DumpScreenshot`, `atlas.DumpImages`,
+  `graphicscommand.Image.Dump` and `internal/png`, the copy of `image/png`
+  only they used. Nothing had called them since the dumper's entry points
+  were removed.
+- `vector` reaches the unexported parts of `ggfx.Image` through
+  `internal/bridge`, as `host` does, and not through `go:linkname`.
+- `image.go` is split by what its parts do: `image_draw.go`,
+  `image_pixels.go`, `image_sub.go` and `image_usage.go`.
+
+The oksvg fork is at `internal/oksvg`, for the `svg` package. `text/v2` moved to ggui as
+`internal/text`, with a copy of the oksvg fork. The windowing and the run loop are ggwd's.
 
 ## Generic draw methods and uniform blocks
 
@@ -191,9 +208,6 @@ for uint16. A `nil` index slice needs the type spelled out, as in
 as `UniformBlock`, beside the `Uniforms` map. Its generic setters write
 values in the shader's layout ahead of the draw, so a draw skips the map
 lookups and the reflection. See `docs/shaders.md`.
-
-These change `image.go` and the shader files, so upstream commits to them
-no longer merge cleanly.
 
 ## The window system moved to ggwd
 

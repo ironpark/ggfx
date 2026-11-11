@@ -1,12 +1,14 @@
 # ggfx
 
 ggfx is the renderer of [ggui](https://github.com/ironpark/ggui): it draws
-images, shaders, text, vectors and SVG on the GPU and presents them on
-surfaces that a window system owns. It is a fork of
+images, shaders and vectors on the GPU and presents them on surfaces that a
+window system owns. Package `svg` rasterizes SVG documents on the CPU, into
+an `image.RGBA` that an image is then made of. It began as a fork of
 [Ebitengine](https://ebitengine.org/) v2.10.2 for desktop and the browser
 that keeps the GPU pipeline and `vector`, replaces the Kage
 shader language with WGSL compiled by [naga](https://github.com/gogpu/naga),
-and drops audio, mobile and console support.
+and drops audio, mobile and console support. It no longer follows
+Ebitengine.
 
 ggfx has no windows. [ggwd](https://github.com/ironpark/ggwd) is the window
 system ggui uses, and it drives ggfx through the public renderer API in
@@ -14,8 +16,7 @@ package `host` alone.
 
 Shaders are documented in [docs/shaders.md](docs/shaders.md).
 
-See [FORK.md](FORK.md) for what changed against upstream and how fixes are
-brought in.
+See [FORK.md](FORK.md) for what changed against Ebitengine.
 
 ## Platforms
 
