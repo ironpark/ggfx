@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package render_test
+// Package pacertest_test flushes to a driver of its own, so it has a process to itself: the other
+// tests of the renderer run in a frame of the real driver.
+package pacertest_test
 
 import (
 	"testing"
 
+	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/render"
 )
 
 type frameDriver struct {
@@ -53,7 +55,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 	const frames = 10
 	for frame := range frames {
 		graphicscommand.NewImage(1, 1, nil, "")
-		if err := render.FlushForTesting(&driver, false); err != nil {
+		if err := atlas.FlushCommands(&driver, false); err != nil {
 			t.Fatal(err)
 		}
 		if driver.images != frame+1 || driver.frames != frame+1 || driver.presents != 0 {
@@ -61,7 +63,7 @@ func TestSkippedPresentationFlushesCommands(t *testing.T) {
 		}
 	}
 	graphicscommand.NewImage(1, 1, nil, "")
-	if err := render.FlushForTesting(&driver, true); err != nil {
+	if err := atlas.FlushCommands(&driver, true); err != nil {
 		t.Fatal(err)
 	}
 	if driver.images != frames+1 || driver.frames != frames+1 || driver.presents != 1 {

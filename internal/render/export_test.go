@@ -15,11 +15,25 @@
 package render
 
 import (
-	"github.com/ironpark/ggfx/internal/atlas"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"image"
 )
 
-// FlushForTesting flushes the queued commands to driver, as Flush does to the graphics driver.
-func FlushForTesting(driver graphicsdriver.Graphics, present bool) error {
-	return atlas.FlushCommands(driver, present)
+const (
+	MaxPixelsCacheSize = maxPixelsCacheSize
+	DividedTileSize    = dividedTileSize
+)
+
+// CachedPixelsSizeForTesting returns the total size in bytes of the cached tiles.
+func (i *Image) CachedPixelsSizeForTesting() int {
+	var size int
+	for _, t := range i.cache.tiles {
+		size += len(t.pixels)
+	}
+	return size
+}
+
+// ReadPixelsForTesting reads the pixels of region, and reports whether a frame was there to read
+// them in.
+func (i *Image) ReadPixelsForTesting(pixels []byte, region image.Rectangle) (bool, error) {
+	return i.readPixels(pixels, region)
 }

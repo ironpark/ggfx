@@ -20,14 +20,14 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/mipmap"
 )
 
 // quadScratch is what a DrawQuads keeps its lists in.
 type quadScratch struct {
-	locked  []*Image
-	mipmaps []*mipmap.Mipmap
+	locked []*Image
+	imgs   []*atlas.Image
 }
 
 var quadScratches = sync.Pool{New: func() any { return new(quadScratch) }}
@@ -64,11 +64,20 @@ func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 	}
 	i.lastBlend = blend
 
-	mipmaps := s.mipmaps[:0]
+	imgs := s.imgs[:0]
 	for _, src := range srcs {
-		mipmaps = append(mipmaps, src.mipmap)
+		if src == i {
+			panic("render: Image.DrawQuads: source images must be different from the receiver")
+		}
+		// As in drawTriangles, the pending pixel writes go to the GPU first.
+		src.cache.writeBackPixelsIfNeeded(src.img)
+		imgs = append(imgs, src.img)
 	}
-	i.mipmap.DrawQuads(mipmaps, vertices, blend, dstRegion, srcRegions, shader.shader)
-	clear(mipmaps)
-	s.mipmaps = mipmaps[:0]
+	i.cache.writeBackPixelsIfNeeded(i.img)
+	i.img.DrawQuads(imgs, vertices, blend, dstRegion, srcRegions, shader.shader)
+	clear(imgs)
+	s.imgs = imgs[:0]
+
+	i.cache.reset()
+	i.markLevelsDirty()
 }

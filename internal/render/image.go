@@ -16,6 +16,7 @@ package render
 
 import (
 	"cmp"
+	"fmt"
 	"image"
 	"slices"
 	"sync"
@@ -26,7 +27,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/mipmap"
 	"github.com/ironpark/ggfx/internal/recent"
 )
 
@@ -41,8 +41,12 @@ func SetPanicOnErrorOnReadingPixelsForTesting(value bool) {
 // lastImageID is the last ID given to an image.
 var lastImageID atomic.Int64
 
+// Image is an image of the renderer: an atlas image, the pixels of it kept on the CPU for reads and
+// for writes of single pixels, and the smaller copies of it a scaled-down draw samples.
 type Image struct {
-	mipmap    *mipmap.Mipmap
+	// img is the image itself, the mipmap's level 0.
+	img *atlas.Image
+
 	width     int
 	height    int
 	imageType atlas.ImageType
@@ -54,13 +58,20 @@ type Image struct {
 	// id determines the order to lock mu among multiple images.
 	id int64
 
-	// mu protects the members below and the underlying mipmap image.
+	// mu protects the members below and img.
 	//
-	// An ebiten.Image and its sub-images share one ui.Image, so operations on an image and its
+	// A ggfx.Image and its sub-images share one Image, so operations on an image and its
 	// sub-images are serialized here even when they come from multiple goroutines (#3515).
 	mu sync.Mutex
 
-	// lastBlend is the lastly-used blend for mipmap.Image.
+	// cache is the CPU-side cache of img's pixels.
+	cache pixelCache
+
+	// levels are the mipmap levels above 0, by level. A level is the format of the image: a
+	// linear-filtered draw of an A8 image into another stores the filtered alpha.
+	levels map[int]mipmapLevel
+
+	// lastBlend is the lastly-used blend for a draw to the image.
 	lastBlend graphicsdriver.Blend
 
 	// modifyCallback is a callback called when DrawTriangles or WritePixels is called.
@@ -93,7 +104,7 @@ var theLevelsRegistry levelsRegistry
 
 // registerLevels adds i to theLevelsRegistry if its mipmap holds levels. i's mutex must be held.
 func (i *Image) registerLevels() {
-	if i.inLevelsRegistry || i.mipmap == nil || !i.mipmap.HasLevels() {
+	if i.inLevelsRegistry || len(i.levels) == 0 {
 		return
 	}
 	i.inLevelsRegistry = true
@@ -129,7 +140,7 @@ func dropUnusedMipmapLevels() {
 	for k, p := range ps {
 		if img := p.Value(); img != nil {
 			img.mu.Lock()
-			keep := img.mipmap != nil && img.mipmap.DropUnusedLevels()
+			keep := img.dropUnusedLevels()
 			if !keep {
 				img.inLevelsRegistry = false
 			}
@@ -158,7 +169,7 @@ func NewImage(width, height int, imageType atlas.ImageType) *Image {
 // NewImageWithFormat returns an image of the given pixel format. WritePixels and ReadPixels take
 // pixels in that format.
 func NewImageWithFormat(width, height int, imageType atlas.ImageType, format graphicsdriver.PixelFormat) *Image {
-	i := newImage(mipmap.NewWithFormat(width, height, imageType, format), width, height, imageType)
+	i := newImage(atlas.NewImageWithFormat(width, height, imageType, format), width, height, imageType)
 	i.format = format
 	return i
 }
@@ -170,7 +181,7 @@ func (i *Image) Format() graphicsdriver.PixelFormat {
 
 // NewScreenImage returns the image presented on surface.
 func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
-	i := newImage(mipmap.NewScreen(width, height, surface), width, height, atlas.ImageTypeScreen)
+	i := newImage(atlas.NewScreenImage(width, height, surface), width, height, atlas.ImageTypeScreen)
 	i.readable = graphicscommand.ScreenReadable(surface)
 	return i
 }
@@ -186,15 +197,17 @@ func (i *Image) Size() (width, height int) {
 	return i.width, i.height
 }
 
-func newImage(m *mipmap.Mipmap, width, height int, imageType atlas.ImageType) *Image {
-	return &Image{
-		mipmap:    m,
+func newImage(img *atlas.Image, width, height int, imageType atlas.ImageType) *Image {
+	i := &Image{
+		img:       img,
 		width:     width,
 		height:    height,
 		imageType: imageType,
 		id:        lastImageID.Add(1),
 		lastBlend: graphicsdriver.BlendSourceOver,
 	}
+	i.cache.init(width, height, img.Format().BytesPerPixel())
+	return i
 }
 
 // imagesLocker locks the mutexes of a destination image and its source images.
@@ -231,7 +244,7 @@ func (l *imagesLocker) lock(dst *Image, srcs [graphics.ShaderSrcImageCount]*Imag
 	copy(l.imgs[1:], srcs[:])
 
 	// Sorting gathers the nil sources at the end, and puts duplicates next to each other.
-	// One ui.Image is shared by an image and its sub-images, so a source can be the same as the
+	// One Image is shared by an image and its sub-images, so a source can be the same as the
 	// destination or another source, and locking the same mutex twice would deadlock.
 	slices.SortFunc(l.imgs[:], func(a, b *Image) int {
 		switch {
@@ -276,12 +289,13 @@ func (i *Image) Deallocate() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if i.mipmap == nil {
-		return
-	}
-	i.mipmap.Deallocate()
+	i.deallocateLevels()
+	i.img.Deallocate()
+	i.cache.deallocate()
 }
 
+// DrawTriangles draws triangles from srcs. It changes vertices in place: copying them is the
+// caller's.
 func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *Shader, uniforms []uint32, canSkipMipmap bool) {
 	var l imagesLocker
 	l.lock(i, srcs)
@@ -298,23 +312,59 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 
 	i.lastBlend = blend
 
-	var srcMipmaps [graphics.ShaderSrcImageCount]*mipmap.Mipmap
-	for i, src := range srcs {
+	if len(indices) == 0 {
+		return
+	}
+
+	// The level every source is drawn from: 0, the image itself, unless the draw shrinks the
+	// first source.
+	var level int
+	if !canSkipMipmap && srcs[0] != nil && canUseMipmap(srcs[0].imageType) {
+		level = mipmapLevelFor(vertices, indices)
+	}
+
+	var imgs [graphics.ShaderSrcImageCount]*atlas.Image
+	for k, src := range srcs {
 		if src == nil {
 			continue
 		}
-		srcMipmaps[i] = src.mipmap
+		if src == i {
+			panic("render: Image.DrawTriangles: source images must be different from the receiver")
+		}
+		// src's pending pixel writes have to be applied to the GPU, but its cache doesn't have to
+		// be cleared since src is not modified here.
+		src.cache.writeBackPixelsIfNeeded(src.img)
+		imgs[k] = src.img
+		if level == 0 {
+			continue
+		}
+		if img := src.level(level); img != nil {
+			s := float32(int(1) << level)
+			for j := 0; j < len(vertices); j += graphics.VertexFloatCount {
+				vertices[j+2] /= s
+				vertices[j+3] /= s
+			}
+			imgs[k] = img
+		}
 	}
 
-	i.mipmap.DrawTriangles(srcMipmaps, vertices, indices, blend, dstRegion, srcRegions, shader.shader, uniforms, canSkipMipmap)
+	i.cache.writeBackPixelsIfNeeded(i.img)
+	i.img.DrawTriangles(imgs, vertices, indices, blend, dstRegion, srcRegions, shader.shader, uniforms)
 
-	for _, src := range srcs {
-		if src != nil {
-			src.registerLevels()
+	// After rendering, the pixel cache and the levels are no longer valid.
+	i.cache.reset()
+	i.markLevelsDirty()
+
+	if level != 0 {
+		for _, src := range srcs {
+			if src != nil {
+				src.registerLevels()
+			}
 		}
 	}
 }
 
+// WritePixels replaces the pixels of region.
 func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -322,7 +372,11 @@ func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
 	if i.modifyCallback != nil {
 		i.modifyCallback()
 	}
-	i.mipmap.WritePixels(pix, region)
+	if l := i.cache.bpp * region.Dx() * region.Dy(); len(pix) != l {
+		panic(fmt.Sprintf("render: len(pix) was %d but must be %d", len(pix), l))
+	}
+	i.cache.writePixels(i.img, pix, region)
+	i.markLevelsDirty()
 }
 
 func (i *Image) ReadPixels(pixels []byte, region image.Rectangle) {
@@ -347,7 +401,7 @@ func (i *Image) readPixels(pixels []byte, region image.Rectangle) (bool, error) 
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	return i.mipmap.ReadPixels(driver, pixels, region)
+	return i.cache.readPixels(i.img, driver, pixels, region)
 }
 
 // Clear clears the whole image.

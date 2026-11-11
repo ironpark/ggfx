@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package buffered_test
+package render_test
 
 import (
 	"bytes"
@@ -20,16 +20,15 @@ import (
 	"testing"
 
 	"github.com/ironpark/ggfx/internal/atlas"
-	"github.com/ironpark/ggfx/internal/buffered"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/render"
 )
 
-func readA8(t *testing.T, img *buffered.Image, r image.Rectangle) []byte {
+func readA8(t *testing.T, img *render.Image, r image.Rectangle) []byte {
 	t.Helper()
 	pix := make([]byte, r.Dx()*r.Dy())
-	ok, err := img.ReadPixels(render.GraphicsDriver(), pix, r)
+	ok, err := img.ReadPixelsForTesting(pix, r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +42,7 @@ func readA8(t *testing.T, img *buffered.Image, r image.Rectangle) []byte {
 // image is used.
 func TestA8Dots(t *testing.T) {
 	const w, h = 8, 8
-	img := buffered.NewImageWithFormat(w, h, atlas.ImageTypeRegular, graphicsdriver.PixelFormatA8)
+	img := render.NewImageWithFormat(w, h, atlas.ImageTypeRegular, graphicsdriver.PixelFormatA8)
 	defer img.Deallocate()
 	if img.Format() != graphicsdriver.PixelFormatA8 {
 		t.Fatalf("Format(): got %s", img.Format())
@@ -60,12 +59,12 @@ func TestA8Dots(t *testing.T) {
 	}
 
 	// Drawing from the image draws the dots to the GPU first.
-	dst := buffered.NewImageWithFormat(w, h, atlas.ImageTypeRegular, graphicsdriver.PixelFormatA8)
+	dst := render.NewImageWithFormat(w, h, atlas.ImageTypeRegular, graphicsdriver.PixelFormatA8)
 	defer dst.Deallocate()
 	vs := make([]float32, 4*graphics.VertexFloatCount)
 	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, w, h, 0, 0, w, h, 1, 1, 1, 1)
 	r := image.Rect(0, 0, w, h)
-	dst.DrawTriangles([graphics.ShaderSrcImageCount]*buffered.Image{img}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader, nil)
+	dst.DrawTriangles([graphics.ShaderSrcImageCount]*render.Image{img}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, render.NearestFilterShader, nil, true)
 
 	want := make([]byte, w*h)
 	for p, a := range dots {
@@ -83,8 +82,8 @@ func TestA8Dots(t *testing.T) {
 func TestA8Tiles(t *testing.T) {
 	// An A8 image is tiled from 4 times as many pixels as an RGBA one.
 	const width = 2048
-	height := buffered.MaxPixelsCacheSize/width + 1
-	img := buffered.NewImageWithFormat(width, height, atlas.ImageTypeUnmanaged, graphicsdriver.PixelFormatA8)
+	height := render.MaxPixelsCacheSize/width + 1
+	img := render.NewImageWithFormat(width, height, atlas.ImageTypeUnmanaged, graphicsdriver.PixelFormatA8)
 	defer img.Deallocate()
 
 	pix := make([]byte, width*height)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package buffered
+package render
 
 import (
 	"image"
@@ -296,6 +296,7 @@ func (c *pixelCache) writeBackPixelsIfNeeded(img *atlas.Image) {
 		idx++
 	}
 
+	// The white image is never modified after the initialization, so it has no writes pending.
 	srcs := [graphics.ShaderSrcImageCount]*atlas.Image{whiteImage.img}
 	dr := image.Rect(0, 0, c.width, c.height)
 	sr := image.Rect(0, 0, whiteImage.width, whiteImage.height)
@@ -309,11 +310,11 @@ func (c *pixelCache) writeBackPixelsIfNeeded(img *atlas.Image) {
 // The dots must be empty and no tile must need a write-back, as they are pending writes that must not be discarded.
 func (c *pixelCache) reset() {
 	if len(c.dots) > 0 {
-		panic("buffered: the dots must be empty at reset")
+		panic("render: the dots must be empty at reset")
 	}
 	for _, t := range c.tiles {
 		if t.needsWriteBack {
-			panic("buffered: no tile must need a write-back at reset")
+			panic("render: no tile must need a write-back at reset")
 		}
 	}
 	clear(c.tiles)
