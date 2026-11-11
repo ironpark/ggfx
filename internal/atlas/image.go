@@ -844,9 +844,12 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 			panic(fmt.Sprintf("atlas: the image being put on an atlas is too big: width: %d, height: %d", i.width, i.height))
 		}
 
-		// A regular image as large as a texture can be has no room for its padding: it goes
-		// without, as one at the right or the bottom of a page does.
-		wp, hp := min(wp, maxSize), min(hp, maxSize)
+		// An image off the atlas keeps an empty texel past its right and bottom edges, as one on
+		// a page has its padding there: a linear filter at those edges reads one texel past the
+		// image, and a texture as large as the image alone would be read out of its bounds,
+		// which no API defines. Direct3D 12 reads alpha 1 there from an R8 texture whose view
+		// maps every component to red. An image as large as a texture can be goes without.
+		wp, hp := min(i.width+1, maxSize), min(i.height+1, maxSize)
 		i.backend = &backend{
 			width:        wp,
 			height:       hp,
@@ -854,9 +857,8 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 			source:       asSource,
 			format:       format,
 		}
-		// Clear the whole texture, not the image alone: a linear filter at the image's right or
-		// bottom edge reads the texels past it, which a texture the driver rounded up to a power
-		// of 2 has, and which Direct3D 12 leaves undefined in a new render target.
+		// Clear the whole texture, not the image alone, so that the texels past the image, which
+		// the filter reads, are empty: Direct3D 12 leaves a new render target undefined.
 		w, h := i.backend.backendImage.InternalSize()
 		i.backend.clear(image.Rect(0, 0, w, h))
 		theBackends = append(theBackends, i.backend)
