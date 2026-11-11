@@ -194,25 +194,16 @@ func (c *drawTrianglesCommand) setVertices(vertices []float32) {
 	c.vertices = vertices
 }
 
+// canMergeWithoutUniforms reports whether a draw to dst from srcs with blend and shader can be
+// merged with c as far as those go: it can when its uniforms are c's too.
+func (c *drawTrianglesCommand) canMergeWithoutUniforms(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, blend graphicsdriver.Blend, shader *Shader) bool {
+	return c.shader == shader && c.dst == dst && c.srcs == srcs && c.blend == blend
+}
+
 // CanMergeWithDrawTrianglesCommand returns a boolean value indicating whether the other drawTrianglesCommand can be merged
 // with the drawTrianglesCommand c.
 func (c *drawTrianglesCommand) CanMergeWithDrawTrianglesCommand(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, blend graphicsdriver.Blend, shader *Shader, uniforms []uint32) bool {
-	if c.shader != shader {
-		return false
-	}
-	if !slices.Equal(c.uniforms, uniforms) {
-		return false
-	}
-	if c.dst != dst {
-		return false
-	}
-	if c.srcs != srcs {
-		return false
-	}
-	if c.blend != blend {
-		return false
-	}
-	return true
+	return c.canMergeWithoutUniforms(dst, srcs, blend, shader) && slices.Equal(c.uniforms, uniforms)
 }
 
 var (

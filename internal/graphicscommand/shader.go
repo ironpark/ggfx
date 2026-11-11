@@ -35,6 +35,33 @@ type Shader struct {
 
 	// name is used only for logging.
 	name string
+
+	// regionReads is which regions of the internal uniform block the shader reads, once asked
+	// (see readsRegions).
+	regionReads uint8
+}
+
+const (
+	regionReadsKnown uint8 = 1 << iota
+	regionReadsDst
+	regionReadsSrc
+)
+
+// readsRegions reports whether the shader reads the destination region and the source regions of
+// the internal uniform block. Draws that differ in a region it does not read have the same
+// uniforms once FilterInternalUniforms has zeroed it.
+func (s *Shader) readsRegions() (dst, src bool) {
+	if s.regionReads&regionReadsKnown == 0 {
+		r := regionReadsKnown
+		if s.ir == nil || s.ir.ReadsInternalUniforms(graphics.DstRegionOriginUniformDwordIndex, graphics.SourceTextureSizeUniformDwordIndex) {
+			r |= regionReadsDst
+		}
+		if s.ReadsSourceRegions() {
+			r |= regionReadsSrc
+		}
+		s.regionReads = r
+	}
+	return s.regionReads&regionReadsDst != 0, s.regionReads&regionReadsSrc != 0
 }
 
 func NewShader(ir *shader.Program, name string) *Shader {

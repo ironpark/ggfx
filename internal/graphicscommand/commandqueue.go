@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,11 @@ type commandQueue struct {
 	indicesUse  recent.Peak
 
 	tmpNumVertexFloats int
+
+	// lastDstRegion and lastSrcRegions are the regions of the draw enqueued last, which the last
+	// command holds when it is a draw (see sameUniformsAsLast).
+	lastDstRegion  image.Rectangle
+	lastSrcRegions [graphics.ShaderSrcImageCount]image.Rectangle
 
 	drawTrianglesCommandPool drawTrianglesCommandPool
 	writePixelsCommandPool   writePixelsCommandPool
@@ -120,33 +126,35 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 	q.appendIndices(indices, uint32(q.tmpNumVertexFloats/graphics.VertexFloatCount))
 	q.tmpNumVertexFloats += len(vertices)
 
+	// TODO: If dst is the screen, reorder the command to be the last.
+	var last *drawTrianglesCommand
+	if !split && 0 < len(q.commands) {
+		if c, ok := q.commands[len(q.commands)-1].(*drawTrianglesCommand); ok && c.canMergeWithoutUniforms(dst, srcs, blend, shader) {
+			last = c
+		}
+	}
+
+	// Most draws that merge are told so by what the uniforms are made from, without making them.
+	if last != nil && q.sameUniformsAsLast(last, shader, dstRegion, srcRegions, uniforms) {
+		q.mergeIntoLast(last, len(vertices), len(indices), dstRegion)
+		return
+	}
+	q.lastDstRegion = dstRegion
+	q.lastSrcRegions = srcRegions
+
 	// prependPreservedUniforms not only prepends values to the given slice but also creates a new slice.
 	// Allocating a new slice is necessary to make EnqueueDrawTrianglesCommand safe so far.
-	// TODO: This might cause a performance issue (#2601).
 	uniforms = q.prependPreservedUniforms(uniforms, shader, dst, srcs, dstRegion, srcRegions)
 
 	// Zero the internal uniforms the shader never reads, so that draws which differ only in
 	// their regions can be merged.
 	shader.ir.FilterInternalUniforms(uniforms[:graphics.PreservedUniformDwordCount])
 
-	// TODO: If dst is the screen, reorder the command to be the last.
-	if !split && 0 < len(q.commands) {
-		if last, ok := q.commands[len(q.commands)-1].(*drawTrianglesCommand); ok {
-			if last.CanMergeWithDrawTrianglesCommand(dst, srcs, vertices, blend, shader, uniforms) {
-				last.setVertices(q.lastVertices(len(vertices) + last.numVertices()))
-				if last.dstRegions[len(last.dstRegions)-1].Region == dstRegion {
-					last.dstRegions[len(last.dstRegions)-1].IndexCount += len(indices)
-				} else {
-					last.dstRegions = append(last.dstRegions, graphicsdriver.DstRegion{
-						Region:     dstRegion,
-						IndexCount: len(indices),
-					})
-				}
-				// The merged command keeps the last command's uniforms, which are equal.
-				q.uint32sBuffer.free(uniforms)
-				return
-			}
-		}
+	if last != nil && slices.Equal(last.uniforms, uniforms) {
+		q.mergeIntoLast(last, len(vertices), len(indices), dstRegion)
+		// The merged command keeps the last command's uniforms, which are equal.
+		q.uint32sBuffer.free(uniforms)
+		return
 	}
 
 	c := q.drawTrianglesCommandPool.get()
@@ -171,6 +179,35 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 		}
 	}
 	q.commands = append(q.commands, c)
+}
+
+// sameUniformsAsLast reports whether a draw with shader and the given regions and user uniforms
+// has the uniforms of last, the last command, which draws to the same destination from the same
+// sources with shader: it does when the draw enqueued last, whose uniforms are last's, had the same
+// user uniforms and the same regions, as far as shader reads them. It may report false for equal
+// uniforms.
+func (q *commandQueue) sameUniformsAsLast(last *drawTrianglesCommand, shader *Shader, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, uniforms []uint32) bool {
+	readsDst, readsSrc := shader.readsRegions()
+	if readsDst && q.lastDstRegion != dstRegion {
+		return false
+	}
+	if readsSrc && q.lastSrcRegions != srcRegions {
+		return false
+	}
+	return slices.Equal(last.uniforms[graphics.PreservedUniformDwordCount:], uniforms)
+}
+
+// mergeIntoLast adds the vertices and indices appended last to last, the last command.
+func (q *commandQueue) mergeIntoLast(last *drawTrianglesCommand, vertexFloats, indices int, dstRegion image.Rectangle) {
+	last.setVertices(q.lastVertices(vertexFloats + last.numVertices()))
+	if r := &last.dstRegions[len(last.dstRegions)-1]; r.Region == dstRegion {
+		r.IndexCount += indices
+		return
+	}
+	last.dstRegions = append(last.dstRegions, graphicsdriver.DstRegion{
+		Region:     dstRegion,
+		IndexCount: indices,
+	})
 }
 
 func (q *commandQueue) lastVertices(n int) []float32 {
