@@ -854,7 +854,11 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 			source:       asSource,
 			format:       format,
 		}
-		i.backend.clear(image.Rect(0, 0, wp, hp))
+		// Clear the whole texture, not the image alone: a linear filter at the image's right or
+		// bottom edge reads the texels past it, which a texture the driver rounded up to a power
+		// of 2 has, and which Direct3D 12 leaves undefined in a new render target.
+		w, h := i.backend.backendImage.InternalSize()
+		i.backend.clear(image.Rect(0, 0, w, h))
 		theBackends = append(theBackends, i.backend)
 		return
 	}
