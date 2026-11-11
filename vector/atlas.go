@@ -196,10 +196,10 @@ func (a *atlas) setPaths(now int64, dstBounds image.Rectangle, paths []*Path, bo
 	a.ensureImages(now, atlasImageCount, maxImageSize)
 }
 
-// ensureImages makes atlasImages count cleared images at least as large as atlasSizes, up to
-// maxImageSize. An image is reallocated larger when it is too small, and smaller when it is far
-// larger than the recent fills needed; the images beyond the count recently needed are
-// deallocated.
+// ensureImages makes atlasImages count images at least as large as atlasSizes, up to
+// maxImageSize, and clears each within its atlasSizes. An image is reallocated larger when it is
+// too small, and smaller when it is far larger than the recent fills needed; the images beyond the
+// count recently needed are deallocated.
 //
 // The images are unmanaged. They are render targets, which internal/atlas would put on
 // destination pages whose sizes are powers of two, so a large one could hold close to twice its
@@ -240,7 +240,12 @@ func (a *atlas) ensureImages(now int64, count int, maxImageSize int) {
 			case cur.X*cur.Y > recent.ShrinkFactor*want.X*want.Y:
 				// Far larger than the recent fills needed.
 			default:
-				img.Clear()
+				// Clear only what this batch's buffers take: no draw reads past them, and an
+				// image kept large after a large fill would otherwise be cleared whole for
+				// every small one.
+				sub := img.RecyclableSubImage(image.Rectangle{Max: s})
+				sub.Clear()
+				sub.Recycle()
 				continue
 			}
 			img.Deallocate()
