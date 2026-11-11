@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"image"
 	"image/color"
-	"runtime"
 	"testing"
 
 	"github.com/ironpark/ggfx"
-	"github.com/ironpark/ggfx/host"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/render"
 	"github.com/ironpark/ggfx/vector"
 )
 
@@ -57,17 +57,6 @@ func readRGBA(img *ggfx.Image) []byte {
 	return pix
 }
 
-// firstDiff returns the first pixel two RGBA images of width w differ at.
-func firstDiff(got, want []byte, w int) (x, y int, g, wa []byte, ok bool) {
-	for i := 0; i < len(got); i += 4 {
-		if !bytes.Equal(got[i:i+4], want[i:i+4]) {
-			p := i / 4
-			return p % w, p / w, got[i : i+4], want[i : i+4], true
-		}
-	}
-	return 0, 0, nil, nil, false
-}
-
 // compareRGBA reports where RGBA pixels of an image of width w differ by more than tolerance.
 func compareRGBA(t *testing.T, got, want []byte, w, tolerance int) {
 	t.Helper()
@@ -97,16 +86,9 @@ func newAlpha(w, h int) *ggfx.Image {
 	return ggfx.NewImageWithOptions(image.Rect(0, 0, w, h), &ggfx.NewImageOptions{Format: ggfx.PixelFormatAlpha})
 }
 
-// a8Native reports whether the driver makes alpha images natively: Metal, and OpenGL outside the
-// browser (WebGL has no texture swizzle).
+// a8Native reports whether the driver makes alpha images natively, as the driver itself says.
 func a8Native() bool {
-	switch host.CurrentDriver().Library {
-	case host.GraphicsLibraryMetal:
-		return true
-	case host.GraphicsLibraryOpenGL:
-		return runtime.GOOS != "js"
-	}
-	return false
+	return render.GraphicsDriver().SupportsPixelFormat(graphicsdriver.PixelFormatA8)
 }
 
 // TestAlphaImageDrawsAsWhite draws an alpha image and the equivalent white RGBA image the same
@@ -286,7 +268,9 @@ func TestAlphaImageUnmanaged(t *testing.T) {
 }
 
 // TestAlphaImageDrawInto draws white coverage into an alpha image: it keeps what an RGBA image
-// keeps in its alpha (and red).
+// keeps in its alpha (and red), within 1. The draws filter linearly at a fractional offset, and a
+// rasterizer may blend into a one-channel target with other rounding than into a four-channel
+// one: WARP and Apple's software OpenGL renderer differ by 1 at a few pixels.
 func TestAlphaImageDrawInto(t *testing.T) {
 	const w, h = 32, 24
 	mask := alphaMask(w, h)
@@ -316,7 +300,7 @@ func TestAlphaImageDrawInto(t *testing.T) {
 				got.ReadPixels(ga)
 				wp := readRGBA(want)
 				for i := range ga {
-					if ga[i] != wp[4*i+3] {
+					if d := int(ga[i]) - int(wp[4*i+3]); d < -1 || d > 1 {
 						t.Fatalf("at (%d, %d): got %d, want %d", i%w, i/w, ga[i], wp[4*i+3])
 					}
 				}
@@ -328,9 +312,7 @@ func TestAlphaImageDrawInto(t *testing.T) {
 				op.ColorScale.ScaleWithColor(color.RGBA{0, 0x40, 0x80, 0xff})
 				gd.DrawImage(got, op)
 				wd.DrawImage(want, op)
-				if x, y, g, wa, ok := firstDiff(readRGBA(gd), readRGBA(wd), w); ok {
-					t.Errorf("drawn at (%d, %d): got %v, want %v", x, y, g, wa)
-				}
+				compareRGBA(t, readRGBA(gd), readRGBA(wd), w, 1)
 			})
 		}
 	}
