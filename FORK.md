@@ -39,7 +39,8 @@ shader contract. What changed for the drivers:
 - DirectX: shader model 5.0 (`vs_5_0`/`ps_5_0`), so feature level 11.0 is
   required; feature levels 10.x are dropped. Vertex semantics are `LOC0..3`.
   The projection matrix's Y inversion, which the HLSL uniform adjuster
-  used to do, now lives in the driver (`flipProjectionY`), like Metal.
+  used to do, is written by the command queue for every driver whose
+  `FlipsY` says so (Metal, DirectX, and OpenGL's default framebuffer).
 - The built-in, vector stencil and test shaders are rewritten in
   WGSL. The texel unit (`//kage:unit texels`) is gone; all positions are
   pixels.

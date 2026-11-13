@@ -17,9 +17,10 @@ package graphics
 const (
 	ShaderSrcImageCount = 4
 
-	// The internal uniform block, as the shader prelude declares it (see shader.Prelude). Every
-	// value is a float32 dword; the layout follows WGSL's uniform address space rules, so vec2
-	// arrays are stored as vec4 arrays.
+	// The internal uniform block, as the shader prelude declares it (see shader.Prelude) and
+	// shader.InternalUniforms states it; a test holds these constants to the latter. Every value
+	// is a float32 dword; the layout follows WGSL's uniform address space rules, so vec2 arrays
+	// are stored as vec4 arrays.
 	//
 	//	dst_texture_size:  vec2f
 	//	dst_origin:        vec2f

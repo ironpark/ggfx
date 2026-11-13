@@ -27,16 +27,13 @@ type pipelineStateKey struct {
 
 type shader12 struct {
 	graphics               *graphics12
-	id                     graphicsdriver.ShaderID
 	userConstantBufferSize uint32
-	vertexShader           *_ID3DBlob
-	pixelShader            *_ID3DBlob
+
+	// vertexShader is shared and must not be released. The pipeline states copy the bytecode.
+	vertexShader *_ID3DBlob
+	pixelShader  *_ID3DBlob
 
 	pipelineStates map[pipelineStateKey]*_ID3D12PipelineState
-}
-
-func (s *shader12) ID() graphicsdriver.ShaderID {
-	return s.id
 }
 
 func (s *shader12) Dispose() {
@@ -53,17 +50,8 @@ func (s *shader12) disposeImpl() {
 		s.pixelShader.Release()
 		s.pixelShader = nil
 	}
-	if s.vertexShader != nil {
-		count := s.vertexShader.Release()
-		if count == 0 {
-			for k, v := range vertexShaderCache {
-				if v == s.vertexShader {
-					delete(vertexShaderCache, k)
-				}
-			}
-		}
-		s.vertexShader = nil
-	}
+	// The vertex shader is shared (see vertexShaderBlob).
+	s.vertexShader = nil
 }
 
 func (s *shader12) pipelineState(blend graphicsdriver.Blend, rtvFormat _DXGI_FORMAT) (*_ID3D12PipelineState, error) {

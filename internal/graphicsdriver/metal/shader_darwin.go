@@ -17,6 +17,7 @@ package metal
 import (
 	"fmt"
 
+	"github.com/gogpu/naga/backend"
 	"github.com/gogpu/naga/ir"
 	"github.com/gogpu/naga/msl"
 
@@ -33,25 +34,23 @@ const (
 )
 
 type shaderRpsKey struct {
-	blend  graphicsdriver.Blend
-	pix    mtl.PixelFormat
-	screen bool
+	blend graphicsdriver.Blend
+	pix   mtl.PixelFormat
 }
 
 type Shader struct {
-	id       graphicsdriver.ShaderID
 	graphics *Graphics
 
 	program *shader.Program
 	lib     mtl.Library
 	fs      mtl.Function
-	vs      mtl.Function
-	rpss    map[shaderRpsKey]mtl.RenderPipelineState
+	// vs is shared (see Graphics.vertexFunction) and must not be released.
+	vs   mtl.Function
+	rpss map[shaderRpsKey]mtl.RenderPipelineState
 }
 
-func newShader(id graphicsdriver.ShaderID, graphics *Graphics, device mtl.Device, program *shader.Program) (*Shader, error) {
+func newShader(graphics *Graphics, device mtl.Device, program *shader.Program) (*Shader, error) {
 	s := &Shader{
-		id:       id,
 		graphics: graphics,
 		program:  program,
 		rpss:     map[shaderRpsKey]mtl.RenderPipelineState{},
@@ -62,22 +61,17 @@ func newShader(id graphicsdriver.ShaderID, graphics *Graphics, device mtl.Device
 	return s, nil
 }
 
-func (s *Shader) ID() graphicsdriver.ShaderID {
-	return s.id
-}
-
 func (s *Shader) Dispose() {
 	for _, rps := range s.rpss {
 		rps.Release()
 	}
-	s.vs.Release()
 	s.fs.Release()
 	s.lib.Release()
-	s.graphics.removeShader(s)
 }
 
-// mslOptions maps the shader's resource bindings to Metal buffer and texture indices.
-func mslOptions(program *shader.Program) msl.Options {
+// mslOptions maps the shader's resource bindings to Metal buffer and texture indices, and selects
+// the one entry point to write.
+func mslOptions(program *shader.Program, stage ir.ShaderStage, entryPoint string) msl.Options {
 	index := func(i int) *uint8 {
 		n := uint8(i)
 		return &n
@@ -91,18 +85,65 @@ func mslOptions(program *shader.Program) msl.Options {
 	}
 
 	o := msl.DefaultOptions()
-	o.BoundsCheckPolicies.Image = msl.BoundsCheckUnchecked
-	o.PerEntryPointMap = map[string]msl.EntryPointResources{
-		shader.VertexEntryPoint:   {Resources: resources},
-		shader.FragmentEntryPoint: {Resources: resources},
+	o.BoundsCheckPolicies = backend.BoundsCheckPolicies{
+		Index:        backend.BoundsCheckReadZeroSkipWrite,
+		Buffer:       backend.BoundsCheckReadZeroSkipWrite,
+		ImageLoad:    backend.BoundsCheckUnchecked,
+		BindingArray: backend.BoundsCheckReadZeroSkipWrite,
 	}
+	o.PerEntryPointMap = map[string]msl.EntryPointResources{
+		entryPoint: {Resources: resources},
+	}
+	o.EntryPoint = &backend.EntryPointSelector{Stage: stage, Name: entryPoint}
 	return o
 }
 
-func (s *Shader) init(device mtl.Device) (err error) {
-	src, info, err := msl.Compile(s.program.Module, mslOptions(s.program))
+// vertexStage is a vertex function shared by every shader of a texture count: the prelude fixes the
+// vertex stage, so one built from shader.VertexProgram stands for all of them.
+type vertexStage struct {
+	lib mtl.Library
+	fn  mtl.Function
+}
+
+// vertexFunction returns the shared vertex function for textureCount, building it on the first
+// call. It lives as long as g.
+func (g *Graphics) vertexFunction(textureCount int) (mtl.Function, error) {
+	if vs, ok := g.vertexStages[textureCount]; ok {
+		return vs.fn, nil
+	}
+	vp, err := shader.VertexProgram(textureCount)
 	if err != nil {
-		return fmt.Errorf("metal: translating the shader to MSL failed: %w", err)
+		return mtl.Function{}, err
+	}
+	src, info, err := msl.Compile(vp.Module, mslOptions(vp, ir.StageVertex, shader.VertexEntryPoint))
+	if err != nil {
+		return mtl.Function{}, fmt.Errorf("metal: translating the vertex shader to MSL failed: %w", err)
+	}
+	lib, err := g.device.NewLibraryWithSource(src, mtl.CompileOptions{})
+	if err != nil {
+		return mtl.Function{}, fmt.Errorf("metal: device.MakeLibrary for vertex failed: %w, source: %s", err, src)
+	}
+	fn, err := lib.NewFunctionWithName(info.EntryPointNames[shader.VertexEntryPoint])
+	if err != nil {
+		lib.Release()
+		return mtl.Function{}, fmt.Errorf("metal: lib.MakeFunction for vertex failed: %w, source: %s", err, src)
+	}
+	if g.vertexStages == nil {
+		g.vertexStages = map[int]vertexStage{}
+	}
+	g.vertexStages[textureCount] = vertexStage{lib: lib, fn: fn}
+	return fn, nil
+}
+
+func (s *Shader) init(device mtl.Device) (err error) {
+	vs, err := s.graphics.vertexFunction(s.program.TextureCount)
+	if err != nil {
+		return err
+	}
+
+	src, info, err := msl.Compile(s.program.Module, mslOptions(s.program, ir.StageFragment, shader.FragmentEntryPoint))
+	if err != nil {
+		return fmt.Errorf("metal: translating the fragment shader to MSL failed: %w", err)
 	}
 	lib, err := device.NewLibraryWithSource(src, mtl.CompileOptions{})
 	if err != nil {
@@ -111,16 +152,6 @@ func (s *Shader) init(device mtl.Device) (err error) {
 	defer func() {
 		if err != nil {
 			lib.Release()
-		}
-	}()
-
-	vs, err := lib.NewFunctionWithName(info.EntryPointNames[shader.VertexEntryPoint])
-	if err != nil {
-		return fmt.Errorf("metal: lib.MakeFunction for vertex failed: %w, source: %s", err, src)
-	}
-	defer func() {
-		if err != nil {
-			vs.Release()
 		}
 	}()
 
@@ -135,25 +166,37 @@ func (s *Shader) init(device mtl.Device) (err error) {
 	return nil
 }
 
-// vertexDescriptor describes ggfx's fixed vertex layout: destination position, source position,
-// color and custom values, all float32, in vertex buffer 0.
-var vertexDescriptor = &mtl.VertexDescriptor{
-	Attributes: []mtl.VertexAttributeDescriptor{
-		{Format: mtl.VertexFormatFloat2, Offset: 0, BufferIndex: 0},
-		{Format: mtl.VertexFormatFloat2, Offset: 2 * 4, BufferIndex: 0},
-		{Format: mtl.VertexFormatFloat4, Offset: 4 * 4, BufferIndex: 0},
-		{Format: mtl.VertexFormatFloat4, Offset: 8 * 4, BufferIndex: 0},
-	},
-	Layouts: []mtl.VertexBufferLayoutDescriptor{
-		{Stride: graphics.VertexFloatCount * 4},
-	},
+// vertexDescriptor describes ggfx's fixed vertex layout (see graphicsdriver.VertexAttributeSizes),
+// all float32, in vertex buffer 0.
+var vertexDescriptor = newVertexDescriptor()
+
+func newVertexDescriptor() *mtl.VertexDescriptor {
+	d := &mtl.VertexDescriptor{
+		Layouts: []mtl.VertexBufferLayoutDescriptor{
+			{Stride: graphics.VertexFloatCount * 4},
+		},
+	}
+	var offset int
+	for _, n := range graphicsdriver.VertexAttributeSizes {
+		var format mtl.VertexFormat
+		switch n {
+		case 2:
+			format = mtl.VertexFormatFloat2
+		case 4:
+			format = mtl.VertexFormatFloat4
+		default:
+			panic(fmt.Sprintf("metal: unexpected vertex attribute size %d", n))
+		}
+		d.Attributes = append(d.Attributes, mtl.VertexAttributeDescriptor{Format: format, Offset: offset, BufferIndex: 0})
+		offset += n * 4
+	}
+	return d
 }
 
-func (s *Shader) RenderPipelineState(pix mtl.PixelFormat, blend graphicsdriver.Blend, screen bool) (mtl.RenderPipelineState, error) {
+func (s *Shader) RenderPipelineState(pix mtl.PixelFormat, blend graphicsdriver.Blend) (mtl.RenderPipelineState, error) {
 	key := shaderRpsKey{
-		blend:  blend,
-		pix:    pix,
-		screen: screen,
+		blend: blend,
+		pix:   pix,
 	}
 	if rps, ok := s.rpss[key]; ok {
 		return rps, nil

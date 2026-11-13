@@ -33,6 +33,78 @@ import (
 
 const frameCount = 2
 
+// blendFactorToD3D returns f as a D3D11_BLEND or a D3D12_BLEND, which have the same values. alpha
+// tells a factor of the alpha channel, which cannot be a *_COLOR value.
+// See https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_render_target_blend_desc.
+func blendFactorToD3D[B _D3D11_BLEND | _D3D12_BLEND](f graphicsdriver.BlendFactor, alpha bool) B {
+	switch f {
+	case graphicsdriver.BlendFactorZero:
+		return B(_D3D12_BLEND_ZERO)
+	case graphicsdriver.BlendFactorOne:
+		return B(_D3D12_BLEND_ONE)
+	case graphicsdriver.BlendFactorSourceColor:
+		if alpha {
+			return B(_D3D12_BLEND_SRC_ALPHA)
+		}
+		return B(_D3D12_BLEND_SRC_COLOR)
+	case graphicsdriver.BlendFactorOneMinusSourceColor:
+		if alpha {
+			return B(_D3D12_BLEND_INV_SRC_ALPHA)
+		}
+		return B(_D3D12_BLEND_INV_SRC_COLOR)
+	case graphicsdriver.BlendFactorSourceAlpha:
+		return B(_D3D12_BLEND_SRC_ALPHA)
+	case graphicsdriver.BlendFactorOneMinusSourceAlpha:
+		return B(_D3D12_BLEND_INV_SRC_ALPHA)
+	case graphicsdriver.BlendFactorDestinationColor:
+		if alpha {
+			return B(_D3D12_BLEND_DEST_ALPHA)
+		}
+		return B(_D3D12_BLEND_DEST_COLOR)
+	case graphicsdriver.BlendFactorOneMinusDestinationColor:
+		if alpha {
+			return B(_D3D12_BLEND_INV_DEST_ALPHA)
+		}
+		return B(_D3D12_BLEND_INV_DEST_COLOR)
+	case graphicsdriver.BlendFactorDestinationAlpha:
+		return B(_D3D12_BLEND_DEST_ALPHA)
+	case graphicsdriver.BlendFactorOneMinusDestinationAlpha:
+		return B(_D3D12_BLEND_INV_DEST_ALPHA)
+	case graphicsdriver.BlendFactorSourceAlphaSaturated:
+		return B(_D3D12_BLEND_SRC_ALPHA_SAT)
+	default:
+		panic(fmt.Sprintf("directx: invalid blend factor: %d", f))
+	}
+}
+
+// blendOperationToD3D returns o as a D3D11_BLEND_OP or a D3D12_BLEND_OP, which have the same
+// values.
+func blendOperationToD3D[O _D3D11_BLEND_OP | _D3D12_BLEND_OP](o graphicsdriver.BlendOperation) O {
+	switch o {
+	case graphicsdriver.BlendOperationAdd:
+		return O(_D3D12_BLEND_OP_ADD)
+	case graphicsdriver.BlendOperationSubtract:
+		return O(_D3D12_BLEND_OP_SUBTRACT)
+	case graphicsdriver.BlendOperationReverseSubtract:
+		return O(_D3D12_BLEND_OP_REV_SUBTRACT)
+	case graphicsdriver.BlendOperationMin:
+		return O(_D3D12_BLEND_OP_MIN)
+	case graphicsdriver.BlendOperationMax:
+		return O(_D3D12_BLEND_OP_MAX)
+	default:
+		panic(fmt.Sprintf("directx: invalid blend operation: %d", o))
+	}
+}
+
+// The Direct3D 11 and 12 blend enums are the same, which blendFactorToD3D and blendOperationToD3D
+// rely on.
+var (
+	_ [0]struct{} = [_D3D11_BLEND_ZERO - _D3D11_BLEND(_D3D12_BLEND_ZERO)]struct{}{}
+	_ [0]struct{} = [_D3D11_BLEND_SRC_ALPHA_SAT - _D3D11_BLEND(_D3D12_BLEND_SRC_ALPHA_SAT)]struct{}{}
+	_ [0]struct{} = [_D3D11_BLEND_OP_ADD - _D3D11_BLEND_OP(_D3D12_BLEND_OP_ADD)]struct{}{}
+	_ [0]struct{} = [_D3D11_BLEND_OP_MAX - _D3D11_BLEND_OP(_D3D12_BLEND_OP_MAX)]struct{}{}
+)
+
 func parseFeatureLevel(str string) (_D3D_FEATURE_LEVEL, bool) {
 	switch str {
 	case "11_0":

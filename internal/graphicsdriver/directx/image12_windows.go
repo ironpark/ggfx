@@ -26,7 +26,6 @@ import (
 
 type image12 struct {
 	graphics *graphics12
-	id       graphicsdriver.ImageID
 	width    int
 	height   int
 
@@ -43,10 +42,6 @@ type image12 struct {
 	rtvDescriptorHeap *_ID3D12DescriptorHeap
 
 	uploadingStagingBuffers []*_ID3D12Resource
-}
-
-func (i *image12) ID() graphicsdriver.ImageID {
-	return i.id
 }
 
 func (i *image12) Dispose() {

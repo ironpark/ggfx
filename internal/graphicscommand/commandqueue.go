@@ -144,7 +144,7 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 
 	// prependPreservedUniforms not only prepends values to the given slice but also creates a new slice.
 	// Allocating a new slice is necessary to make EnqueueDrawTrianglesCommand safe so far.
-	uniforms = q.prependPreservedUniforms(uniforms, shader, dst, srcs, dstRegion, srcRegions)
+	uniforms = q.prependPreservedUniforms(uniforms, dst, srcs, dstRegion, srcRegions)
 
 	// Zero the internal uniforms the shader never reads, so that draws which differ only in
 	// their regions can be merged.
@@ -407,14 +407,14 @@ func imageRectangleToRectangleF32(r image.Rectangle) rectangleF32 {
 	}
 }
 
-func (q *commandQueue) prependPreservedUniforms(uniforms []uint32, shader *Shader, dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) []uint32 {
+func (q *commandQueue) prependPreservedUniforms(uniforms []uint32, dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) []uint32 {
 	origUniforms := uniforms
 	uniforms = q.uint32sBuffer.alloc(len(origUniforms) + graphics.PreservedUniformDwordCount)
 	copy(uniforms[graphics.PreservedUniformDwordCount:], origUniforms)
-	return prependPreservedUniforms(uniforms, shader, dst, srcs, dstRegion, srcRegions)
+	return prependPreservedUniforms(uniforms, dst, srcs, dstRegion, srcRegions)
 }
 
-func prependPreservedUniforms(uniforms []uint32, shader *Shader, dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) []uint32 {
+func prependPreservedUniforms(uniforms []uint32, dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) []uint32 {
 	// The layout is documented at graphics.PreservedUniformDwordCount.
 	_ = uniforms[graphics.PreservedUniformDwordCount-1]
 
@@ -458,7 +458,10 @@ func prependPreservedUniforms(uniforms []uint32, shader *Shader, dst *Image, src
 		uniforms[idx+3] = 0
 	}
 
-	// The projection matrix maps texture pixels to clip space, column-major.
+	// The projection matrix maps texture pixels to clip space, column-major: the top row to Y = -1.
+	// drawTrianglesCommand.Exec flips it for a driver whose render target for dst has its rows go
+	// down (see graphicsdriver.Graphics.FlipsY). Draws to one destination get the same matrix,
+	// which merging them needs.
 	p := uniforms[graphics.ProjectionMatrixUniformDwordIndex : graphics.ProjectionMatrixUniformDwordIndex+16]
 	clear(p)
 	p[0] = math.Float32bits(2 / float32(dw))

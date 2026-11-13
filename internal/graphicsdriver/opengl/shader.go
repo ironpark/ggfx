@@ -16,11 +16,12 @@ package opengl
 
 import (
 	"fmt"
-	"runtime"
 
+	"github.com/gogpu/naga/backend"
 	"github.com/gogpu/naga/glsl"
+	"github.com/gogpu/naga/ir"
 
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
 	ggshader "github.com/ironpark/ggfx/internal/shader"
 )
@@ -32,20 +33,32 @@ const (
 )
 
 type Shader struct {
-	id       graphicsdriver.ShaderID
 	graphics *Graphics
 
 	program *ggshader.Program
 	p       program
 
-	// textureNames are the names of the sampler uniforms for the source textures. An empty name
-	// means the fragment shader does not read that texture.
-	textureNames []string
+	// linked reports whether the link status was checked and the uniform blocks and samplers
+	// were set up. That waits for the link, so it is done at the first draw: with
+	// KHR_parallel_shader_compile, shaders made one after another compile in parallel until then.
+	linked bool
+
+	// vertex is the shared vertex stage attached to p. fs is the fragment stage, and fssrc its
+	// source, kept for the error message until linked.
+	vertex *vertexShader
+	fs     shader
+	fssrc  string
+	fsinfo glsl.TranslationInfo
+
+	// samplerLocations are the locations of the sampler uniforms for the source textures, -1 for a
+	// texture the fragment shader does not read. samplerUnits are the texture units last set to
+	// them, -1 for none yet: a program keeps its uniforms, and the units rarely change.
+	samplerLocations [graphics.ShaderSrcImageCount]int32
+	samplerUnits     [graphics.ShaderSrcImageCount]int32
 }
 
-func newShader(id graphicsdriver.ShaderID, graphics *Graphics, program *ggshader.Program) (*Shader, error) {
+func newShader(graphics *Graphics, program *ggshader.Program) (*Shader, error) {
 	s := &Shader{
-		id:       id,
 		graphics: graphics,
 		program:  program,
 	}
@@ -55,21 +68,19 @@ func newShader(id graphicsdriver.ShaderID, graphics *Graphics, program *ggshader
 	return s, nil
 }
 
-func (s *Shader) ID() graphicsdriver.ShaderID {
-	return s.id
-}
-
 func (s *Shader) Dispose() {
+	s.deleteFragmentShader()
 	s.graphics.deleteProgram(s.p)
-	s.graphics.removeShader(s)
 }
 
 // glslOptions returns the options to translate entryPoint of the shader to GLSL.
-func glslOptions(version glsl.Version, entryPoint string) glsl.Options {
+func glslOptions(version glsl.Version, stage ir.ShaderStage, entryPoint string) glsl.Options {
 	o := glsl.DefaultOptions()
 	o.LangVersion = version
-	o.EntryPoint = entryPoint
-	o.BoundsCheckPolicies.ImageLoad = glsl.BoundsCheckUnchecked
+	o.EntryPoint = &backend.EntryPointSelector{Stage: stage, Name: entryPoint}
+	// The projection matrix the driver sets already maps to OpenGL's clip space.
+	o.SkipAdjustCoordinateSpace = true
+	o.BoundsCheckPolicies.ImageLoad = backend.BoundsCheckUnchecked
 	return o
 }
 
@@ -80,76 +91,130 @@ func glslTextureName(i int) string {
 	return fmt.Sprintf("_group_%d_binding_%d_fs", b.Group, b.Binding)
 }
 
-func (s *Shader) compile() error {
-	version := s.graphics.context.glslVersion()
+// vertexShader is a vertex shader object shared by every program of a texture count: the prelude
+// fixes the vertex stage, so one compiled from ggshader.VertexProgram stands for all of them.
+type vertexShader struct {
+	shader shader
+	src    string
+	info   glsl.TranslationInfo
+}
 
-	vssrc, vsinfo, err := glsl.Compile(s.program.Module, glslOptions(version, ggshader.VertexEntryPoint))
-	if err != nil {
-		return fmt.Errorf("opengl: translating the vertex shader to GLSL failed: %w", err)
+// vertexShader returns the shared vertex shader for textureCount, compiling it on the first call.
+// The shader objects live as long as the context; openGLState.reset forgets them.
+func (g *Graphics) vertexShader(textureCount int) (*vertexShader, error) {
+	if vs, ok := g.state.vertexShaders[textureCount]; ok {
+		return vs, nil
 	}
-	fssrc, fsinfo, err := glsl.Compile(s.program.Module, glslOptions(version, ggshader.FragmentEntryPoint))
+	vp, err := ggshader.VertexProgram(textureCount)
+	if err != nil {
+		return nil, err
+	}
+	src, info, err := glsl.Compile(vp.Module, glslOptions(g.context.glslVersion(), ir.StageVertex, ggshader.VertexEntryPoint))
+	if err != nil {
+		return nil, fmt.Errorf("opengl: translating the vertex shader to GLSL failed: %w", err)
+	}
+	sh, err := g.context.newShader(gl.VERTEX_SHADER, src)
+	if err != nil {
+		return nil, err
+	}
+	vs := &vertexShader{shader: sh, src: src, info: info}
+	if g.state.vertexShaders == nil {
+		g.state.vertexShaders = map[int]*vertexShader{}
+	}
+	g.state.vertexShaders[textureCount] = vs
+	return vs, nil
+}
+
+func (s *Shader) compile() error {
+	vs, err := s.graphics.vertexShader(s.program.TextureCount)
+	if err != nil {
+		return err
+	}
+
+	fssrc, fsinfo, err := glsl.Compile(s.program.Module, glslOptions(s.graphics.context.glslVersion(), ir.StageFragment, ggshader.FragmentEntryPoint))
 	if err != nil {
 		return fmt.Errorf("opengl: translating the fragment shader to GLSL failed: %w", err)
 	}
 
-	vs, err := s.graphics.context.newShader(gl.VERTEX_SHADER, vssrc)
-	if err != nil {
-		return err
-	}
-	defer s.graphics.context.ctx.DeleteShader(uint32(vs))
+	// Without the extension enabled, a browser may compile in the background all the same, but
+	// need not.
+	s.graphics.context.enableParallelShaderCompile()
 
 	fs, err := s.graphics.context.newShader(gl.FRAGMENT_SHADER, fssrc)
 	if err != nil {
 		return err
 	}
-	defer s.graphics.context.ctx.DeleteShader(uint32(fs))
 
-	p, err := s.graphics.context.newProgram([]shader{vs, fs})
+	p, err := s.graphics.context.newProgram([]shader{vs.shader, fs})
 	if err != nil {
+		s.graphics.context.ctx.DeleteShader(uint32(fs))
 		return err
 	}
 
-	if s.graphics.context.hasParallelShaderCompile() {
-		for s.graphics.context.ctx.GetShaderi(uint32(vs), gl.COMPLETION_STATUS_KHR) != gl.TRUE ||
-			s.graphics.context.ctx.GetShaderi(uint32(fs), gl.COMPLETION_STATUS_KHR) != gl.TRUE {
-			runtime.Gosched()
-		}
-	}
+	s.p = p
+	s.vertex = vs
+	s.fs = fs
+	s.fssrc = fssrc
+	s.fsinfo = fsinfo
+	return nil
+}
 
-	if s.graphics.context.ctx.GetProgrami(uint32(p), gl.LINK_STATUS) == gl.FALSE {
-		programInfo := s.graphics.context.ctx.GetProgramInfoLog(uint32(p))
-		vertexShaderInfo := s.graphics.context.ctx.GetShaderInfoLog(uint32(vs))
-		fragmentShaderInfo := s.graphics.context.ctx.GetShaderInfoLog(uint32(fs))
-		s.graphics.deleteProgram(p)
-		return fmt.Errorf("opengl: program error: %s\nvertex shader error: %s\nvertex shader source: %s\nfragment shader error: %s\nfragment shader source: %s",
-			programInfo, vertexShaderInfo, vssrc, fragmentShaderInfo, fssrc)
+// link checks the link status of the program, and attaches its uniform blocks and finds its
+// samplers. It waits for the program to be linked.
+func (s *Shader) link() error {
+	if s.linked {
+		return nil
 	}
+	ctx := s.graphics.context.ctx
+	p := s.p
+
+	if ctx.GetProgrami(uint32(p), gl.LINK_STATUS) == gl.FALSE {
+		programInfo := ctx.GetProgramInfoLog(uint32(p))
+		vertexShaderInfo := ctx.GetShaderInfoLog(uint32(s.vertex.shader))
+		fragmentShaderInfo := ctx.GetShaderInfoLog(uint32(s.fs))
+		return fmt.Errorf("opengl: program error: %s\nvertex shader error: %s\nvertex shader source: %s\nfragment shader error: %s\nfragment shader source: %s",
+			programInfo, vertexShaderInfo, s.vertex.src, fragmentShaderInfo, s.fssrc)
+	}
+	s.deleteFragmentShader()
 
 	// Attach the uniform blocks to their binding points. A block a stage does not read is not
-	// emitted, so bind whatever naga reports.
-	for _, info := range []glsl.TranslationInfo{vsinfo, fsinfo} {
+	// emitted, so bind whatever naga reports. The vertex stage's blocks are the shared vertex
+	// shader's.
+	for _, info := range []glsl.TranslationInfo{s.vertex.info, s.fsinfo} {
 		for _, u := range info.Uniforms {
-			idx := s.graphics.context.ctx.GetUniformBlockIndex(uint32(p), u.BlockName)
+			idx := ctx.GetUniformBlockIndex(uint32(p), u.BlockName)
 			if idx == gl.INVALID_INDEX {
 				continue
 			}
 			switch u.Binding {
 			case ggshader.InternalUniformBinding:
-				s.graphics.context.ctx.UniformBlockBinding(uint32(p), idx, internalUniformBlockBinding)
+				ctx.UniformBlockBinding(uint32(p), idx, internalUniformBlockBinding)
 			case ggshader.UserUniformBinding:
-				s.graphics.context.ctx.UniformBlockBinding(uint32(p), idx, userUniformBlockBinding)
+				ctx.UniformBlockBinding(uint32(p), idx, userUniformBlockBinding)
 			}
 		}
 	}
 
-	s.textureNames = make([]string, s.program.TextureCount)
-	for i := range s.textureNames {
-		name := glslTextureName(i)
-		if s.graphics.context.ctx.GetUniformLocation(uint32(p), name) >= 0 {
-			s.textureNames[i] = name
+	for i := range s.samplerLocations {
+		s.samplerLocations[i] = -1
+		s.samplerUnits[i] = -1
+		if i < s.program.TextureCount {
+			s.samplerLocations[i] = ctx.GetUniformLocation(uint32(p), glslTextureName(i))
 		}
 	}
 
-	s.p = p
+	s.linked = true
+	s.fssrc = ""
+	s.fsinfo = glsl.TranslationInfo{}
 	return nil
+}
+
+// deleteFragmentShader deletes the fragment shader object. Attached to the program, it lives as
+// long as the program.
+func (s *Shader) deleteFragmentShader() {
+	if s.fs == 0 {
+		return
+	}
+	s.graphics.context.ctx.DeleteShader(uint32(s.fs))
+	s.fs = 0
 }

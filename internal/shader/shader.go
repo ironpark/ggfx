@@ -21,13 +21,12 @@ package shader
 import (
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/gogpu/naga"
 	"github.com/gogpu/naga/ir"
+	"github.com/gogpu/naga/valid"
+	"github.com/gogpu/naga/wgsl"
 )
 
 // InternalUniformBinding is where the prelude's uniform block is bound.
@@ -55,9 +54,6 @@ type Program struct {
 	// Module is the validated and compacted IR. Backends translate it; nothing mutates it.
 	Module *ir.Module
 
-	// Source is the complete WGSL the module was compiled from, prelude included.
-	Source string
-
 	// TextureCount is how many source textures the prelude declares.
 	TextureCount int
 
@@ -67,9 +63,20 @@ type Program struct {
 	// UniformDwordCount is the size of the user's uniform block in dwords, or 0 without one.
 	UniformDwordCount int
 
-	// mask is the internal uniform dwords the program reads; see internalUniformMask.
-	mask     []uint32
-	maskOnce sync.Once
+	// ReadsDstRegion reports whether the program reads the destination region (dst_origin,
+	// dst_size) of the internal uniform block.
+	ReadsDstRegion bool
+
+	// ReadsSrcRegions reports whether the program reads the source regions (src_origins,
+	// src_sizes) of the internal uniform block.
+	ReadsSrcRegions bool
+
+	// FragmentReadsInternalUniforms reports whether the fragment stage reads the internal uniform
+	// block at all. The vertex stage reads only the projection.
+	FragmentReadsInternalUniforms bool
+
+	// mask is 1 for each dword of the internal uniform block the program reads, 0 otherwise.
+	mask []uint32
 }
 
 // Compile compiles a user shader. textureCount is how many source textures the prelude declares.
@@ -78,22 +85,21 @@ func Compile(src []byte, textureCount int) (*Program, error) {
 	source := prelude + "\n" + string(src)
 	preludeLines := strings.Count(prelude, "\n") + 1
 
-	ast, err := naga.Parse(source)
+	module, _, err := wgsl.Parse(source, wgsl.ParseOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("shader: %w", adjustLines(err, preludeLines))
+		return nil, fmt.Errorf("shader: %w", locateError(err, source, preludeLines))
 	}
-	module, err := naga.LowerWithSource(ast, source)
-	if err != nil {
-		return nil, fmt.Errorf("shader: %w", adjustLines(err, preludeLines))
-	}
-	if errs, err := ir.Validate(module); err != nil {
-		return nil, fmt.Errorf("shader: validation failed: %w", err)
-	} else if len(errs) > 0 {
-		var msgs []string
-		for _, e := range errs {
-			msgs = append(msgs, e.Message)
+	// The zero options allow no optional capability (f64, i64, f16, ...): no driver here has them.
+	if _, err := valid.Validate(module, valid.Options{}); err != nil {
+		var errs valid.Errors
+		if errors.As(err, &errs) && len(errs) > 1 {
+			msgs := make([]string, len(errs))
+			for i, e := range errs {
+				msgs[i] = e.Error()
+			}
+			return nil, fmt.Errorf("shader: validation failed: %s", strings.Join(msgs, "; "))
 		}
-		return nil, fmt.Errorf("shader: validation failed: %s", strings.Join(msgs, "; "))
+		return nil, fmt.Errorf("shader: validation failed: %w", err)
 	}
 
 	var hasVertex, hasFragment bool
@@ -111,49 +117,55 @@ func Compile(src []byte, textureCount int) (*Program, error) {
 
 	p := &Program{
 		Module:       module,
-		Source:       source,
 		TextureCount: textureCount,
 	}
 	if err := p.reflectUniforms(); err != nil {
 		return nil, err
 	}
 
-	ir.CompactUnused(module)
+	naga.Compact(module, naga.KeepUnusedNo)
+	if err := p.reflectInternalReads(); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 
-// naga reports positions as "line N, column M" from the parser and as "N:M" from later stages.
-var rePosition = regexp.MustCompile(`line (\d+), column \d+|(\d+):\d+`)
-
-// adjustLines rewrites the first source position in a naga error so that line 1 is the first
-// line of the user's source rather than of the prelude.
-func adjustLines(err error, preludeLines int) error {
-	msg := err.Error()
-	loc := rePosition.FindStringSubmatchIndex(msg)
-	if loc == nil {
+// locateError puts the source position of a naga parse error in front of its message, counting
+// lines so that line 1 is the first line of the user's source rather than of the prelude.
+func locateError(err error, source string, preludeLines int) error {
+	var perr *wgsl.ParseError
+	if !errors.As(err, &perr) {
 		return err
 	}
-	start, end := loc[2], loc[3]
-	if start < 0 {
-		start, end = loc[4], loc[5]
+	loc, ok := perr.Location(source)
+	if !ok {
+		return err
 	}
-	line, _ := strconv.Atoi(msg[start:end])
-	if line <= preludeLines {
-		return fmt.Errorf("%s (in the ggfx prelude)", msg)
+	if int(loc.Line) <= preludeLines {
+		return fmt.Errorf("%w (in the ggfx prelude)", err)
 	}
-	return errors.New(msg[:start] + strconv.Itoa(line-preludeLines) + msg[end:])
+	return fmt.Errorf("line %d, column %d: %w", int(loc.Line)-preludeLines, loc.Column, err)
 }
 
+// reflectUniforms describes the user's uniform block and checks the internal one. It runs before
+// compaction, which drops a uniform block nothing reads but which the caller still passes values
+// for, and lays the module out once.
 func (p *Program) reflectUniforms() error {
-	var user *ir.GlobalVariable
+	var user, internal *ir.GlobalVariable
 	for i := range p.Module.GlobalVariables {
 		g := &p.Module.GlobalVariables[i]
+		if g.Space == ir.SpaceStorage {
+			return fmt.Errorf("shader: storage variable %q is not supported", g.Name)
+		}
 		if g.Space != ir.SpaceUniform || g.Binding == nil {
 			continue
 		}
 		switch *g.Binding {
 		case InternalUniformBinding:
-			continue
+			if internal != nil {
+				return fmt.Errorf("shader: %q is bound where the internal uniform block %q is", g.Name, internalUniformName)
+			}
+			internal = g
 		case UserUniformBinding:
 			if user != nil {
 				return fmt.Errorf("shader: only one uniform variable may be declared at @group(1) @binding(0), found %q and %q", user.Name, g.Name)
@@ -163,17 +175,22 @@ func (p *Program) reflectUniforms() error {
 			return fmt.Errorf("shader: uniform variable %q must be declared at @group(1) @binding(0)", g.Name)
 		}
 	}
-	for i := range p.Module.GlobalVariables {
-		g := &p.Module.GlobalVariables[i]
-		if g.Space == ir.SpaceStorage {
-			return fmt.Errorf("shader: storage variable %q is not supported", g.Name)
-		}
+	if internal == nil {
+		return errors.New("shader: the internal uniform block is missing")
+	}
+
+	var layouter ir.Layouter
+	if err := layouter.Update(p.Module); err != nil {
+		return fmt.Errorf("shader: laying out the uniform blocks failed: %w", err)
+	}
+	if err := layoutInternalBlock(p.Module, &layouter, internal, p.TextureCount); err != nil {
+		return err
 	}
 	if user == nil {
 		return nil
 	}
 
-	size := int(ir.TypeSize(p.Module, user.Type))
+	size := int(layouter.Layout(user.Type).Size)
 	p.UniformDwordCount = (size + 15) / 16 * 4
 	if s, ok := p.Module.Types[user.Type].Inner.(ir.StructType); ok {
 		for _, m := range s.Members {

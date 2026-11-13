@@ -16,6 +16,8 @@ package graphicscommand_test
 
 import (
 	"image"
+	"math"
+	"slices"
 	"testing"
 
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -96,7 +98,11 @@ func (*drawDriver) SetVertices(vertices []float32, indices []uint32) error {
 	return nil
 }
 
-func (*drawDriver) DrawTriangles(dst graphicsdriver.ImageID, srcs [graphics.ShaderSrcImageCount]graphicsdriver.ImageID, shader graphicsdriver.ShaderID, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+func (*drawDriver) FlipsY() bool {
+	return false
+}
+
+func (*drawDriver) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
 	return nil
 }
 
@@ -170,5 +176,73 @@ func TestQueueShrinksAfterALargeFrame(t *testing.T) {
 	const limit = 2 * graphicscommand.MinRetainedElements
 	if v, i, u := q.BufferCapsForTesting(); v > limit || i > limit || u > limit {
 		t.Errorf("after small frames: caps = %d, %d, %d; want at most %d", v, i, u, limit)
+	}
+}
+
+// projectionDriver is a drawDriver whose offscreen render targets have their rows go down if
+// flipsY is set, and which keeps the projection of the last draw.
+type projectionDriver struct {
+	drawDriver
+	flipsY     bool
+	projection []uint32
+}
+
+func (g *projectionDriver) FlipsY() bool {
+	return g.flipsY
+}
+
+func (g *projectionDriver) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+	g.projection = slices.Clone(uniforms[graphics.ProjectionMatrixUniformDwordIndex : graphics.ProjectionMatrixUniformDwordIndex+16])
+	return nil
+}
+
+// The projection a driver receives maps the destination's top row to clip-space Y = -1, or to
+// Y = 1 where its render target has its rows go down, and its bottom to the other end. A screen
+// image takes its surface's answer, not the driver's.
+func TestProjectionFlipsY(t *testing.T) {
+	const w, h = 16, 32
+	shader := nearestFilterShader.FakeForTesting()
+	for _, tc := range []struct {
+		name                      string
+		dst                       *graphicscommand.Image
+		driverFlipsY, wantFlipped bool
+	}{
+		{"offscreen", graphicscommand.NewFakeImageForTesting(w, h), false, false},
+		{"offscreen, flipping driver", graphicscommand.NewFakeImageForTesting(w, h), true, true},
+		{"flipping screen", graphicscommand.NewFakeScreenImageForTesting(w, h, true), false, true},
+		{"screen, flipping driver", graphicscommand.NewFakeScreenImageForTesting(w, h, false), true, false},
+	} {
+		var q graphicscommand.CommandQueueForTesting
+		driver := projectionDriver{flipsY: tc.driverFlipsY}
+		q.EnqueueDrawTrianglesCommand(tc.dst, [graphics.ShaderSrcImageCount]*graphicscommand.Image{}, quadVertices(w, h), graphics.QuadIndices(), graphicsdriver.BlendSourceOver, image.Rect(0, 0, w, h), [graphics.ShaderSrcImageCount]image.Rectangle{}, shader, nil)
+		if err := q.FlushForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
+			t.Fatal(err)
+		}
+
+		p := driver.projection
+		// The exact values the drivers have always received.
+		sy, ty := 2/float32(h), float32(-1)
+		if tc.wantFlipped {
+			sy, ty = -sy, 1
+		}
+		if got := math.Float32frombits(p[5]); got != sy {
+			t.Errorf("%s: projection[5] = %v, want %v", tc.name, got, sy)
+		}
+		if got := math.Float32frombits(p[13]); got != ty {
+			t.Errorf("%s: projection[13] = %v, want %v", tc.name, got, ty)
+		}
+		clipY := func(y float32) float32 {
+			return math.Float32frombits(p[5])*y + math.Float32frombits(p[13])
+		}
+		top, bottom := float32(-1), float32(1)
+		if tc.wantFlipped {
+			top, bottom = bottom, top
+		}
+		if got := clipY(0); got != top {
+			t.Errorf("%s: the top row's clip-space Y = %v, want %v", tc.name, got, top)
+		}
+		if got := clipY(h); got != bottom {
+			t.Errorf("%s: the bottom row's clip-space Y = %v, want %v", tc.name, got, bottom)
+		}
 	}
 }

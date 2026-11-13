@@ -41,8 +41,6 @@ func (r *resourceWithSize) release() {
 }
 
 type graphics12 struct {
-	tmpUniforms []uint32
-
 	debug             *_ID3D12Debug
 	dredEnabled       bool
 	device            *_ID3D12Device
@@ -65,6 +63,9 @@ type graphics12 struct {
 	drawCommandList *_ID3D12GraphicsCommandList
 
 	needFlushDrawCommandList bool
+
+	// drawListState is the state set on drawCommandList since its last Reset.
+	drawListState drawListState12
 
 	// copyCommandList is a command list for a copy engine (CopyTextureRegion).
 	copyCommandList *_ID3D12GraphicsCommandList
@@ -98,12 +99,11 @@ type graphics12 struct {
 	frameIndex          int
 	prevBeginFrameIndex int
 
-	images         map[graphicsdriver.ImageID]*image12
-	nextImageID    graphicsdriver.ImageID
+	// images are the images not disposed, whose staging buffers are released when the copy command
+	// list is reset.
+	images         map[*image12]struct{}
 	disposedImages [frameCount][]*image12
 
-	shaders         map[graphicsdriver.ShaderID]*shader12
-	nextShaderID    graphicsdriver.ShaderID
 	disposedShaders [frameCount][]*shader12
 
 	pipelineStates
@@ -446,6 +446,9 @@ func (s *surface12) NewScreenImage(width, height int) (graphicsdriver.Image, err
 	return s.graphics.newScreenImage(s, width, height)
 }
 
+// FlipsY reports true: a back buffer's rows go down from clip-space Y = 1.
+func (s *surface12) FlipsY() bool { return true }
+
 // Dispose releases the swap chain and the render targets. Dispose is called on the rendering thread
 // between Begin and End.
 func (s *surface12) Dispose() {
@@ -588,6 +591,7 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 		return err
 	}
 	g.releaseResources(g.frameIndex)
+	g.pipelineStates.resetFrame(g.frameIndex)
 
 	// Only this surface's render targets are released. The other surfaces' swap chains are not
 	// affected by ResizeBuffers.
@@ -622,6 +626,7 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 	if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
 		return err
 	}
+	g.drawListState = drawListState12{}
 	if err := g.copyCommandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
 		return err
 	}
@@ -685,6 +690,7 @@ func (g *graphics12) Begin() error {
 	if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
 		return err
 	}
+	g.drawListState = drawListState12{}
 	if err := g.copyCommandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
 		return err
 	}
@@ -734,9 +740,11 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 		}
 		g.releaseResources(g.frameIndex)
 		g.resetVerticesAndIndices(g.frameIndex, true)
+		g.pipelineStates.resetFrame(g.frameIndex)
 	}
 
-	g.pipelineStates.resetConstantBuffers(g.frameIndex)
+	// An intermediate flush does not wait for the GPU, so the frame's uniform ring and descriptors
+	// stay taken until the frame completes below or a flush waits for the GPU.
 
 	if mode == graphicsdriver.FlushModePresent {
 		if err := g.presentDesktop(); err != nil {
@@ -760,6 +768,7 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 
 		g.releaseResources(g.frameIndex)
 		g.resetVerticesAndIndices(g.frameIndex, false)
+		g.pipelineStates.resetFrame(g.frameIndex)
 	}
 
 	return nil
@@ -916,6 +925,9 @@ func (g *graphics12) flushCommandList(commandList *_ID3D12GraphicsCommandList) e
 		if err := commandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
 			return err
 		}
+		g.drawListState = drawListState12{}
+		// The GPU is idle, so the frame's uniform ring and descriptors can be reused.
+		g.pipelineStates.resetFrame(g.frameIndex)
 	case g.copyCommandList:
 		if err := g.copyCommandAllocators[g.frameIndex].Reset(); err != nil {
 			return err
@@ -924,7 +936,7 @@ func (g *graphics12) flushCommandList(commandList *_ID3D12GraphicsCommandList) e
 			return err
 		}
 
-		for _, img := range g.images {
+		for img := range g.images {
 			img.releaseUploadingStagingBuffers()
 		}
 	}
@@ -1105,7 +1117,6 @@ func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelForm
 
 	i := &image12{
 		graphics: g,
-		id:       g.genNextImageID(),
 		width:    width,
 		height:   height,
 		format:   format,
@@ -1130,7 +1141,6 @@ func (g *graphics12) newScreenImage(s *surface12, width, height int) (graphicsdr
 
 	i := &image12{
 		graphics: g,
-		id:       g.genNextImageID(),
 		width:    width,
 		height:   height,
 		screen:   true,
@@ -1144,31 +1154,17 @@ func (g *graphics12) newScreenImage(s *surface12, width, height int) (graphicsdr
 
 func (g *graphics12) addImage(img *image12) {
 	if g.images == nil {
-		g.images = map[graphicsdriver.ImageID]*image12{}
+		g.images = map[*image12]struct{}{}
 	}
-	if _, ok := g.images[img.id]; ok {
-		panic(fmt.Sprintf("directx: image ID %d was already registered", img.id))
-	}
-	g.images[img.id] = img
+	g.images[img] = struct{}{}
 }
 
 func (g *graphics12) removeImage(img *image12) {
-	delete(g.images, img.id)
+	delete(g.images, img)
 	g.disposedImages[g.frameIndex] = append(g.disposedImages[g.frameIndex], img)
 }
 
-func (g *graphics12) addShader(s *shader12) {
-	if g.shaders == nil {
-		g.shaders = map[graphicsdriver.ShaderID]*shader12{}
-	}
-	if _, ok := g.shaders[s.id]; ok {
-		panic(fmt.Sprintf("directx: shader ID %d was already registered", s.id))
-	}
-	g.shaders[s.id] = s
-}
-
 func (g *graphics12) removeShader(s *shader12) {
-	delete(g.shaders, s.id)
 	g.disposedShaders[g.frameIndex] = append(g.disposedShaders[g.frameIndex], s)
 }
 
@@ -1182,41 +1178,54 @@ func (g *graphics12) MaxImageSize() int {
 }
 
 func (g *graphics12) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
-	vsh, psh, err := compileShader(program)
+	vsh, err := vertexShaderBlob(program.TextureCount)
+	if err != nil {
+		return nil, err
+	}
+	psh, err := compileShader(program)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &shader12{
 		graphics:               g,
-		id:                     g.genNextShaderID(),
 		userConstantBufferSize: userConstantBufferSize(program),
 		vertexShader:           vsh,
 		pixelShader:            psh,
 	}
-	g.addShader(s)
 	return s, nil
 }
 
-func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.ShaderSrcImageCount]graphicsdriver.ImageID, shaderID graphicsdriver.ShaderID, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
-	if shaderID == graphicsdriver.InvalidShaderID {
-		return fmt.Errorf("directx: shader ID is invalid")
+// FlipsY reports true: a texture's rows go down from clip-space Y = 1.
+func (g *graphics12) FlipsY() bool {
+	return true
+}
+
+func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shaderImpl graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+	if shaderImpl == nil {
+		return fmt.Errorf("directx: shader is nil")
 	}
 
 	if err := g.flushCommandList(g.copyCommandList); err != nil {
 		return err
 	}
 
-	// Release constant buffers when too many ones will be created.
-	numPipelines := 1
-	if len(g.pipelineStates.constantBuffers[g.frameIndex])+numPipelines > numDescriptorsPerFrame {
+	// When the frame's descriptors run out, wait for the GPU to finish the draws so far, which frees
+	// them.
+	if !g.pipelineStates.hasRoom(g.frameIndex) {
 		if err := g.flushCommandList(g.drawCommandList); err != nil {
 			return err
 		}
-		g.pipelineStates.releaseConstantBuffers(g.frameIndex)
+		if !g.pipelineStates.hasRoom(g.frameIndex) {
+			// The draws were submitted by an intermediate flush and are not waited for yet.
+			if err := g.waitForCommandQueue(); err != nil {
+				return err
+			}
+			g.pipelineStates.resetFrame(g.frameIndex)
+		}
 	}
 
-	dst := g.images[dstID]
+	dst := dstImage.(*image12)
 	if dst.surface != nil {
 		dst.surface.drawn = true
 	}
@@ -1226,11 +1235,11 @@ func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.
 	}
 
 	var srcImages [graphics.ShaderSrcImageCount]*image12
-	for i, srcID := range srcs {
-		src := g.images[srcID]
-		if src == nil {
+	for i, s := range srcs {
+		if s == nil {
 			continue
 		}
+		src := s.(*image12)
 		srcImages[i] = src
 		if rb, ok := src.transiteState(_D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); ok {
 			resourceBarriers = append(resourceBarriers, rb)
@@ -1245,7 +1254,7 @@ func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.
 		return err
 	}
 
-	shader := g.shaders[shaderID]
+	shader := shaderImpl.(*shader12)
 
 	w, h := dst.internalSize()
 	g.needFlushDrawCommandList = true
@@ -1259,34 +1268,34 @@ func (g *graphics12) DrawTriangles(dstID graphicsdriver.ImageID, srcs [graphics.
 			MaxDepth: _D3D12_MAX_DEPTH,
 		},
 	})
-	g.drawCommandList.IASetPrimitiveTopology(_D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
-	g.drawCommandList.IASetVertexBuffers(0, []_D3D12_VERTEX_BUFFER_VIEW{
-		{
-			BufferLocation: g.vertices[g.frameIndex][len(g.vertices[g.frameIndex])-1].value.GetGPUVirtualAddress(),
-			SizeInBytes:    g.vertices[g.frameIndex][len(g.vertices[g.frameIndex])-1].sizeInBytes,
-			StrideInBytes:  graphics.VertexFloatCount * uint32(unsafe.Sizeof(float32(0))),
-		},
-	})
-	g.drawCommandList.IASetIndexBuffer(&_D3D12_INDEX_BUFFER_VIEW{
-		BufferLocation: g.indices[g.frameIndex][len(g.indices[g.frameIndex])-1].value.GetGPUVirtualAddress(),
-		SizeInBytes:    g.indices[g.frameIndex][len(g.indices[g.frameIndex])-1].sizeInBytes,
+	// The buffers of a batch stay the same over its draws. Buffers are released only after the GPU
+	// completed the command lists that used them, and drawListState is cleared at every Reset, so a
+	// view here cannot stand for a released buffer.
+	vb := g.vertices[g.frameIndex][len(g.vertices[g.frameIndex])-1]
+	vbv := _D3D12_VERTEX_BUFFER_VIEW{
+		BufferLocation: vb.value.GetGPUVirtualAddress(),
+		SizeInBytes:    vb.sizeInBytes,
+		StrideInBytes:  graphics.VertexFloatCount * uint32(unsafe.Sizeof(float32(0))),
+	}
+	if g.drawListState.vertexBuffer != vbv {
+		g.drawCommandList.IASetVertexBuffers(0, []_D3D12_VERTEX_BUFFER_VIEW{vbv})
+		g.drawListState.vertexBuffer = vbv
+	}
+	ib := g.indices[g.frameIndex][len(g.indices[g.frameIndex])-1]
+	ibv := _D3D12_INDEX_BUFFER_VIEW{
+		BufferLocation: ib.value.GetGPUVirtualAddress(),
+		SizeInBytes:    ib.sizeInBytes,
 		Format:         _DXGI_FORMAT_R32_UINT,
-	})
+	}
+	if g.drawListState.indexBuffer != ibv {
+		g.drawCommandList.IASetIndexBuffer(&ibv)
+		g.drawListState.indexBuffer = ibv
+	}
 
-	g.tmpUniforms = flipProjectionY(g.tmpUniforms, uniforms)
-	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, g.frameIndex, dst.renderTargetFormat(), srcImages, shader, dstRegions, g.tmpUniforms, blend, indexOffset); err != nil {
+	// The projection is already flipped for Direct3D's render targets (see FlipsY).
+	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, &g.drawListState, g.frameIndex, dst.renderTargetFormat(), srcImages, shader, dstRegions, uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:], blend, indexOffset); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-func (g *graphics12) genNextImageID() graphicsdriver.ImageID {
-	g.nextImageID++
-	return g.nextImageID
-}
-
-func (g *graphics12) genNextShaderID() graphicsdriver.ShaderID {
-	g.nextShaderID++
-	return g.nextShaderID
 }

@@ -25,9 +25,6 @@ const (
 	FragmentEntryPoint = "ggfx_fragment"
 )
 
-// The name of the function a user shader must define.
-const UserFragmentFunction = "fragment"
-
 // Prelude returns the WGSL that is prepended to every user shader. It declares the internal
 // uniform block, the source textures, the vertex entry point, the fragment entry point that calls
 // the user's fragment function, and the helper functions a shader may call.

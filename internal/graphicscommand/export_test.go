@@ -28,8 +28,8 @@ func (i *Image) BufferedWritePixelsArgsForTesting() []WritePixelsCommandArgs {
 	return i.bufferedWritePixelsArgs
 }
 
-func PrependPreservedUniforms(uniforms []uint32, shader *Shader, dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) []uint32 {
-	return prependPreservedUniforms(uniforms, shader, dst, srcs, dstRegion, srcRegions)
+func PrependPreservedUniforms(uniforms []uint32, dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) []uint32 {
+	return prependPreservedUniforms(uniforms, dst, srcs, dstRegion, srcRegions)
 }
 
 type CommandQueueForTesting = commandQueue
@@ -73,11 +73,7 @@ func (q *commandQueue) BufferCapsForTesting() (vertices, indices, uniforms int) 
 
 type fakeDriverImage struct{ graphicsdriver.Image }
 
-func (fakeDriverImage) ID() graphicsdriver.ImageID { return 1 }
-
 type fakeDriverShader struct{ graphicsdriver.Shader }
-
-func (fakeDriverShader) ID() graphicsdriver.ShaderID { return 1 }
 
 // NewFakeImageForTesting returns an image as if a driver had made it, for a
 // queue flushed to a fake driver.
@@ -105,4 +101,25 @@ func QueuedWritePixelsCommandsForTesting() (commands, writes int) {
 		}
 	}
 	return commands, writes
+}
+
+// syncCommand does nothing but make the flush of its queue synchronous.
+type syncCommand struct{}
+
+func (syncCommand) String() string { return "sync" }
+
+func (syncCommand) Exec(*commandQueue, graphicsdriver.Graphics, int) error { return nil }
+
+func (syncCommand) NeedsSync() bool { return true }
+
+// EnqueueSyncForTesting makes the next flush wait for the render thread, so that a benchmark
+// times the driver's work rather than overlapping it with the next frame's.
+func EnqueueSyncForTesting() {
+	theCommandQueueManager.enqueueCommand(syncCommand{})
+}
+
+// NewFakeScreenImageForTesting returns a screen image as if a driver had made it for a surface
+// whose FlipsY reports flipsY, for a queue flushed to a fake driver.
+func NewFakeScreenImageForTesting(width, height int, flipsY bool) *Image {
+	return &Image{image: fakeDriverImage{}, width: width, height: height, screen: true, screenFlipsY: flipsY}
 }

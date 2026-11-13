@@ -28,11 +28,6 @@ type DstRegion struct {
 	IndexCount int
 }
 
-const (
-	InvalidImageID  = 0
-	InvalidShaderID = 0
-)
-
 // FlushMode specifies whether a command batch completes or presents a frame.
 type FlushMode int
 
@@ -72,8 +67,17 @@ type Graphics interface {
 
 	NewShader(program *shader.Program) (Shader, error)
 
-	// DrawTriangles draws an image onto another image with the given parameters.
-	DrawTriangles(dst ImageID, srcs [graphics.ShaderSrcImageCount]ImageID, shader ShaderID, dstRegions []DstRegion, indexOffset int, blend Blend, uniforms []uint32) error
+	// FlipsY reports whether a draw to an offscreen image takes the projection with Y flipped (see
+	// Surface.FlipsY for a screen image). The projection in the uniforms maps the destination's
+	// pixels to clip space, its top row to Y = -1; flipped, to Y = 1, as a render target whose rows
+	// go down from clip-space Y = 1 needs. The caller writes the projection a draw needs, so that
+	// the driver uploads it as given. FlipsY is called after Initialize, and its answer must not
+	// change.
+	FlipsY() bool
+
+	// DrawTriangles draws srcs onto dst with the given parameters. dst, srcs and shader are the
+	// driver's own, made by this Graphics or its surfaces; a nil source is an unused slot.
+	DrawTriangles(dst Image, srcs [graphics.ShaderSrcImageCount]Image, shader Shader, dstRegions []DstRegion, indexOffset int, blend Blend, uniforms []uint32) error
 }
 
 // NSView is an NSView pointer. The view a Metal surface is made for renders that surface and
@@ -90,6 +94,10 @@ type Surface interface {
 	// NewScreenImage returns the image that is presented on this surface. Calling it again
 	// replaces the previous screen image. NewScreenImage is called on the render thread.
 	NewScreenImage(width, height int) (Image, error)
+	// FlipsY reports whether a draw to this surface's screen images takes the projection with Y
+	// flipped, as Graphics.FlipsY does for offscreen images. It may be called on any goroutine,
+	// and its answer must not change.
+	FlipsY() bool
 	Dispose()
 }
 
@@ -98,15 +106,12 @@ type Resetter interface {
 }
 
 type Image interface {
-	ID() ImageID
 	Dispose()
 	// ReadPixels and WritePixels take pixels in the image's PixelFormat, rows tightly packed:
 	// len(Pixels) is BytesPerPixel * Region.Dx() * Region.Dy().
 	ReadPixels(args []PixelsArgs) error
 	WritePixels(args []PixelsArgs) error
 }
-
-type ImageID int
 
 type PixelsArgs struct {
 	Pixels []byte
@@ -179,11 +184,32 @@ func (f PixelFormat) String() string {
 }
 
 type Shader interface {
-	ID() ShaderID
 	Dispose()
 }
 
-type ShaderID int
+// CheckSize panics unless width and height are from 1 to maxSize. driver prefixes the message.
+func CheckSize(driver string, width, height, maxSize int) {
+	if width < 1 {
+		panic(fmt.Sprintf("%s: width (%d) must be equal or more than %d", driver, width, 1))
+	}
+	if height < 1 {
+		panic(fmt.Sprintf("%s: height (%d) must be equal or more than %d", driver, height, 1))
+	}
+	if width > maxSize {
+		panic(fmt.Sprintf("%s: width (%d) must be less than or equal to %d", driver, width, maxSize))
+	}
+	if height > maxSize {
+		panic(fmt.Sprintf("%s: height (%d) must be less than or equal to %d", driver, height, maxSize))
+	}
+}
+
+// VertexAttributeSizes are the float32 counts of a vertex's attributes, in order, which every
+// driver lays its vertex buffer out by, attribute i at shader location i: the destination
+// position, the source position, the color, then the custom values.
+var VertexAttributeSizes = [...]int{2, 2, 4, 4}
+
+// The attributes fill a vertex.
+var _ [0]struct{} = [graphics.VertexFloatCount - 12]struct{}{}
 
 // MinVertexBufferBytes is the room a driver's vertex or index buffer may always keep, however
 // little recent frames needed.

@@ -24,7 +24,6 @@ import (
 
 type image11 struct {
 	graphics *graphics11
-	id       graphicsdriver.ImageID
 	width    int
 	height   int
 
@@ -45,13 +44,8 @@ func (i *image11) internalSize() (int, int) {
 	return graphics.InternalImageSize(i.width), graphics.InternalImageSize(i.height)
 }
 
-func (i *image11) ID() graphicsdriver.ImageID {
-	return i.id
-}
-
 func (i *image11) Dispose() {
 	i.disposeBuffers()
-	i.graphics.removeImage(i)
 }
 
 func (i *image11) disposeBuffers() {
@@ -142,17 +136,15 @@ func (i *image11) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	return nil
 }
 
-func (i *image11) setAsRenderTarget() error {
+func (i *image11) ensureRenderTargetView() (*_ID3D11RenderTargetView, error) {
 	if i.renderTargetView == nil {
 		rtv, err := i.graphics.device.CreateRenderTargetView(unsafe.Pointer(i.texture), nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		i.renderTargetView = rtv
 	}
-
-	i.graphics.deviceContext.OMSetRenderTargets([]*_ID3D11RenderTargetView{i.renderTargetView}, nil)
-	return nil
+	return i.renderTargetView, nil
 }
 
 func (i *image11) getShaderResourceView() (*_ID3D11ShaderResourceView, error) {

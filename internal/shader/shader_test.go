@@ -65,7 +65,7 @@ func TestCompileErrors(t *testing.T) {
 		{
 			name: "unknown member on line 3",
 			src:  "\n\nfn fragment(v: Vertex) -> vec4f { return v.colour; }",
-			want: "3:",
+			want: "line 3",
 		},
 		{
 			name: "two uniform blocks",

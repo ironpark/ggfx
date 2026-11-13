@@ -26,19 +26,9 @@ import (
 var inputElementDescsForDX12 []_D3D12_INPUT_ELEMENT_DESC
 
 func init() {
-	// The semantics follow naga's HLSL output: attribute i is LOC with semantic index i.
-	loc := &([]byte("LOC\000"))[0]
-	formats := []_DXGI_FORMAT{_DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32B32A32_FLOAT}
-	diff := graphics.VertexFloatCount - 8
-	if diff%4 != 0 {
-		panic("directx: unexpected attribute layout")
-	}
-	for range diff / 4 {
-		formats = append(formats, _DXGI_FORMAT_R32G32B32A32_FLOAT)
-	}
-	for i, f := range formats {
+	for i, f := range vertexAttributeFormats() {
 		inputElementDescsForDX12 = append(inputElementDescsForDX12, _D3D12_INPUT_ELEMENT_DESC{
-			SemanticName:         loc,
+			SemanticName:         vertexAttributeSemanticName,
 			SemanticIndex:        uint32(i),
 			Format:               f,
 			InputSlot:            0,
@@ -49,68 +39,10 @@ func init() {
 	}
 }
 
-const numDescriptorsPerFrame = 32
-
-func blendFactorToBlend12(f graphicsdriver.BlendFactor, alpha bool) _D3D12_BLEND {
-	// D3D12_RENDER_TARGET_BLEND_DESC's *BlendAlpha members don't allow *_COLOR values.
-	// See https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_render_target_blend_desc.
-
-	switch f {
-	case graphicsdriver.BlendFactorZero:
-		return _D3D12_BLEND_ZERO
-	case graphicsdriver.BlendFactorOne:
-		return _D3D12_BLEND_ONE
-	case graphicsdriver.BlendFactorSourceColor:
-		if alpha {
-			return _D3D12_BLEND_SRC_ALPHA
-		}
-		return _D3D12_BLEND_SRC_COLOR
-	case graphicsdriver.BlendFactorOneMinusSourceColor:
-		if alpha {
-			return _D3D12_BLEND_INV_SRC_ALPHA
-		}
-		return _D3D12_BLEND_INV_SRC_COLOR
-	case graphicsdriver.BlendFactorSourceAlpha:
-		return _D3D12_BLEND_SRC_ALPHA
-	case graphicsdriver.BlendFactorOneMinusSourceAlpha:
-		return _D3D12_BLEND_INV_SRC_ALPHA
-	case graphicsdriver.BlendFactorDestinationColor:
-		if alpha {
-			return _D3D12_BLEND_DEST_ALPHA
-		}
-		return _D3D12_BLEND_DEST_COLOR
-	case graphicsdriver.BlendFactorOneMinusDestinationColor:
-		if alpha {
-			return _D3D12_BLEND_INV_DEST_ALPHA
-		}
-		return _D3D12_BLEND_INV_DEST_COLOR
-	case graphicsdriver.BlendFactorDestinationAlpha:
-		return _D3D12_BLEND_DEST_ALPHA
-	case graphicsdriver.BlendFactorOneMinusDestinationAlpha:
-		return _D3D12_BLEND_INV_DEST_ALPHA
-	case graphicsdriver.BlendFactorSourceAlphaSaturated:
-		return _D3D12_BLEND_SRC_ALPHA_SAT
-	default:
-		panic(fmt.Sprintf("directx: invalid blend factor: %d", f))
-	}
-}
-
-func blendOperationToBlendOp12(o graphicsdriver.BlendOperation) _D3D12_BLEND_OP {
-	switch o {
-	case graphicsdriver.BlendOperationAdd:
-		return _D3D12_BLEND_OP_ADD
-	case graphicsdriver.BlendOperationSubtract:
-		return _D3D12_BLEND_OP_SUBTRACT
-	case graphicsdriver.BlendOperationReverseSubtract:
-		return _D3D12_BLEND_OP_REV_SUBTRACT
-	case graphicsdriver.BlendOperationMin:
-		return _D3D12_BLEND_OP_MIN
-	case graphicsdriver.BlendOperationMax:
-		return _D3D12_BLEND_OP_MAX
-	default:
-		panic(fmt.Sprintf("directx: invalid blend operation: %d", o))
-	}
-}
+// maxDrawsPerFrame is how many draws a frame records before it waits for the GPU to reuse the
+// descriptors. A draw takes numConstantBufferAndSourceTextures descriptors, so the heap holds
+// frameCount * maxDrawsPerFrame * 6 of them, well within the 1,000,000 of resource binding tier 1.
+const maxDrawsPerFrame = 4096
 
 type pipelineStates struct {
 	rootSignature *_ID3D12RootSignature
@@ -118,8 +50,93 @@ type pipelineStates struct {
 	shaderDescriptorHeap *_ID3D12DescriptorHeap
 	shaderDescriptorSize uint32
 
-	constantBuffers    [frameCount][]*_ID3D12Resource
-	constantBufferMaps [frameCount][]uintptr
+	// shaderDescriptorCPUStart and shaderDescriptorGPUStart are the heap's start, which a draw
+	// offsets from without asking the heap again.
+	shaderDescriptorCPUStart _D3D12_CPU_DESCRIPTOR_HANDLE
+	shaderDescriptorGPUStart _D3D12_GPU_DESCRIPTOR_HANDLE
+
+	// frames are the per-frame uniform rings and descriptor counts. A frame's part is reused only
+	// after the GPU completed the commands that read it (see resetFrame).
+	frames [frameCount]frameUniforms12
+}
+
+// frameUniforms12 is one frame's upload ring for the uniform blocks and its share of the shader
+// descriptor heap.
+type frameUniforms12 struct {
+	// buffer is persistently mapped at data. Each draw takes the next aligned range from offset.
+	buffer     *_ID3D12Resource
+	gpuAddress _D3D12_GPU_VIRTUAL_ADDRESS
+	data       uintptr
+	size       uint32
+	offset     uint32
+
+	// retired are the buffers the ring outgrew this frame. The GPU might still read them until the
+	// frame completes.
+	retired []*_ID3D12Resource
+
+	// draws is how many draws took a descriptor table from the frame's share of the heap.
+	draws int
+}
+
+// minUniformRingSize is the initial size of a frame's uniform ring in bytes: 128 draws without a
+// large user block.
+const minUniformRingSize = 64 * 1024
+
+// alloc returns the GPU and CPU addresses of size bytes of the ring, growing it when it is full.
+// size must be a multiple of constantBufferAlignment, so every range stays aligned.
+func (f *frameUniforms12) alloc(device *_ID3D12Device, size uint32) (_D3D12_GPU_VIRTUAL_ADDRESS, uintptr, error) {
+	if f.buffer == nil || f.offset+size > f.size {
+		// The commands recorded so far might read the old buffer. Keep it until the frame is reset.
+		if f.buffer != nil {
+			f.retired = append(f.retired, f.buffer)
+		}
+		newSize := max(f.size*2, size, minUniformRingSize)
+		f.buffer, f.gpuAddress, f.data, f.size, f.offset = nil, 0, 0, 0, 0
+
+		b, err := createBuffer(device, uint64(newSize), _D3D12_HEAP_TYPE_UPLOAD)
+		if err != nil {
+			return 0, 0, err
+		}
+		// An upload heap resource can stay mapped while the GPU reads it; the CPU only writes it.
+		m, err := b.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
+		if err != nil {
+			b.Release()
+			return 0, 0, err
+		}
+		if m == 0 {
+			b.Release()
+			return 0, 0, fmt.Errorf("directx: ID3D12Resource::Map failed")
+		}
+		f.buffer = b
+		f.gpuAddress = b.GetGPUVirtualAddress()
+		f.data = m
+		f.size = newSize
+	}
+	off := f.offset
+	f.offset += size
+	return f.gpuAddress + _D3D12_GPU_VIRTUAL_ADDRESS(off), f.data + uintptr(off), nil
+}
+
+// reset makes the whole ring and the descriptors available again. The caller must make sure that
+// the GPU completed the commands that used them.
+func (f *frameUniforms12) reset() {
+	for i, b := range f.retired {
+		b.Unmap(0, nil)
+		b.Release()
+		f.retired[i] = nil
+	}
+	f.retired = f.retired[:0]
+	f.offset = 0
+	f.draws = 0
+}
+
+func (f *frameUniforms12) release() {
+	f.reset()
+	if f.buffer != nil {
+		f.buffer.Unmap(0, nil)
+		f.buffer.Release()
+	}
+	*f = frameUniforms12{}
 }
 
 // numConstantBuffers is how many constant buffer views a draw uses: the internal uniform block
@@ -139,12 +156,13 @@ func alignUpConstantBuffer(x uint32) uint32 {
 }
 
 func (p *pipelineStates) initialize(device *_ID3D12Device) (ferr error) {
-	// Create a CBV/SRV/UAV descriptor heap.
-	//   5n+0:        constants
-	//   5n+m (1<=4): textures
+	// Create a CBV/SRV/UAV descriptor heap. Each draw takes a table of
+	// numConstantBufferAndSourceTextures descriptors from its frame's share:
+	//   6n+0, 6n+1:  the internal and the user's uniform blocks
+	//   6n+2..6n+5:  the source textures
 	shaderH, err := device.CreateDescriptorHeap(&_D3D12_DESCRIPTOR_HEAP_DESC{
 		Type:           _D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-		NumDescriptors: frameCount * numDescriptorsPerFrame * numConstantBufferAndSourceTextures,
+		NumDescriptors: frameCount * maxDrawsPerFrame * numConstantBufferAndSourceTextures,
 		Flags:          _D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
 		NodeMask:       0,
 	})
@@ -158,139 +176,153 @@ func (p *pipelineStates) initialize(device *_ID3D12Device) (ferr error) {
 		}
 	}()
 	p.shaderDescriptorSize = device.GetDescriptorHandleIncrementSize(_D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+	if p.shaderDescriptorCPUStart, err = shaderH.GetCPUDescriptorHandleForHeapStart(); err != nil {
+		return err
+	}
+	if p.shaderDescriptorGPUStart, err = shaderH.GetGPUDescriptorHandleForHeapStart(); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-// release releases the objects created by initialize.
+// release releases the objects created by initialize and the uniform rings. The caller must make
+// sure that the GPU no longer uses them.
 func (p *pipelineStates) release() {
+	for i := range p.frames {
+		p.frames[i].release()
+	}
 	if p.shaderDescriptorHeap != nil {
 		p.shaderDescriptorHeap.Release()
 		p.shaderDescriptorHeap = nil
 	}
 	p.shaderDescriptorSize = 0
+	p.shaderDescriptorCPUStart = _D3D12_CPU_DESCRIPTOR_HANDLE{}
+	p.shaderDescriptorGPUStart = _D3D12_GPU_DESCRIPTOR_HANDLE{}
 }
 
-func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D12GraphicsCommandList, frameIndex int, rtvFormat _DXGI_FORMAT, srcs [graphics.ShaderSrcImageCount]*image12, shader *shader12, dstRegions []graphicsdriver.DstRegion, uniforms []uint32, blend graphicsdriver.Blend, indexOffset int) error {
-	idx := len(p.constantBuffers[frameIndex])
-	if idx >= numDescriptorsPerFrame {
-		return fmt.Errorf("directx: too many constant buffers")
+// hasRoom reports whether the frame has a descriptor table left for a draw.
+func (p *pipelineStates) hasRoom(frameIndex int) bool {
+	return p.frames[frameIndex].draws < maxDrawsPerFrame
+}
+
+// resetFrame makes the frame's uniform ring and descriptors available again. The caller must make
+// sure that the GPU completed the frame's commands submitted so far.
+func (p *pipelineStates) resetFrame(frameIndex int) {
+	p.frames[frameIndex].reset()
+}
+
+// drawListState12 is the state set on the draw command list since its last Reset, which a draw
+// need not set again. Reset discards a command list's state, so every Reset must clear this.
+type drawListState12 struct {
+	// invariantsSet reports whether the root signature, the descriptor heap and the primitive
+	// topology, which no draw changes, are set.
+	invariantsSet bool
+
+	vertexBuffer  _D3D12_VERTEX_BUFFER_VIEW
+	indexBuffer   _D3D12_INDEX_BUFFER_VIEW
+	pipelineState *_ID3D12PipelineState
+	scissor       _D3D12_RECT
+	scissorValid  bool
+}
+
+// nullShaderResourceViewDesc describes the view in a source texture's slot that a draw does not use,
+// so that no slot keeps a stale view of a released texture.
+var nullShaderResourceViewDesc = _D3D12_SHADER_RESOURCE_VIEW_DESC{
+	Format:                  _DXGI_FORMAT_R8G8B8A8_UNORM,
+	ViewDimension:           _D3D12_SRV_DIMENSION_TEXTURE2D,
+	Shader4ComponentMapping: uint32(_D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING),
+	Texture2D: _D3D12_TEX2D_SRV{
+		MipLevels: 1,
+	},
+}
+
+// drawTriangles records a draw. internal is the internal uniform block and user the user's block.
+// The caller must make sure that hasRoom(frameIndex) holds.
+func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D12GraphicsCommandList, listState *drawListState12, frameIndex int, rtvFormat _DXGI_FORMAT, srcs [graphics.ShaderSrcImageCount]*image12, shader *shader12, dstRegions []graphicsdriver.DstRegion, internal, user []uint32, blend graphicsdriver.Blend, indexOffset int) error {
+	f := &p.frames[frameIndex]
+	if f.draws >= maxDrawsPerFrame {
+		return fmt.Errorf("directx: too many draws in a frame")
 	}
 
-	if cap(p.constantBuffers[frameIndex]) > idx {
-		p.constantBuffers[frameIndex] = p.constantBuffers[frameIndex][:idx+1]
-		p.constantBufferMaps[frameIndex] = p.constantBufferMaps[frameIndex][:idx+1]
-	} else {
-		p.constantBuffers[frameIndex] = append(p.constantBuffers[frameIndex], nil)
-		p.constantBufferMaps[frameIndex] = append(p.constantBufferMaps[frameIndex], 0)
-	}
-
-	// One upload buffer holds both uniform blocks, each at an aligned offset. A shader without a
-	// user uniform block still gets a real, unused view rather than a null descriptor.
-	internalSize := alignUpConstantBuffer(internalConstantBufferSize)
-	userSize := max(alignUpConstantBuffer(shader.userConstantBufferSize), constantBufferAlignment)
-	bufferSize := internalSize + userSize
-
-	cb := p.constantBuffers[frameIndex][idx]
-	m := p.constantBufferMaps[frameIndex][idx]
-	if cb != nil {
-		if uint32(cb.GetDesc().Width) < bufferSize {
-			p.constantBuffers[frameIndex][idx].Unmap(0, nil)
-			p.constantBuffers[frameIndex][idx].Release()
-			p.constantBuffers[frameIndex][idx] = nil
-			p.constantBufferMaps[frameIndex][idx] = 0
-			cb = nil
-		}
-	}
-	if cb == nil {
-		var err error
-		cb, err = createBuffer(device, uint64(bufferSize), _D3D12_HEAP_TYPE_UPLOAD)
-		if err != nil {
-			return err
-		}
-		p.constantBuffers[frameIndex][idx] = cb
-
-		h, err := p.shaderDescriptorHeap.GetCPUDescriptorHandleForHeapStart()
-		if err != nil {
-			return err
-		}
-		offset := int32(numConstantBufferAndSourceTextures * (frameIndex*numDescriptorsPerFrame + idx))
-		h.Offset(offset, p.shaderDescriptorSize)
-		device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
-			BufferLocation: cb.GetGPUVirtualAddress(),
-			SizeInBytes:    internalSize,
-		}, h)
-		h.Offset(1, p.shaderDescriptorSize)
-		device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
-			BufferLocation: cb.GetGPUVirtualAddress() + _D3D12_GPU_VIRTUAL_ADDRESS(internalSize),
-			SizeInBytes:    userSize,
-		}, h)
-
-		m, err = cb.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
-		if err != nil {
-			return err
-		}
-		p.constantBufferMaps[frameIndex][idx] = m
-	}
-	if m == 0 {
-		return fmt.Errorf("directx: ID3D12Resource::Map failed")
-	}
-
-	h, err := p.shaderDescriptorHeap.GetCPUDescriptorHandleForHeapStart()
+	ps, err := shader.pipelineState(blend, rtvFormat)
 	if err != nil {
 		return err
 	}
-	offset := int32(numConstantBufferAndSourceTextures * (frameIndex*numDescriptorsPerFrame + idx))
-	h.Offset(offset+numConstantBuffers-1, p.shaderDescriptorSize)
+	rs, err := p.ensureRootSignature(device)
+	if err != nil {
+		return err
+	}
+
+	// One range of the ring holds both uniform blocks, each at an aligned offset. A shader without a
+	// user uniform block still gets a real, unused view rather than a null descriptor.
+	internalSize := alignUpConstantBuffer(internalConstantBufferSize)
+	userSize := max(alignUpConstantBuffer(shader.userConstantBufferSize), constantBufferAlignment)
+	gpu, cpu, err := f.alloc(device, internalSize+userSize)
+	if err != nil {
+		return err
+	}
+	copy(unsafe.Slice((*uint32)(unsafe.Pointer(cpu)), len(internal)), internal)
+	if len(user) > 0 {
+		copy(unsafe.Slice((*uint32)(unsafe.Pointer(cpu+uintptr(internalSize))), len(user)), user)
+	}
+
+	offset := int32(numConstantBufferAndSourceTextures * (frameIndex*maxDrawsPerFrame + f.draws))
+	f.draws++
+
+	h := p.shaderDescriptorCPUStart
+	h.Offset(offset, p.shaderDescriptorSize)
+	device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
+		BufferLocation: gpu,
+		SizeInBytes:    internalSize,
+	}, h)
+	h.Offset(1, p.shaderDescriptorSize)
+	device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
+		BufferLocation: gpu + _D3D12_GPU_VIRTUAL_ADDRESS(internalSize),
+		SizeInBytes:    userSize,
+	}, h)
 	for _, src := range srcs {
 		h.Offset(1, p.shaderDescriptorSize)
 		if src == nil {
+			device.CreateShaderResourceView(nil, &nullShaderResourceViewDesc, h)
 			continue
 		}
 		desc := src.shaderResourceViewDesc()
 		device.CreateShaderResourceView(src.resource(), &desc, h)
 	}
 
-	// Update the constant buffers: the internal uniform block, then the user's block.
-	copy(unsafe.Slice((*uint32)(unsafe.Pointer(m)), graphics.PreservedUniformDwordCount), uniforms[:graphics.PreservedUniformDwordCount])
-	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 {
-		copy(unsafe.Slice((*uint32)(unsafe.Pointer(m+uintptr(internalSize))), len(user)), user)
+	if !listState.invariantsSet {
+		commandList.SetGraphicsRootSignature(rs)
+		commandList.SetDescriptorHeaps([]*_ID3D12DescriptorHeap{
+			p.shaderDescriptorHeap,
+		})
+		commandList.IASetPrimitiveTopology(_D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST)
+		listState.invariantsSet = true
 	}
-
-	rs, err := p.ensureRootSignature(device)
-	if err != nil {
-		return err
-	}
-	commandList.SetGraphicsRootSignature(rs)
-
-	commandList.SetDescriptorHeaps([]*_ID3D12DescriptorHeap{
-		p.shaderDescriptorHeap,
-	})
 
 	// Match the indices with rootParams in graphicsPipelineState.
-	gh, err := p.shaderDescriptorHeap.GetGPUDescriptorHandleForHeapStart()
-	if err != nil {
-		return err
-	}
+	gh := p.shaderDescriptorGPUStart
 	gh.Offset(offset, p.shaderDescriptorSize)
 	commandList.SetGraphicsRootDescriptorTable(0, gh)
 	commandList.SetGraphicsRootDescriptorTable(1, gh)
 
-	s, err := shader.pipelineState(blend, rtvFormat)
-	if err != nil {
-		return err
+	if listState.pipelineState != ps {
+		commandList.SetPipelineState(ps)
+		listState.pipelineState = ps
 	}
-	commandList.SetPipelineState(s)
 
 	for _, dstRegion := range dstRegions {
-		commandList.RSSetScissorRects([]_D3D12_RECT{
-			{
-				left:   int32(dstRegion.Region.Min.X),
-				top:    int32(dstRegion.Region.Min.Y),
-				right:  int32(dstRegion.Region.Max.X),
-				bottom: int32(dstRegion.Region.Max.Y),
-			},
-		})
+		r := _D3D12_RECT{
+			left:   int32(dstRegion.Region.Min.X),
+			top:    int32(dstRegion.Region.Min.Y),
+			right:  int32(dstRegion.Region.Max.X),
+			bottom: int32(dstRegion.Region.Max.Y),
+		}
+		if !listState.scissorValid || listState.scissor != r {
+			commandList.RSSetScissorRects([]_D3D12_RECT{r})
+			listState.scissor = r
+			listState.scissorValid = true
+		}
 		commandList.DrawIndexedInstanced(uint32(dstRegion.IndexCount), 1, uint32(indexOffset), 0, 0)
 		indexOffset += dstRegion.IndexCount
 	}
@@ -393,12 +425,12 @@ func (p *pipelineStates) newPipelineState(device *_ID3D12Device, vsh, psh *_ID3D
 				{
 					BlendEnable:           1,
 					LogicOpEnable:         0,
-					SrcBlend:              blendFactorToBlend12(blend.BlendFactorSourceRGB, false),
-					DestBlend:             blendFactorToBlend12(blend.BlendFactorDestinationRGB, false),
-					BlendOp:               blendOperationToBlendOp12(blend.BlendOperationRGB),
-					SrcBlendAlpha:         blendFactorToBlend12(blend.BlendFactorSourceAlpha, true),
-					DestBlendAlpha:        blendFactorToBlend12(blend.BlendFactorDestinationAlpha, true),
-					BlendOpAlpha:          blendOperationToBlendOp12(blend.BlendOperationAlpha),
+					SrcBlend:              blendFactorToD3D[_D3D12_BLEND](blend.BlendFactorSourceRGB, false),
+					DestBlend:             blendFactorToD3D[_D3D12_BLEND](blend.BlendFactorDestinationRGB, false),
+					BlendOp:               blendOperationToD3D[_D3D12_BLEND_OP](blend.BlendOperationRGB),
+					SrcBlendAlpha:         blendFactorToD3D[_D3D12_BLEND](blend.BlendFactorSourceAlpha, true),
+					DestBlendAlpha:        blendFactorToD3D[_D3D12_BLEND](blend.BlendFactorDestinationAlpha, true),
+					BlendOpAlpha:          blendOperationToD3D[_D3D12_BLEND_OP](blend.BlendOperationAlpha),
 					LogicOp:               _D3D12_LOGIC_OP_NOOP,
 					RenderTargetWriteMask: writeMask,
 				},
@@ -439,20 +471,4 @@ func (p *pipelineStates) newPipelineState(device *_ID3D12Device, vsh, psh *_ID3D
 		return nil, err
 	}
 	return s, nil
-}
-
-func (p *pipelineStates) releaseConstantBuffers(frameIndex int) {
-	for i := range p.constantBuffers[frameIndex] {
-		p.constantBuffers[frameIndex][i].Unmap(0, nil)
-		p.constantBuffers[frameIndex][i].Release()
-		p.constantBuffers[frameIndex][i] = nil
-		p.constantBufferMaps[frameIndex][i] = 0
-	}
-	p.constantBuffers[frameIndex] = p.constantBuffers[frameIndex][:0]
-	p.constantBufferMaps[frameIndex] = p.constantBufferMaps[frameIndex][:0]
-}
-
-func (p *pipelineStates) resetConstantBuffers(frameIndex int) {
-	p.constantBuffers[frameIndex] = p.constantBuffers[frameIndex][:0]
-	p.constantBufferMaps[frameIndex] = p.constantBufferMaps[frameIndex][:0]
 }

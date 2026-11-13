@@ -15,150 +15,49 @@
 package directx
 
 import (
+	"slices"
 	"unsafe"
-
-	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
+
+// vertexStage11 is the vertex shader and the input layout that every shader with one texture count
+// shares (see vertexShaderBlob). It lives as long as the device.
+type vertexStage11 struct {
+	vertexShader *_ID3D11VertexShader
+	inputLayout  *_ID3D11InputLayout
+}
 
 type shader11 struct {
 	graphics               *graphics11
-	id                     graphicsdriver.ShaderID
 	userConstantBufferSize uint32
-	vertexShaderBlob       *_ID3DBlob
 	pixelShaderBlob        *_ID3DBlob
 
-	inputLayout  *_ID3D11InputLayout
-	vertexShader *_ID3D11VertexShader
-	pixelShader  *_ID3D11PixelShader
+	// vertexStage is shared and owned by graphics.
+	vertexStage *vertexStage11
+	pixelShader *_ID3D11PixelShader
 
-	// constantBuffers are the constant buffers for the internal and the user's uniform blocks. The
-	// latter is nil when the shader has no user uniform block.
-	constantBuffers [2]*_ID3D11Buffer
-}
+	// userConstantBuffer is the constant buffer for the user's uniform block, or nil when the shader
+	// has none. The internal block's buffer is shared (see graphics11.internalConstantBuffer).
+	userConstantBuffer *_ID3D11Buffer
 
-func (s *shader11) ID() graphicsdriver.ShaderID {
-	return s.id
+	// userUniforms is what userConstantBuffer holds, or empty when unknown, so that a draw with the
+	// same values skips the upload.
+	userUniforms []uint32
 }
 
 func (s *shader11) Dispose() {
-	s.graphics.removeShader(s)
-}
-
-func (s *shader11) disposeImpl() {
 	if s.pixelShaderBlob != nil {
 		s.pixelShaderBlob.Release()
 		s.pixelShaderBlob = nil
-	}
-	if s.vertexShaderBlob != nil {
-		count := s.vertexShaderBlob.Release()
-		if count == 0 {
-			for k, v := range vertexShaderCache {
-				if v == s.vertexShaderBlob {
-					delete(vertexShaderCache, k)
-				}
-			}
-		}
-		s.vertexShaderBlob = nil
-	}
-	if s.inputLayout != nil {
-		s.inputLayout.Release()
-		s.inputLayout = nil
-	}
-	if s.vertexShader != nil {
-		s.vertexShader.Release()
-		s.vertexShader = nil
 	}
 	if s.pixelShader != nil {
 		s.pixelShader.Release()
 		s.pixelShader = nil
 	}
-	for i, cb := range s.constantBuffers {
-		if cb != nil {
-			cb.Release()
-			s.constantBuffers[i] = nil
-		}
+	if s.userConstantBuffer != nil {
+		s.userConstantBuffer.Release()
+		s.userConstantBuffer = nil
 	}
-}
-
-func (s *shader11) use(uniforms []uint32, srcs [graphics.ShaderSrcImageCount]*image11) error {
-	vs, err := s.ensureVertexShader()
-	if err != nil {
-		return err
-	}
-	s.graphics.deviceContext.VSSetShader(vs, nil)
-
-	ps, err := s.ensurePixelShader()
-	if err != nil {
-		return err
-	}
-	s.graphics.deviceContext.PSSetShader(ps, nil)
-
-	il, err := s.ensureInputLayout()
-	if err != nil {
-		return err
-	}
-	s.graphics.deviceContext.IASetInputLayout(il)
-
-	cbs, err := s.ensureConstantBuffers()
-	if err != nil {
-		return err
-	}
-	s.graphics.deviceContext.VSSetConstantBuffers(0, cbs)
-	s.graphics.deviceContext.PSSetConstantBuffers(0, cbs)
-
-	// The internal uniform block comes first, then the user's block. Both are already laid out as
-	// the shader expects.
-	blocks := [][]uint32{uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:]}
-	for i, cb := range cbs {
-		var mapped _D3D11_MAPPED_SUBRESOURCE
-		if err := s.graphics.deviceContext.Map(unsafe.Pointer(cb), 0, _D3D11_MAP_WRITE_DISCARD, 0, &mapped); err != nil {
-			return err
-		}
-		copy(unsafe.Slice((*uint32)(mapped.pData), len(blocks[i])), blocks[i])
-		s.graphics.deviceContext.Unmap(unsafe.Pointer(cb), 0)
-	}
-
-	var srvs [graphics.ShaderSrcImageCount]*_ID3D11ShaderResourceView
-	for i, src := range srcs {
-		if src == nil {
-			continue
-		}
-		srv, err := src.getShaderResourceView()
-		if err != nil {
-			return err
-		}
-		srvs[i] = srv
-	}
-	s.graphics.deviceContext.PSSetShaderResources(0, srvs[:])
-
-	return nil
-}
-
-func (s *shader11) ensureInputLayout() (*_ID3D11InputLayout, error) {
-	if s.inputLayout != nil {
-		return s.inputLayout, nil
-	}
-
-	i, err := s.graphics.device.CreateInputLayout(inputElementDescsForDX11, s.vertexShaderBlob.GetBufferPointer(), s.vertexShaderBlob.GetBufferSize())
-	if err != nil {
-		return nil, err
-	}
-	s.inputLayout = i
-	return i, nil
-}
-
-func (s *shader11) ensureVertexShader() (*_ID3D11VertexShader, error) {
-	if s.vertexShader != nil {
-		return s.vertexShader, nil
-	}
-
-	vs, err := s.graphics.device.CreateVertexShader(s.vertexShaderBlob.GetBufferPointer(), s.vertexShaderBlob.GetBufferSize(), nil)
-	if err != nil {
-		return nil, err
-	}
-	s.vertexShader = vs
-	return vs, nil
+	s.vertexStage = nil
 }
 
 func (s *shader11) ensurePixelShader() (*_ID3D11PixelShader, error) {
@@ -174,6 +73,20 @@ func (s *shader11) ensurePixelShader() (*_ID3D11PixelShader, error) {
 	return ps, nil
 }
 
+// ensureUserConstantBuffer returns the constant buffer for the user's uniform block, or nil when the
+// shader has none.
+func (s *shader11) ensureUserConstantBuffer() (*_ID3D11Buffer, error) {
+	if s.userConstantBuffer != nil || s.userConstantBufferSize == 0 {
+		return s.userConstantBuffer, nil
+	}
+	cb, err := s.graphics.newConstantBuffer(s.userConstantBufferSize)
+	if err != nil {
+		return nil, err
+	}
+	s.userConstantBuffer = cb
+	return cb, nil
+}
+
 func alignUp16(x uint32) uint32 {
 	if x%16 == 0 {
 		return x
@@ -181,25 +94,65 @@ func alignUp16(x uint32) uint32 {
 	return x + 16 - (x % 16)
 }
 
-func (s *shader11) ensureConstantBuffers() ([]*_ID3D11Buffer, error) {
-	sizes := []uint32{internalConstantBufferSize, s.userConstantBufferSize}
-	for i, size := range sizes {
-		if s.constantBuffers[i] != nil || size == 0 {
-			continue
-		}
-		cb, err := s.graphics.device.CreateBuffer(&_D3D11_BUFFER_DESC{
-			ByteWidth:      size,
-			Usage:          _D3D11_USAGE_DYNAMIC,
-			BindFlags:      uint32(_D3D11_BIND_CONSTANT_BUFFER),
-			CPUAccessFlags: uint32(_D3D11_CPU_ACCESS_WRITE),
-		}, nil)
-		if err != nil {
-			return nil, err
-		}
-		s.constantBuffers[i] = cb
+func (g *graphics11) newConstantBuffer(size uint32) (*_ID3D11Buffer, error) {
+	return g.device.CreateBuffer(&_D3D11_BUFFER_DESC{
+		ByteWidth:      size,
+		Usage:          _D3D11_USAGE_DYNAMIC,
+		BindFlags:      uint32(_D3D11_BIND_CONSTANT_BUFFER),
+		CPUAccessFlags: uint32(_D3D11_CPU_ACCESS_WRITE),
+	}, nil)
+}
+
+// uploadConstantBuffer writes data to cb unless last, what cb holds, equals it. A buffer keeps its
+// contents between draws, so an unchanged block needs no Map(WRITE_DISCARD). No block is empty, so
+// an empty last means that what cb holds is unknown.
+func (g *graphics11) uploadConstantBuffer(cb *_ID3D11Buffer, data []uint32, last *[]uint32) error {
+	if len(*last) > 0 && slices.Equal(*last, data) {
+		return nil
 	}
-	if s.constantBuffers[1] == nil {
-		return s.constantBuffers[:1], nil
+	var mapped _D3D11_MAPPED_SUBRESOURCE
+	if err := g.deviceContext.Map(unsafe.Pointer(cb), 0, _D3D11_MAP_WRITE_DISCARD, 0, &mapped); err != nil {
+		*last = (*last)[:0]
+		return err
 	}
-	return s.constantBuffers[:], nil
+	copy(unsafe.Slice((*uint32)(mapped.pData), len(data)), data)
+	g.deviceContext.Unmap(unsafe.Pointer(cb), 0)
+	*last = append((*last)[:0], data...)
+	return nil
+}
+
+// vertexStage returns the vertex shader and the input layout shared by the shaders with
+// textureCount source textures.
+func (g *graphics11) vertexStage(textureCount int) (_ *vertexStage11, ferr error) {
+	if v, ok := g.vertexStages[textureCount]; ok {
+		return v, nil
+	}
+
+	blob, err := vertexShaderBlob(textureCount)
+	if err != nil {
+		return nil, err
+	}
+	vs, err := g.device.CreateVertexShader(blob.GetBufferPointer(), blob.GetBufferSize(), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if ferr != nil {
+			vs.Release()
+		}
+	}()
+	il, err := g.device.CreateInputLayout(inputElementDescsForDX11, blob.GetBufferPointer(), blob.GetBufferSize())
+	if err != nil {
+		return nil, err
+	}
+
+	v := &vertexStage11{
+		vertexShader: vs,
+		inputLayout:  il,
+	}
+	if g.vertexStages == nil {
+		g.vertexStages = map[int]*vertexStage11{}
+	}
+	g.vertexStages[textureCount] = v
+	return v, nil
 }

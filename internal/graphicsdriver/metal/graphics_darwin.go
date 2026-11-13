@@ -44,7 +44,9 @@ type Graphics struct {
 	// runOnMainThread runs a function on the main thread synchronously. It is set at most once.
 	runOnMainThread func(f func())
 
-	tmpUniforms []uint32
+	// lastUserUniforms is the user's uniform block last set on rce, empty when none is. It lives
+	// outside rceState to keep its buffer across encoders.
+	lastUserUniforms []uint32
 
 	colorSpace color.ColorSpace
 
@@ -82,25 +84,13 @@ type Graphics struct {
 	vb mtl.Buffer
 	ib mtl.Buffer
 
-	images      map[graphicsdriver.ImageID]*Image
-	nextImageID graphicsdriver.ImageID
-
-	shaders      map[graphicsdriver.ShaderID]*Shader
-	nextShaderID graphicsdriver.ShaderID
-
 	maxImageSize int
+
+	// vertexStages are the shared vertex functions by texture count.
+	vertexStages map[int]vertexStage
 
 	pool cocoa.NSAutoreleasePool
 }
-
-type stencilMode int
-
-const (
-	noStencil stencilMode = iota
-	incrementStencil
-	invertStencil
-	drawWithStencil
-)
 
 var (
 	systemDefaultDevice    mtl.Device
@@ -302,16 +292,17 @@ func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error
 	g := s.graphics
 	s.view.setDrawableSize(width, height)
 	i := &Image{
-		id:       g.genNextImageID(),
 		graphics: g,
 		surface:  s,
 		width:    width,
 		height:   height,
 		screen:   true,
 	}
-	g.addImage(i)
 	return i, nil
 }
+
+// FlipsY reports true: a drawable's rows go down from clip-space Y = 1.
+func (s *Surface) FlipsY() bool { return true }
 
 // SetWindowState tells the surface what its window is doing: whether the user is resizing it,
 // whether it is in the fullscreen mode, and whether it is hidden. The next frame takes it. A
@@ -580,32 +571,6 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 	}
 }
 
-func (g *Graphics) checkSize(width, height int) {
-	if width < 1 {
-		panic(fmt.Sprintf("metal: width (%d) must be equal or more than %d", width, 1))
-	}
-	if height < 1 {
-		panic(fmt.Sprintf("metal: height (%d) must be equal or more than %d", height, 1))
-	}
-	m := g.MaxImageSize()
-	if width > m {
-		panic(fmt.Sprintf("metal: width (%d) must be less than or equal to %d", width, m))
-	}
-	if height > m {
-		panic(fmt.Sprintf("metal: height (%d) must be less than or equal to %d", height, m))
-	}
-}
-
-func (g *Graphics) genNextImageID() graphicsdriver.ImageID {
-	g.nextImageID++
-	return g.nextImageID
-}
-
-func (g *Graphics) genNextShaderID() graphicsdriver.ShaderID {
-	g.nextShaderID++
-	return g.nextShaderID
-}
-
 // SupportsPixelFormat reports PixelFormatA8 where a texture can have a swizzle: an R8Unorm texture
 // sampled as RRRR.
 func (g *Graphics) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool {
@@ -630,7 +595,7 @@ func mtlPixelFormat(format graphicsdriver.PixelFormat) mtl.PixelFormat {
 }
 
 func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
-	g.checkSize(width, height)
+	graphicsdriver.CheckSize("metal", width, height, g.MaxImageSize())
 	td := mtl.TextureDescriptor{
 		TextureType: mtl.TextureType2D,
 		PixelFormat: mtlPixelFormat(format),
@@ -644,7 +609,6 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 	}
 	t := g.device.NewTextureWithDescriptor(td)
 	i := &Image{
-		id:       g.genNextImageID(),
 		graphics: g,
 		width:    width,
 		height:   height,
@@ -662,22 +626,7 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 			Alpha: mtl.TextureSwizzleRed,
 		})
 	}
-	g.addImage(i)
 	return i, nil
-}
-
-func (g *Graphics) addImage(img *Image) {
-	if g.images == nil {
-		g.images = map[graphicsdriver.ImageID]*Image{}
-	}
-	if _, ok := g.images[img.id]; ok {
-		panic(fmt.Sprintf("metal: image ID %d was already registered", img.id))
-	}
-	g.images[img.id] = img
-}
-
-func (g *Graphics) removeImage(img *Image) {
-	delete(g.images, img.id)
 }
 
 func blendFactorToMetalBlendFactor(c graphicsdriver.BlendFactor) mtl.BlendFactor {
@@ -738,6 +687,7 @@ func (g *Graphics) flushRenderCommandEncoderIfNeeded() {
 	g.rce.EndEncoding()
 	g.rce = mtl.RenderCommandEncoder{}
 	g.rceState = rceState{}
+	g.lastUserUniforms = g.lastUserUniforms[:0]
 	g.lastDst = nil
 }
 
@@ -751,6 +701,13 @@ type rceState struct {
 	pipeline       mtl.RenderPipelineState
 	scissor        image.Rectangle
 	scissorSet     bool
+
+	// The uniform blocks last set, which a draw does not send again. The vertex function reads
+	// only the projection of the internal block.
+	vertexInternalSet   bool
+	projection          [16]uint32
+	fragmentInternalSet bool
+	fragmentInternal    [graphics.PreservedUniformDwordCount]uint32
 }
 
 func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs [graphics.ShaderSrcImageCount]*Image, indexOffset int, shader *Shader, uniforms []uint32, blend graphicsdriver.Blend) error {
@@ -778,9 +735,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		g.flushCommandBufferIfNeeded(false)
 	}
 
-	// When preparing a stencil buffer, flush the current render command encoder
-	// to make sure the stencil buffer is cleared when loading.
-	// TODO: What about clearing the stencil buffer by vertices?
+	// A render pass has one destination.
 	if g.lastDst != dst {
 		g.flushRenderCommandEncoderIfNeeded()
 	}
@@ -828,21 +783,29 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	}
 
 	// The internal uniform block comes first, then the user's block. Both are already laid out as
-	// the shader expects. In Metal, the NDC's Y direction (upward) and the framebuffer's Y
-	// direction (downward) don't match, so the projection matrix's Y is inverted on a copy.
-	g.tmpUniforms = append(g.tmpUniforms[:0], uniforms[:graphics.PreservedUniformDwordCount]...)
+	// the shader expects, the projection flipped for Metal's framebuffer (see FlipsY), and are sent
+	// as given: Metal copies the bytes at the call.
+	//
+	// naga declares a buffer argument only for a block the function reads: the vertex function
+	// takes the internal block alone, and the fragment function the internal block only when
+	// FragmentReadsInternalUniforms. A block bound to an encoder stays bound across pipelines, so
+	// one equal to the last sent is not sent again.
+	internal := (*[graphics.PreservedUniformDwordCount]uint32)(uniforms)
 	const p = graphics.ProjectionMatrixUniformDwordIndex
-	g.tmpUniforms[p+1] ^= 1 << 31
-	g.tmpUniforms[p+5] ^= 1 << 31
-	g.tmpUniforms[p+9] ^= 1 << 31
-	g.tmpUniforms[p+13] ^= 1 << 31
-	head := unsafe.SliceData(g.tmpUniforms)
-	g.rce.SetVertexBytes(unsafe.Pointer(head), unsafe.Sizeof(uniforms[0])*uintptr(len(g.tmpUniforms)), internalUniformBufferIndex)
-	g.rce.SetFragmentBytes(unsafe.Pointer(head), unsafe.Sizeof(uniforms[0])*uintptr(len(g.tmpUniforms)), internalUniformBufferIndex)
-	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 {
-		head := unsafe.SliceData(user)
-		g.rce.SetVertexBytes(unsafe.Pointer(head), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
-		g.rce.SetFragmentBytes(unsafe.Pointer(head), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
+	const internalSize = unsafe.Sizeof(*internal)
+	if projection := [16]uint32(internal[p : p+16]); !st.vertexInternalSet || st.projection != projection {
+		g.rce.SetVertexBytes(unsafe.Pointer(internal), internalSize, internalUniformBufferIndex)
+		st.vertexInternalSet = true
+		st.projection = projection
+	}
+	if shader.program.FragmentReadsInternalUniforms && (!st.fragmentInternalSet || st.fragmentInternal != *internal) {
+		g.rce.SetFragmentBytes(unsafe.Pointer(internal), internalSize, internalUniformBufferIndex)
+		st.fragmentInternalSet = true
+		st.fragmentInternal = *internal
+	}
+	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 && !slices.Equal(g.lastUserUniforms, user) {
+		g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
+		g.lastUserUniforms = append(g.lastUserUniforms[:0], user...)
 	}
 
 	for i, t := range srcTextures {
@@ -852,7 +815,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		}
 	}
 
-	rps, err := shader.RenderPipelineState(dst.colorPixelFormat(), blend, dst.screen)
+	rps, err := shader.RenderPipelineState(dst.colorPixelFormat(), blend)
 	if err != nil {
 		return err
 	}
@@ -880,23 +843,24 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	return nil
 }
 
-func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.ShaderSrcImageCount]graphicsdriver.ImageID, shaderID graphicsdriver.ShaderID, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
-	if shaderID == graphicsdriver.InvalidShaderID {
-		return fmt.Errorf("metal: shader ID is invalid")
+func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+	if shader == nil {
+		return fmt.Errorf("metal: shader is nil")
 	}
 
-	dst := g.images[dstID]
-
-	var srcs [graphics.ShaderSrcImageCount]*Image
-	for i, srcID := range srcIDs {
-		srcs[i] = g.images[srcID]
+	var srcImages [graphics.ShaderSrcImageCount]*Image
+	for i, src := range srcs {
+		if src != nil {
+			srcImages[i] = src.(*Image)
+		}
 	}
 
-	if err := g.draw(dst, dstRegions, srcs, indexOffset, g.shaders[shaderID], uniforms, blend); err != nil {
-		return err
-	}
+	return g.draw(dst.(*Image), dstRegions, srcImages, indexOffset, shader.(*Shader), uniforms, blend)
+}
 
-	return nil
+// FlipsY reports true: a texture's rows go down from clip-space Y = 1.
+func (g *Graphics) FlipsY() bool {
+	return true
 }
 
 func (g *Graphics) NeedsClearingScreen() bool {
@@ -953,30 +917,14 @@ func (g *Graphics) MaxImageSize() int {
 }
 
 func (g *Graphics) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
-	s, err := newShader(g.genNextShaderID(), g, g.device, program)
+	s, err := newShader(g, g.device, program)
 	if err != nil {
 		return nil, err
 	}
-	g.addShader(s)
 	return s, nil
 }
 
-func (g *Graphics) addShader(shader *Shader) {
-	if g.shaders == nil {
-		g.shaders = map[graphicsdriver.ShaderID]*Shader{}
-	}
-	if _, ok := g.shaders[shader.id]; ok {
-		panic(fmt.Sprintf("metal: shader ID %d was already registered", shader.id))
-	}
-	g.shaders[shader.id] = shader
-}
-
-func (g *Graphics) removeShader(shader *Shader) {
-	delete(g.shaders, shader.id)
-}
-
 type Image struct {
-	id       graphicsdriver.ImageID
 	graphics *Graphics
 	width    int
 	height   int
@@ -987,7 +935,6 @@ type Image struct {
 	// sampled is the view of texture that shaders sample, for an A8 image; zero for the others,
 	// which are sampled as texture.
 	sampled mtl.Texture
-	stencil mtl.Texture
 }
 
 func (i *Image) colorPixelFormat() mtl.PixelFormat {
@@ -995,10 +942,6 @@ func (i *Image) colorPixelFormat() mtl.PixelFormat {
 		return i.surface.view.colorPixelFormat()
 	}
 	return mtlPixelFormat(i.format)
-}
-
-func (i *Image) ID() graphicsdriver.ImageID {
-	return i.id
 }
 
 func (i *Image) internalSize() (int, int) {
@@ -1009,10 +952,6 @@ func (i *Image) internalSize() (int, int) {
 }
 
 func (i *Image) Dispose() {
-	if i.stencil != (mtl.Texture{}) {
-		i.stencil.Release()
-		i.stencil = mtl.Texture{}
-	}
 	if i.sampled != (mtl.Texture{}) {
 		i.sampled.Release()
 		i.sampled = mtl.Texture{}
@@ -1021,7 +960,6 @@ func (i *Image) Dispose() {
 		i.texture.Release()
 		i.texture = mtl.Texture{}
 	}
-	i.graphics.removeImage(i)
 }
 
 func (i *Image) syncTexture() {
@@ -1149,20 +1087,4 @@ func (i *Image) mtlTexture() mtl.Texture {
 		return i.surface.texture()
 	}
 	return i.texture
-}
-
-func (i *Image) ensureStencil() {
-	if i.stencil != (mtl.Texture{}) {
-		return
-	}
-
-	td := mtl.TextureDescriptor{
-		TextureType: mtl.TextureType2D,
-		PixelFormat: mtl.PixelFormatStencil8,
-		Width:       graphics.InternalImageSize(i.width),
-		Height:      graphics.InternalImageSize(i.height),
-		StorageMode: mtl.StorageModePrivate,
-		Usage:       mtl.TextureUsageRenderTarget,
-	}
-	i.stencil = i.graphics.device.NewTextureWithDescriptor(td)
 }

@@ -45,14 +45,6 @@ func (d *DebugContext) AttachShader(arg0 uint32, arg1 uint32) {
 	}
 }
 
-func (d *DebugContext) BindAttribLocation(arg0 uint32, arg1 uint32, arg2 string) {
-	d.Context.BindAttribLocation(arg0, arg1, arg2)
-	fmt.Fprintln(os.Stderr, "BindAttribLocation")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at BindAttribLocation", e))
-	}
-}
-
 func (d *DebugContext) BindBuffer(arg0 uint32, arg1 uint32) {
 	d.Context.BindBuffer(arg0, arg1)
 	fmt.Fprintln(os.Stderr, "BindBuffer")
@@ -74,14 +66,6 @@ func (d *DebugContext) BindFramebuffer(arg0 uint32, arg1 uint32) {
 	fmt.Fprintln(os.Stderr, "BindFramebuffer")
 	if e := d.Context.GetError(); e != NO_ERROR {
 		panic(fmt.Sprintf("gl: GetError() returned %d at BindFramebuffer", e))
-	}
-}
-
-func (d *DebugContext) BindRenderbuffer(arg0 uint32, arg1 uint32) {
-	d.Context.BindRenderbuffer(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "BindRenderbuffer")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at BindRenderbuffer", e))
 	}
 }
 
@@ -150,22 +134,6 @@ func (d *DebugContext) CheckFramebufferStatus(arg0 uint32) uint32 {
 	return out0
 }
 
-func (d *DebugContext) Clear(arg0 uint32) {
-	d.Context.Clear(arg0)
-	fmt.Fprintln(os.Stderr, "Clear")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Clear", e))
-	}
-}
-
-func (d *DebugContext) ColorMask(arg0 bool, arg1 bool, arg2 bool, arg3 bool) {
-	d.Context.ColorMask(arg0, arg1, arg2, arg3)
-	fmt.Fprintln(os.Stderr, "ColorMask")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at ColorMask", e))
-	}
-}
-
 func (d *DebugContext) CompileShader(arg0 uint32) {
 	d.Context.CompileShader(arg0)
 	fmt.Fprintln(os.Stderr, "CompileShader")
@@ -197,15 +165,6 @@ func (d *DebugContext) CreateProgram() uint32 {
 	fmt.Fprintln(os.Stderr, "CreateProgram")
 	if e := d.Context.GetError(); e != NO_ERROR {
 		panic(fmt.Sprintf("gl: GetError() returned %d at CreateProgram", e))
-	}
-	return out0
-}
-
-func (d *DebugContext) CreateRenderbuffer() uint32 {
-	out0 := d.Context.CreateRenderbuffer()
-	fmt.Fprintln(os.Stderr, "CreateRenderbuffer")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at CreateRenderbuffer", e))
 	}
 	return out0
 }
@@ -261,14 +220,6 @@ func (d *DebugContext) DeleteProgram(arg0 uint32) {
 	}
 }
 
-func (d *DebugContext) DeleteRenderbuffer(arg0 uint32) {
-	d.Context.DeleteRenderbuffer(arg0)
-	fmt.Fprintln(os.Stderr, "DeleteRenderbuffer")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at DeleteRenderbuffer", e))
-	}
-}
-
 func (d *DebugContext) DeleteShader(arg0 uint32) {
 	d.Context.DeleteShader(arg0)
 	fmt.Fprintln(os.Stderr, "DeleteShader")
@@ -290,22 +241,6 @@ func (d *DebugContext) DeleteVertexArray(arg0 uint32) {
 	fmt.Fprintln(os.Stderr, "DeleteVertexArray")
 	if e := d.Context.GetError(); e != NO_ERROR {
 		panic(fmt.Sprintf("gl: GetError() returned %d at DeleteVertexArray", e))
-	}
-}
-
-func (d *DebugContext) Disable(arg0 uint32) {
-	d.Context.Disable(arg0)
-	fmt.Fprintln(os.Stderr, "Disable")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Disable", e))
-	}
-}
-
-func (d *DebugContext) DisableVertexAttribArray(arg0 uint32) {
-	d.Context.DisableVertexAttribArray(arg0)
-	fmt.Fprintln(os.Stderr, "DisableVertexAttribArray")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at DisableVertexAttribArray", e))
 	}
 }
 
@@ -346,14 +281,6 @@ func (d *DebugContext) Flush() {
 	fmt.Fprintln(os.Stderr, "Flush")
 	if e := d.Context.GetError(); e != NO_ERROR {
 		panic(fmt.Sprintf("gl: GetError() returned %d at Flush", e))
-	}
-}
-
-func (d *DebugContext) FramebufferRenderbuffer(arg0 uint32, arg1 uint32, arg2 uint32, arg3 uint32) {
-	d.Context.FramebufferRenderbuffer(arg0, arg1, arg2, arg3)
-	fmt.Fprintln(os.Stderr, "FramebufferRenderbuffer")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at FramebufferRenderbuffer", e))
 	}
 }
 
@@ -416,15 +343,6 @@ func (d *DebugContext) GetShaderInfoLog(arg0 uint32) string {
 	return out0
 }
 
-func (d *DebugContext) GetShaderi(arg0 uint32, arg1 uint32) int {
-	out0 := d.Context.GetShaderi(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "GetShaderi")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at GetShaderi", e))
-	}
-	return out0
-}
-
 func (d *DebugContext) GetUniformBlockIndex(arg0 uint32, arg1 string) uint32 {
 	out0 := d.Context.GetUniformBlockIndex(arg0, arg1)
 	fmt.Fprintln(os.Stderr, "GetUniformBlockIndex")
@@ -445,15 +363,6 @@ func (d *DebugContext) GetUniformLocation(arg0 uint32, arg1 string) int32 {
 
 func (d *DebugContext) IsES() bool {
 	out0 := d.Context.IsES()
-	return out0
-}
-
-func (d *DebugContext) IsProgram(arg0 uint32) bool {
-	out0 := d.Context.IsProgram(arg0)
-	fmt.Fprintln(os.Stderr, "IsProgram")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at IsProgram", e))
-	}
 	return out0
 }
 
@@ -486,14 +395,6 @@ func (d *DebugContext) ReadPixels(arg0 []uint8, arg1 int32, arg2 int32, arg3 int
 	}
 }
 
-func (d *DebugContext) RenderbufferStorage(arg0 uint32, arg1 uint32, arg2 int32, arg3 int32) {
-	d.Context.RenderbufferStorage(arg0, arg1, arg2, arg3)
-	fmt.Fprintln(os.Stderr, "RenderbufferStorage")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at RenderbufferStorage", e))
-	}
-}
-
 func (d *DebugContext) Scissor(arg0 int32, arg1 int32, arg2 int32, arg3 int32) {
 	d.Context.Scissor(arg0, arg1, arg2, arg3)
 	fmt.Fprintln(os.Stderr, "Scissor")
@@ -507,22 +408,6 @@ func (d *DebugContext) ShaderSource(arg0 uint32, arg1 string) {
 	fmt.Fprintln(os.Stderr, "ShaderSource")
 	if e := d.Context.GetError(); e != NO_ERROR {
 		panic(fmt.Sprintf("gl: GetError() returned %d at ShaderSource", e))
-	}
-}
-
-func (d *DebugContext) StencilFunc(arg0 uint32, arg1 int32, arg2 uint32) {
-	d.Context.StencilFunc(arg0, arg1, arg2)
-	fmt.Fprintln(os.Stderr, "StencilFunc")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at StencilFunc", e))
-	}
-}
-
-func (d *DebugContext) StencilOpSeparate(arg0 uint32, arg1 uint32, arg2 uint32, arg3 uint32) {
-	d.Context.StencilOpSeparate(arg0, arg1, arg2, arg3)
-	fmt.Fprintln(os.Stderr, "StencilOpSeparate")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at StencilOpSeparate", e))
 	}
 }
 
@@ -550,14 +435,6 @@ func (d *DebugContext) TexSubImage2D(arg0 uint32, arg1 int32, arg2 int32, arg3 i
 	}
 }
 
-func (d *DebugContext) Uniform1fv(arg0 int32, arg1 []float32) {
-	d.Context.Uniform1fv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform1fv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform1fv", e))
-	}
-}
-
 func (d *DebugContext) Uniform1i(arg0 int32, arg1 int32) {
 	d.Context.Uniform1i(arg0, arg1)
 	fmt.Fprintln(os.Stderr, "Uniform1i")
@@ -566,91 +443,11 @@ func (d *DebugContext) Uniform1i(arg0 int32, arg1 int32) {
 	}
 }
 
-func (d *DebugContext) Uniform1iv(arg0 int32, arg1 []int32) {
-	d.Context.Uniform1iv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform1iv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform1iv", e))
-	}
-}
-
-func (d *DebugContext) Uniform2fv(arg0 int32, arg1 []float32) {
-	d.Context.Uniform2fv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform2fv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform2fv", e))
-	}
-}
-
-func (d *DebugContext) Uniform2iv(arg0 int32, arg1 []int32) {
-	d.Context.Uniform2iv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform2iv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform2iv", e))
-	}
-}
-
-func (d *DebugContext) Uniform3fv(arg0 int32, arg1 []float32) {
-	d.Context.Uniform3fv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform3fv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform3fv", e))
-	}
-}
-
-func (d *DebugContext) Uniform3iv(arg0 int32, arg1 []int32) {
-	d.Context.Uniform3iv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform3iv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform3iv", e))
-	}
-}
-
-func (d *DebugContext) Uniform4fv(arg0 int32, arg1 []float32) {
-	d.Context.Uniform4fv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform4fv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform4fv", e))
-	}
-}
-
-func (d *DebugContext) Uniform4iv(arg0 int32, arg1 []int32) {
-	d.Context.Uniform4iv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "Uniform4iv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at Uniform4iv", e))
-	}
-}
-
 func (d *DebugContext) UniformBlockBinding(arg0 uint32, arg1 uint32, arg2 uint32) {
 	d.Context.UniformBlockBinding(arg0, arg1, arg2)
 	fmt.Fprintln(os.Stderr, "UniformBlockBinding")
 	if e := d.Context.GetError(); e != NO_ERROR {
 		panic(fmt.Sprintf("gl: GetError() returned %d at UniformBlockBinding", e))
-	}
-}
-
-func (d *DebugContext) UniformMatrix2fv(arg0 int32, arg1 []float32) {
-	d.Context.UniformMatrix2fv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "UniformMatrix2fv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at UniformMatrix2fv", e))
-	}
-}
-
-func (d *DebugContext) UniformMatrix3fv(arg0 int32, arg1 []float32) {
-	d.Context.UniformMatrix3fv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "UniformMatrix3fv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at UniformMatrix3fv", e))
-	}
-}
-
-func (d *DebugContext) UniformMatrix4fv(arg0 int32, arg1 []float32) {
-	d.Context.UniformMatrix4fv(arg0, arg1)
-	fmt.Fprintln(os.Stderr, "UniformMatrix4fv")
-	if e := d.Context.GetError(); e != NO_ERROR {
-		panic(fmt.Sprintf("gl: GetError() returned %d at UniformMatrix4fv", e))
 	}
 }
 

@@ -20,11 +20,9 @@ import (
 )
 
 var (
-	object       = js.Global().Get("Object")
-	arrayBuffer  = js.Global().Get("ArrayBuffer")
-	uint8Array   = js.Global().Get("Uint8Array")
-	float32Array = js.Global().Get("Float32Array")
-	int32Array   = js.Global().Get("Int32Array")
+	object      = js.Global().Get("Object")
+	arrayBuffer = js.Global().Get("ArrayBuffer")
+	uint8Array  = js.Global().Get("Uint8Array")
 )
 
 var (
@@ -37,12 +35,6 @@ var (
 
 	// tmpUint8Array is a Uint8ArrayBuffer whose underlying buffer is always temporaryArrayBuffer.
 	tmpUint8Array = uint8Array.New(tmpArrayBuffer)
-
-	// tmpFloat32Array is a Float32ArrayBuffer whose underlying buffer is always temporaryArrayBuffer.
-	tmpFloat32Array = float32Array.New(tmpArrayBuffer)
-
-	// tmpInt32Array is a Float32ArrayBuffer whose underlying buffer is always temporaryArrayBuffer.
-	tmpInt32Array = int32Array.New(tmpArrayBuffer)
 )
 
 func ensureTemporaryArrayBufferSize(byteLength int) {
@@ -53,8 +45,6 @@ func ensureTemporaryArrayBufferSize(byteLength int) {
 		tmpArrayBufferByteLength = bufl
 		tmpArrayBuffer = arrayBuffer.New(bufl)
 		tmpUint8Array = uint8Array.New(tmpArrayBuffer)
-		tmpFloat32Array = float32Array.New(tmpArrayBuffer)
-		tmpInt32Array = int32Array.New(tmpArrayBuffer)
 	}
 }
 
@@ -66,22 +56,4 @@ func tmpUint8ArrayFromSlice[T numeric](minLength int, data []T) js.Value {
 	ensureTemporaryArrayBufferSize(minLength * int(unsafe.Sizeof(T(0))))
 	copySliceToTemporaryArrayBuffer(data)
 	return tmpUint8Array
-}
-
-// tmpFloat32ArrayFromFloat32Slice returns a Float32Array whose length is at least minLength.
-// Be careful that the length can exceed the given minLength.
-// data must be a slice of a numeric type for initialization, or nil if you don't need initialization.
-func tmpFloat32ArrayFromFloat32Slice(minLength int, data []float32) js.Value {
-	ensureTemporaryArrayBufferSize(minLength * 4)
-	copySliceToTemporaryArrayBuffer(data)
-	return tmpFloat32Array
-}
-
-// tmpInt32ArrayFromInt32Slice returns a Int32Array whose length is at least minLength.
-// Be careful that the length can exceed the given minLength.
-// data must be a slice of a numeric type for initialization, or nil if you don't need initialization.
-func tmpInt32ArrayFromInt32Slice(minLength int, data []int32) js.Value {
-	ensureTemporaryArrayBufferSize(minLength * 4)
-	copySliceToTemporaryArrayBuffer(data)
-	return tmpInt32Array
 }

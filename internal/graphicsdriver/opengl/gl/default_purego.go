@@ -24,83 +24,60 @@ import (
 )
 
 type defaultContext struct {
-	gpActiveTexture            uintptr
-	gpAttachShader             uintptr
-	gpBindAttribLocation       uintptr
-	gpBindBuffer               uintptr
-	gpBindBufferBase           uintptr
-	gpGetUniformBlockIndex     uintptr
-	gpUniformBlockBinding      uintptr
-	gpBindFramebuffer          uintptr
-	gpBindRenderbuffer         uintptr
-	gpBindTexture              uintptr
-	gpBindVertexArray          uintptr
-	gpBlendEquationSeparate    uintptr
-	gpBlendFuncSeparate        uintptr
-	gpBlitFramebuffer          uintptr
-	gpBufferData               uintptr
-	gpBufferSubData            uintptr
-	gpCheckFramebufferStatus   uintptr
-	gpClear                    uintptr
-	gpColorMask                uintptr
-	gpCompileShader            uintptr
-	gpCreateProgram            uintptr
-	gpCreateShader             uintptr
-	gpDeleteBuffers            uintptr
-	gpDeleteFramebuffers       uintptr
-	gpDeleteProgram            uintptr
-	gpDeleteRenderbuffers      uintptr
-	gpDeleteShader             uintptr
-	gpDeleteTextures           uintptr
-	gpDeleteVertexArrays       uintptr
-	gpDisable                  uintptr
-	gpDisableVertexAttribArray uintptr
-	gpDrawElements             uintptr
-	gpEnable                   uintptr
-	gpEnableVertexAttribArray  uintptr
-	gpFinish                   uintptr
-	gpFlush                    uintptr
-	gpFramebufferRenderbuffer  uintptr
-	gpFramebufferTexture2D     uintptr
-	gpGenBuffers               uintptr
-	gpGenFramebuffers          uintptr
-	gpGenRenderbuffers         uintptr
-	gpGenTextures              uintptr
-	gpGenVertexArrays          uintptr
-	gpGetError                 uintptr
-	gpGetIntegerv              uintptr
-	gpGetProgramInfoLog        uintptr
-	gpGetProgramiv             uintptr
-	gpGetShaderInfoLog         uintptr
-	gpGetShaderiv              uintptr
-	gpGetUniformLocation       uintptr
-	gpIsProgram                uintptr
-	gpLinkProgram              uintptr
-	gpPixelStorei              uintptr
-	gpReadPixels               uintptr
-	gpRenderbufferStorage      uintptr
-	gpScissor                  uintptr
-	gpShaderSource             uintptr
-	gpStencilFunc              uintptr
-	gpStencilOpSeparate        uintptr
-	gpTexImage2D               uintptr
-	gpTexParameteri            uintptr
-	gpTexSubImage2D            uintptr
-	gpUniform1fv               uintptr
-	gpUniform1i                uintptr
-	gpUniform1iv               uintptr
-	gpUniform2fv               uintptr
-	gpUniform2iv               uintptr
-	gpUniform3fv               uintptr
-	gpUniform3iv               uintptr
-	gpUniform4fv               uintptr
-	gpUniform4iv               uintptr
-	gpUniformMatrix2fv         uintptr
-	gpUniformMatrix3fv         uintptr
-	gpUniformMatrix4fv         uintptr
-	gpUseProgram               uintptr
-	gpVertexAttribPointer      uintptr
-	gpViewport                 uintptr
+	gpActiveTexture           uintptr
+	gpAttachShader            uintptr
+	gpBindBuffer              uintptr
+	gpBindBufferBase          uintptr
+	gpGetUniformBlockIndex    uintptr
+	gpUniformBlockBinding     uintptr
+	gpBindFramebuffer         uintptr
+	gpBindTexture             uintptr
+	gpBindVertexArray         uintptr
+	gpBlendEquationSeparate   uintptr
+	gpBlendFuncSeparate       uintptr
+	gpBlitFramebuffer         uintptr
+	gpBufferData              uintptr
+	gpBufferSubData           uintptr
+	gpCheckFramebufferStatus  uintptr
+	gpCompileShader           uintptr
+	gpCreateProgram           uintptr
+	gpCreateShader            uintptr
+	gpDeleteBuffers           uintptr
+	gpDeleteFramebuffers      uintptr
+	gpDeleteProgram           uintptr
+	gpDeleteShader            uintptr
+	gpDeleteTextures          uintptr
+	gpDeleteVertexArrays      uintptr
+	gpDrawElements            uintptr
+	gpEnable                  uintptr
+	gpEnableVertexAttribArray uintptr
+	gpFinish                  uintptr
+	gpFlush                   uintptr
+	gpFramebufferTexture2D    uintptr
+	gpGenBuffers              uintptr
+	gpGenFramebuffers         uintptr
+	gpGenTextures             uintptr
+	gpGenVertexArrays         uintptr
+	gpGetError                uintptr
+	gpGetIntegerv             uintptr
+	gpGetProgramInfoLog       uintptr
+	gpGetProgramiv            uintptr
+	gpGetShaderInfoLog        uintptr
+	gpGetShaderiv             uintptr
+	gpGetUniformLocation      uintptr
+	gpIsProgram               uintptr
+	gpLinkProgram             uintptr
+	gpPixelStorei             uintptr
+	gpReadPixels              uintptr
+	gpScissor                 uintptr
+	gpShaderSource            uintptr
+	gpTexImage2D              uintptr
+	gpTexParameteri           uintptr
+	gpTexSubImage2D           uintptr
+	gpUniform1i               uintptr
+	gpUseProgram              uintptr
+	gpVertexAttribPointer     uintptr
+	gpViewport                uintptr
 
 	isES bool
 }
@@ -132,12 +109,6 @@ func (c *defaultContext) AttachShader(program uint32, shader uint32) {
 	purego.SyscallN(c.gpAttachShader, uintptr(program), uintptr(shader))
 }
 
-func (c *defaultContext) BindAttribLocation(program uint32, index uint32, name string) {
-	cname, free := cStr(name)
-	defer free()
-	purego.SyscallN(c.gpBindAttribLocation, uintptr(program), uintptr(index), uintptr(unsafe.Pointer(cname)))
-}
-
 func (c *defaultContext) BindBuffer(target uint32, buffer uint32) {
 	purego.SyscallN(c.gpBindBuffer, uintptr(target), uintptr(buffer))
 }
@@ -159,10 +130,6 @@ func (c *defaultContext) UniformBlockBinding(program uint32, index uint32, bindi
 
 func (c *defaultContext) BindFramebuffer(target uint32, framebuffer uint32) {
 	purego.SyscallN(c.gpBindFramebuffer, uintptr(target), uintptr(framebuffer))
-}
-
-func (c *defaultContext) BindRenderbuffer(target uint32, renderbuffer uint32) {
-	purego.SyscallN(c.gpBindRenderbuffer, uintptr(target), uintptr(renderbuffer))
 }
 
 func (c *defaultContext) BindTexture(target uint32, texture uint32) {
@@ -205,14 +172,6 @@ func (c *defaultContext) CheckFramebufferStatus(target uint32) uint32 {
 	return uint32(ret)
 }
 
-func (c *defaultContext) Clear(mask uint32) {
-	purego.SyscallN(c.gpClear, uintptr(mask))
-}
-
-func (c *defaultContext) ColorMask(red bool, green bool, blue bool, alpha bool) {
-	purego.SyscallN(c.gpColorMask, uintptr(boolToInt(red)), uintptr(boolToInt(green)), uintptr(boolToInt(blue)), uintptr(boolToInt(alpha)))
-}
-
 func (c *defaultContext) CompileShader(shader uint32) {
 	purego.SyscallN(c.gpCompileShader, uintptr(shader))
 }
@@ -232,12 +191,6 @@ func (c *defaultContext) CreateFramebuffer() uint32 {
 func (c *defaultContext) CreateProgram() uint32 {
 	ret, _, _ := purego.SyscallN(c.gpCreateProgram)
 	return uint32(ret)
-}
-
-func (c *defaultContext) CreateRenderbuffer() uint32 {
-	var renderbuffer uint32
-	purego.SyscallN(c.gpGenRenderbuffers, 1, uintptr(unsafe.Pointer(&renderbuffer)))
-	return renderbuffer
 }
 
 func (c *defaultContext) CreateShader(xtype uint32) uint32 {
@@ -267,14 +220,10 @@ func (c *defaultContext) DeleteFramebuffer(framebuffer uint32) {
 
 func (c *defaultContext) DeleteProgram(program uint32) {
 	// A program is no longer valid after a context loss and must not be deleted.
-	if !c.IsProgram(program) {
+	if !c.isProgram(program) {
 		return
 	}
 	purego.SyscallN(c.gpDeleteProgram, uintptr(program))
-}
-
-func (c *defaultContext) DeleteRenderbuffer(renderbuffer uint32) {
-	purego.SyscallN(c.gpDeleteRenderbuffers, 1, uintptr(unsafe.Pointer(&renderbuffer)))
 }
 
 func (c *defaultContext) DeleteShader(shader uint32) {
@@ -287,14 +236,6 @@ func (c *defaultContext) DeleteTexture(texture uint32) {
 
 func (c *defaultContext) DeleteVertexArray(array uint32) {
 	purego.SyscallN(c.gpDeleteVertexArrays, 1, uintptr(unsafe.Pointer(&array)))
-}
-
-func (c *defaultContext) Disable(cap uint32) {
-	purego.SyscallN(c.gpDisable, uintptr(cap))
-}
-
-func (c *defaultContext) DisableVertexAttribArray(index uint32) {
-	purego.SyscallN(c.gpDisableVertexAttribArray, uintptr(index))
 }
 
 func (c *defaultContext) DrawElements(mode uint32, count int32, xtype uint32, offset int) {
@@ -315,10 +256,6 @@ func (c *defaultContext) Finish() {
 
 func (c *defaultContext) Flush() {
 	purego.SyscallN(c.gpFlush)
-}
-
-func (c *defaultContext) FramebufferRenderbuffer(target uint32, attachment uint32, renderbuffertarget uint32, renderbuffer uint32) {
-	purego.SyscallN(c.gpFramebufferRenderbuffer, uintptr(target), uintptr(attachment), uintptr(renderbuffertarget), uintptr(renderbuffer))
 }
 
 func (c *defaultContext) FramebufferTexture2D(target uint32, attachment uint32, textarget uint32, texture uint32, level int32) {
@@ -357,7 +294,7 @@ func (c *defaultContext) GetProgrami(program uint32, pname uint32) int {
 }
 
 func (c *defaultContext) GetShaderInfoLog(shader uint32) string {
-	bufSize := c.GetShaderi(shader, INFO_LOG_LENGTH)
+	bufSize := c.getShaderi(shader, INFO_LOG_LENGTH)
 	if bufSize == 0 {
 		return ""
 	}
@@ -366,7 +303,7 @@ func (c *defaultContext) GetShaderInfoLog(shader uint32) string {
 	return string(infoLog)
 }
 
-func (c *defaultContext) GetShaderi(shader uint32, pname uint32) int {
+func (c *defaultContext) getShaderi(shader uint32, pname uint32) int {
 	var dst int32
 	purego.SyscallN(c.gpGetShaderiv, uintptr(shader), uintptr(pname), uintptr(unsafe.Pointer(&dst)))
 	return int(dst)
@@ -379,7 +316,7 @@ func (c *defaultContext) GetUniformLocation(program uint32, name string) int32 {
 	return int32(ret)
 }
 
-func (c *defaultContext) IsProgram(program uint32) bool {
+func (c *defaultContext) isProgram(program uint32) bool {
 	ret, _, _ := purego.SyscallN(c.gpIsProgram, uintptr(program))
 	return byte(ret) != 0
 }
@@ -397,10 +334,6 @@ func (c *defaultContext) ReadPixels(dst []byte, x int32, y int32, width int32, h
 	runtime.KeepAlive(dst)
 }
 
-func (c *defaultContext) RenderbufferStorage(target uint32, internalformat uint32, width int32, height int32) {
-	purego.SyscallN(c.gpRenderbufferStorage, uintptr(target), uintptr(internalformat), uintptr(width), uintptr(height))
-}
-
 func (c *defaultContext) Scissor(x int32, y int32, width int32, height int32) {
 	purego.SyscallN(c.gpScissor, uintptr(x), uintptr(y), uintptr(width), uintptr(height))
 }
@@ -409,14 +342,6 @@ func (c *defaultContext) ShaderSource(shader uint32, xstring string) {
 	cstring, free := cStr(xstring)
 	defer free()
 	purego.SyscallN(c.gpShaderSource, uintptr(shader), 1, uintptr(unsafe.Pointer(&cstring)), 0)
-}
-
-func (c *defaultContext) StencilFunc(xfunc uint32, ref int32, mask uint32) {
-	purego.SyscallN(c.gpStencilFunc, uintptr(xfunc), uintptr(ref), uintptr(mask))
-}
-
-func (c *defaultContext) StencilOpSeparate(face uint32, fail uint32, zfail uint32, zpass uint32) {
-	purego.SyscallN(c.gpStencilOpSeparate, uintptr(face), uintptr(fail), uintptr(zfail), uintptr(zpass))
 }
 
 func (c *defaultContext) TexImage2D(target uint32, level int32, internalformat int32, width int32, height int32, format uint32, xtype uint32, pixels []byte) {
@@ -437,63 +362,8 @@ func (c *defaultContext) TexSubImage2D(target uint32, level int32, xoffset int32
 	runtime.KeepAlive(pixels)
 }
 
-func (c *defaultContext) Uniform1fv(location int32, value []float32) {
-	purego.SyscallN(c.gpUniform1fv, uintptr(location), uintptr(len(value)), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
 func (c *defaultContext) Uniform1i(location int32, v0 int32) {
 	purego.SyscallN(c.gpUniform1i, uintptr(location), uintptr(v0))
-}
-
-func (c *defaultContext) Uniform1iv(location int32, value []int32) {
-	purego.SyscallN(c.gpUniform1iv, uintptr(location), uintptr(len(value)), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) Uniform2fv(location int32, value []float32) {
-	purego.SyscallN(c.gpUniform2fv, uintptr(location), uintptr(len(value)/2), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) Uniform2iv(location int32, value []int32) {
-	purego.SyscallN(c.gpUniform2iv, uintptr(location), uintptr(len(value)/2), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) Uniform3fv(location int32, value []float32) {
-	purego.SyscallN(c.gpUniform3fv, uintptr(location), uintptr(len(value)/3), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) Uniform3iv(location int32, value []int32) {
-	purego.SyscallN(c.gpUniform3iv, uintptr(location), uintptr(len(value)/3), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) Uniform4fv(location int32, value []float32) {
-	purego.SyscallN(c.gpUniform4fv, uintptr(location), uintptr(len(value)/4), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) Uniform4iv(location int32, value []int32) {
-	purego.SyscallN(c.gpUniform4iv, uintptr(location), uintptr(len(value)/4), uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) UniformMatrix2fv(location int32, value []float32) {
-	purego.SyscallN(c.gpUniformMatrix2fv, uintptr(location), uintptr(len(value)/4), 0, uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) UniformMatrix3fv(location int32, value []float32) {
-	purego.SyscallN(c.gpUniformMatrix3fv, uintptr(location), uintptr(len(value)/9), 0, uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
-}
-
-func (c *defaultContext) UniformMatrix4fv(location int32, value []float32) {
-	purego.SyscallN(c.gpUniformMatrix4fv, uintptr(location), uintptr(len(value)/16), 0, uintptr(unsafe.Pointer(&value[0])))
-	runtime.KeepAlive(value)
 }
 
 func (c *defaultContext) UseProgram(program uint32) {
@@ -513,13 +383,11 @@ func (c *defaultContext) LoadFunctions() error {
 
 	c.gpActiveTexture = g.get("glActiveTexture")
 	c.gpAttachShader = g.get("glAttachShader")
-	c.gpBindAttribLocation = g.get("glBindAttribLocation")
 	c.gpBindBuffer = g.get("glBindBuffer")
 	c.gpBindBufferBase = g.get("glBindBufferBase")
 	c.gpGetUniformBlockIndex = g.get("glGetUniformBlockIndex")
 	c.gpUniformBlockBinding = g.get("glUniformBlockBinding")
 	c.gpBindFramebuffer = g.get("glBindFramebuffer")
-	c.gpBindRenderbuffer = g.get("glBindRenderbuffer")
 	c.gpBindTexture = g.get("glBindTexture")
 	c.gpBindVertexArray = g.get("glBindVertexArray")
 	c.gpBlendEquationSeparate = g.get("glBlendEquationSeparate")
@@ -528,30 +396,23 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpBufferData = g.get("glBufferData")
 	c.gpBufferSubData = g.get("glBufferSubData")
 	c.gpCheckFramebufferStatus = g.get("glCheckFramebufferStatus")
-	c.gpClear = g.get("glClear")
-	c.gpColorMask = g.get("glColorMask")
 	c.gpCompileShader = g.get("glCompileShader")
 	c.gpCreateProgram = g.get("glCreateProgram")
 	c.gpCreateShader = g.get("glCreateShader")
 	c.gpDeleteBuffers = g.get("glDeleteBuffers")
 	c.gpDeleteFramebuffers = g.get("glDeleteFramebuffers")
 	c.gpDeleteProgram = g.get("glDeleteProgram")
-	c.gpDeleteRenderbuffers = g.get("glDeleteRenderbuffers")
 	c.gpDeleteShader = g.get("glDeleteShader")
 	c.gpDeleteTextures = g.get("glDeleteTextures")
 	c.gpDeleteVertexArrays = g.get("glDeleteVertexArrays")
-	c.gpDisable = g.get("glDisable")
-	c.gpDisableVertexAttribArray = g.get("glDisableVertexAttribArray")
 	c.gpDrawElements = g.get("glDrawElements")
 	c.gpEnable = g.get("glEnable")
 	c.gpEnableVertexAttribArray = g.get("glEnableVertexAttribArray")
 	c.gpFinish = g.get("glFinish")
 	c.gpFlush = g.get("glFlush")
-	c.gpFramebufferRenderbuffer = g.get("glFramebufferRenderbuffer")
 	c.gpFramebufferTexture2D = g.get("glFramebufferTexture2D")
 	c.gpGenBuffers = g.get("glGenBuffers")
 	c.gpGenFramebuffers = g.get("glGenFramebuffers")
-	c.gpGenRenderbuffers = g.get("glGenRenderbuffers")
 	c.gpGenTextures = g.get("glGenTextures")
 	c.gpGenVertexArrays = g.get("glGenVertexArrays")
 	c.gpGetError = g.get("glGetError")
@@ -565,26 +426,12 @@ func (c *defaultContext) LoadFunctions() error {
 	c.gpLinkProgram = g.get("glLinkProgram")
 	c.gpPixelStorei = g.get("glPixelStorei")
 	c.gpReadPixels = g.get("glReadPixels")
-	c.gpRenderbufferStorage = g.get("glRenderbufferStorage")
 	c.gpScissor = g.get("glScissor")
 	c.gpShaderSource = g.get("glShaderSource")
-	c.gpStencilFunc = g.get("glStencilFunc")
-	c.gpStencilOpSeparate = g.get("glStencilOpSeparate")
 	c.gpTexImage2D = g.get("glTexImage2D")
 	c.gpTexParameteri = g.get("glTexParameteri")
 	c.gpTexSubImage2D = g.get("glTexSubImage2D")
-	c.gpUniform1fv = g.get("glUniform1fv")
 	c.gpUniform1i = g.get("glUniform1i")
-	c.gpUniform1iv = g.get("glUniform1iv")
-	c.gpUniform2fv = g.get("glUniform2fv")
-	c.gpUniform2iv = g.get("glUniform2iv")
-	c.gpUniform3fv = g.get("glUniform3fv")
-	c.gpUniform3iv = g.get("glUniform3iv")
-	c.gpUniform4fv = g.get("glUniform4fv")
-	c.gpUniform4iv = g.get("glUniform4iv")
-	c.gpUniformMatrix2fv = g.get("glUniformMatrix2fv")
-	c.gpUniformMatrix3fv = g.get("glUniformMatrix3fv")
-	c.gpUniformMatrix4fv = g.get("glUniformMatrix4fv")
 	c.gpUseProgram = g.get("glUseProgram")
 	c.gpVertexAttribPointer = g.get("glVertexAttribPointer")
 	c.gpViewport = g.get("glViewport")

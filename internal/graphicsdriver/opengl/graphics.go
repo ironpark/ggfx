@@ -47,12 +47,6 @@ type Graphics struct {
 	context    context
 	colorSpace color.ColorSpace
 
-	nextImageID graphicsdriver.ImageID
-	images      map[graphicsdriver.ImageID]*Image
-
-	nextShaderID graphicsdriver.ShaderID
-	shaders      map[graphicsdriver.ShaderID]*Shader
-
 	// drawCalled is true just after Draw is called. This holds true until WritePixels is called.
 	drawCalled bool
 
@@ -62,8 +56,6 @@ type Graphics struct {
 	// drawingContext is the context everything is drawn in. It is nil in a browser, where the one
 	// context is always current.
 	drawingContext interface{ MakeContextCurrent() error }
-
-	tmpUniforms []uint32
 
 	// activatedTextures is a set of activated textures.
 	// textureNative cannot be a map key unfortunately.
@@ -170,29 +162,7 @@ func (g *Graphics) makeContextCurrent() error {
 }
 
 func (g *Graphics) checkSize(width, height int) {
-	if width < 1 {
-		panic(fmt.Sprintf("opengl: width (%d) must be equal or more than %d", width, 1))
-	}
-	if height < 1 {
-		panic(fmt.Sprintf("opengl: height (%d) must be equal or more than %d", height, 1))
-	}
-	m := g.context.getMaxTextureSize()
-	if width > m {
-		panic(fmt.Sprintf("opengl: width (%d) must be less than or equal to %d", width, m))
-	}
-	if height > m {
-		panic(fmt.Sprintf("opengl: height (%d) must be less than or equal to %d", height, m))
-	}
-}
-
-func (g *Graphics) genNextImageID() graphicsdriver.ImageID {
-	g.nextImageID++
-	return g.nextImageID
-}
-
-func (g *Graphics) genNextShaderID() graphicsdriver.ShaderID {
-	g.nextShaderID++
-	return g.nextShaderID
+	graphicsdriver.CheckSize("opengl", width, height, g.context.getMaxTextureSize())
 }
 
 // SupportsPixelFormat reports PixelFormatA8 where a texture can have a swizzle: OpenGL 3.3+ and
@@ -212,7 +182,6 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 		return nil, fmt.Errorf("opengl: unsupported pixel format %s", format)
 	}
 	i := &Image{
-		id:       g.genNextImageID(),
 		graphics: g,
 		width:    width,
 		height:   height,
@@ -226,7 +195,6 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 		return nil, err
 	}
 	i.texture = t
-	g.addImage(i)
 	return i, nil
 }
 
@@ -284,17 +252,21 @@ func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error
 	} else {
 		g.checkSize(width, height)
 		i = &Image{
-			id:       g.genNextImageID(),
 			graphics: g,
 			width:    width,
 			height:   height,
 			screen:   true,
 		}
-		g.addImage(i)
 	}
 	i.surface = s
 	s.screen = i
 	return i, nil
+}
+
+// FlipsY reports whether the screen image is the default framebuffer, which it is without a
+// Presenter: clip-space Y = -1 is the window's bottom row there, not the image's top.
+func (s *Surface) FlipsY() bool {
+	return s.presenter == nil
 }
 
 // copyScreen copies the screen image to the default framebuffer. The surface's context must be
@@ -324,20 +296,6 @@ func (s *Surface) Dispose() {
 	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *Surface) bool { return t == s })
 }
 
-func (g *Graphics) addImage(img *Image) {
-	if g.images == nil {
-		g.images = map[graphicsdriver.ImageID]*Image{}
-	}
-	if _, ok := g.images[img.id]; ok {
-		panic(fmt.Sprintf("opengl: image ID %d was already registered", img.id))
-	}
-	g.images[img.id] = img
-}
-
-func (g *Graphics) removeImage(img *Image) {
-	delete(g.images, img.id)
-}
-
 func (g *Graphics) Initialize() error {
 	if err := g.makeContextCurrent(); err != nil {
 		return err
@@ -359,12 +317,12 @@ func (g *Graphics) SetVertices(vertices []float32, indices []uint32) error {
 	return nil
 }
 
-func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.ShaderSrcImageCount]graphicsdriver.ImageID, shaderID graphicsdriver.ShaderID, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
-	if shaderID == graphicsdriver.InvalidShaderID {
-		return fmt.Errorf("opengl: shader ID is invalid")
+func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+	if shader == nil {
+		return fmt.Errorf("opengl: shader is nil")
 	}
 
-	destination := g.images[dstID]
+	destination := dst.(*Image)
 	if destination.surface != nil {
 		destination.surface.drawn = true
 	}
@@ -376,30 +334,17 @@ func (g *Graphics) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.
 	}
 	g.context.blend(blend)
 
-	shader := g.shaders[shaderID]
-
-	// In OpenGL, the NDC's Y direction is upward, so flip the Y direction for the final framebuffer.
-	if destination.screen {
-		g.tmpUniforms = append(g.tmpUniforms[:0], uniforms...)
-		uniforms = g.tmpUniforms
-		const p = graphics.ProjectionMatrixUniformDwordIndex
-		// Invert the sign bits as float32 values.
-		uniforms[p+1] ^= 1 << 31
-		uniforms[p+5] ^= 1 << 31
-		uniforms[p+9] ^= 1 << 31
-		uniforms[p+13] ^= 1 << 31
-	}
-
+	// The projection is already flipped for the default framebuffer (see Surface.FlipsY).
 	var imgs [graphics.ShaderSrcImageCount]textureVariable
-	for i, srcID := range srcIDs {
-		if srcID == graphicsdriver.InvalidImageID {
+	for i, src := range srcs {
+		if src == nil {
 			continue
 		}
 		imgs[i].valid = true
-		imgs[i].native = g.images[srcID].texture
+		imgs[i].native = src.(*Image).texture
 	}
 
-	if err := g.useProgram(shader, uniforms, imgs); err != nil {
+	if err := g.useProgram(shader.(*Shader), uniforms, imgs); err != nil {
 		return err
 	}
 
@@ -431,25 +376,15 @@ func (g *Graphics) MaxImageSize() int {
 	return g.context.getMaxTextureSize()
 }
 
+// FlipsY reports false: clip-space Y = -1 is a texture's first row, which is the image's top.
+func (g *Graphics) FlipsY() bool {
+	return false
+}
+
 func (g *Graphics) NewShader(program *ggshader.Program) (graphicsdriver.Shader, error) {
-	s, err := newShader(g.genNextShaderID(), g, program)
+	s, err := newShader(g, program)
 	if err != nil {
 		return nil, err
 	}
-	g.addShader(s)
 	return s, nil
-}
-
-func (g *Graphics) addShader(shader *Shader) {
-	if g.shaders == nil {
-		g.shaders = map[graphicsdriver.ShaderID]*Shader{}
-	}
-	if _, ok := g.shaders[shader.id]; ok {
-		panic(fmt.Sprintf("opengl: shader ID %d was already registered", shader.id))
-	}
-	g.shaders[shader.id] = shader
-}
-
-func (g *Graphics) removeShader(shader *Shader) {
-	delete(g.shaders, shader.id)
 }

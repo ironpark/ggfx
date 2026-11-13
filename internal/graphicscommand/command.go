@@ -162,16 +162,27 @@ func (c *drawTrianglesCommand) Exec(commandQueue *commandQueue, graphicsDriver g
 		return nil
 	}
 
-	var imgs [graphics.ShaderSrcImageCount]graphicsdriver.ImageID
+	var imgs [graphics.ShaderSrcImageCount]graphicsdriver.Image
 	for i, src := range c.srcs {
-		if src == nil {
-			imgs[i] = graphicsdriver.InvalidImageID
-			continue
+		if src != nil {
+			imgs[i] = src.image
 		}
-		imgs[i] = src.image.ID()
 	}
 
-	return graphicsDriver.DrawTriangles(c.dst.image.ID(), imgs, c.shader.shader.ID(), c.dstRegions, indexOffset, c.blend, c.uniforms)
+	// The projection was enqueued with dst's top row at clip-space Y = -1, as merging needs it the
+	// same for every draw to dst. Flip it here, where the driver is at hand, for a render target
+	// whose rows go down from Y = 1. The terms are set, not negated, so a second run cannot undo it.
+	flipsY := graphicsDriver.FlipsY()
+	if c.dst.screen {
+		flipsY = c.dst.screenFlipsY
+	}
+	if flipsY {
+		p := c.uniforms[graphics.ProjectionMatrixUniformDwordIndex:]
+		p[5] |= 1 << 31 // -2/dh: an IEEE float is negated by its sign bit alone.
+		p[13] = math.Float32bits(1)
+	}
+
+	return graphicsDriver.DrawTriangles(c.dst.image, imgs, c.shader.shader, c.dstRegions, indexOffset, c.blend, c.uniforms)
 }
 
 func (c *drawTrianglesCommand) NeedsSync() bool {
@@ -204,28 +215,6 @@ func (c *drawTrianglesCommand) canMergeWithoutUniforms(dst *Image, srcs [graphic
 // with the drawTrianglesCommand c.
 func (c *drawTrianglesCommand) CanMergeWithDrawTrianglesCommand(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, blend graphicsdriver.Blend, shader *Shader, uniforms []uint32) bool {
 	return c.canMergeWithoutUniforms(dst, srcs, blend, shader) && slices.Equal(c.uniforms, uniforms)
-}
-
-var (
-	posInf32 = float32(math.Inf(1))
-	negInf32 = float32(math.Inf(-1))
-)
-
-func dstRegionFromVertices(vertices []float32) (minX, minY, maxX, maxY float32) {
-	minX = posInf32
-	minY = posInf32
-	maxX = negInf32
-	maxY = negInf32
-
-	for i := 0; i < len(vertices); i += graphics.VertexFloatCount {
-		x := vertices[i]
-		y := vertices[i+1]
-		minX = min(minX, x)
-		minY = min(minY, y)
-		maxX = max(maxX, x)
-		maxY = max(maxY, y)
-	}
-	return
 }
 
 // writePixelsCommand represents a command to replace pixels of an image.

@@ -17,8 +17,8 @@
 package opengl
 
 import (
-	"fmt"
 	"runtime"
+	"slices"
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -29,103 +29,18 @@ import (
 
 const floatSizeInBytes = 4
 
-// arrayBufferLayoutPart is a part of an array buffer layout.
-type arrayBufferLayoutPart struct {
-	// TODO: This struct should belong to a program and know it.
-	name string
-	num  int
-}
-
-// arrayBufferLayout is an array buffer layout.
-//
-// An array buffer in OpenGL is a buffer representing vertices and
-// is passed to a vertex shader.
-type arrayBufferLayout struct {
-	parts []arrayBufferLayoutPart
-	total int
-}
-
-func (a *arrayBufferLayout) names() []string {
-	ns := make([]string, len(a.parts))
-	for i, p := range a.parts {
-		ns[i] = p.name
-	}
-	return ns
-}
-
-// float32Count returns the total float32 count for one element of the array buffer.
-func (a *arrayBufferLayout) float32Count() int {
-	if a.total != 0 {
-		return a.total
-	}
-	var t int
-	for _, p := range a.parts {
-		t += p.num
-	}
-	a.total = t
-	return a.total
-}
-
-func (a *arrayBufferLayout) addPart(part arrayBufferLayoutPart) {
-	a.parts = append(a.parts, part)
-	a.total = 0
-}
-
-// enable starts using the array buffer.
-func (a *arrayBufferLayout) enable(context *context) {
-	for i := range a.parts {
+// enableVertexAttributes starts using the array buffer, laid out as
+// graphicsdriver.VertexAttributeSizes says: attribute i at location i, as the shaders'
+// layout(location) qualifiers say. GL_MAX_VERTEX_ATTRIBS is at least 16.
+func enableVertexAttributes(context *context) {
+	const stride = floatSizeInBytes * graphics.VertexFloatCount
+	for i := range graphicsdriver.VertexAttributeSizes {
 		context.ctx.EnableVertexAttribArray(uint32(i))
 	}
-	total := a.float32Count()
 	var offset int
-	for i, p := range a.parts {
-		context.ctx.VertexAttribPointer(uint32(i), int32(p.num), gl.FLOAT, false, int32(floatSizeInBytes*total), offset)
-		offset += floatSizeInBytes * p.num
-	}
-}
-
-// disable stops using the array buffer.
-func (a *arrayBufferLayout) disable(context *context) {
-	// TODO: Disabling should be done in reversed order?
-	for i := range a.parts {
-		context.ctx.DisableVertexAttribArray(uint32(i))
-	}
-}
-
-// theArrayBufferLayout is the array buffer layout for Ebitengine.
-var theArrayBufferLayout arrayBufferLayout
-
-func init() {
-	theArrayBufferLayout = arrayBufferLayout{
-		// Note that GL_MAX_VERTEX_ATTRIBS is at least 16.
-		parts: []arrayBufferLayoutPart{
-			{
-				name: "A0",
-				num:  2,
-			},
-			{
-				name: "A1",
-				num:  2,
-			},
-			{
-				name: "A2",
-				num:  4,
-			},
-		},
-	}
-	n := theArrayBufferLayout.float32Count()
-	diff := graphics.VertexFloatCount - n
-	if diff == 0 {
-		return
-	}
-	if diff%4 != 0 {
-		panic("opengl: unexpected attribute layout")
-	}
-	for i := range diff / 4 {
-		theArrayBufferLayout.addPart(arrayBufferLayoutPart{
-			name: fmt.Sprintf("A%d", i+3),
-			num:  4,
-		})
+	for i, n := range graphicsdriver.VertexAttributeSizes {
+		context.ctx.VertexAttribPointer(uint32(i), int32(n), gl.FLOAT, false, stride, offset)
+		offset += floatSizeInBytes * n
 	}
 }
 
@@ -153,6 +68,15 @@ type openGLState struct {
 	uniformBufferSizesInBytes [2]int
 	lastUniforms              [2][]uint32
 
+	// boundUniformBuffers are the buffers bound at the uniform blocks' binding points, and
+	// boundUniformBuffer the one bound at the generic GL_UNIFORM_BUFFER target, which
+	// BufferSubData writes. Zero is unknown.
+	boundUniformBuffers [2]buffer
+	boundUniformBuffer  buffer
+
+	// vertexShaders are the shared vertex shaders by texture count.
+	vertexShaders map[int]*vertexShader
+
 	lastProgram       program
 	lastActiveTexture int
 }
@@ -166,6 +90,10 @@ func (s *openGLState) reset(context *context) error {
 	s.lastProgram = 0
 	context.ctx.UseProgram(0)
 	s.resetLastUniforms()
+
+	// reset runs at the initialization, when there are no vertex shaders, and after a context loss,
+	// when their names are stale and must not be deleted.
+	s.vertexShaders = nil
 
 	if s.arrayBuffer != 0 {
 		context.ctx.DeleteBuffer(uint32(s.arrayBuffer))
@@ -216,7 +144,7 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 		s.arrayBufferSizeInBytes = c
 
 		// Reenable the array buffer layout explicitly after resetting the array buffer.
-		theArrayBufferLayout.enable(context)
+		enableVertexAttributes(context)
 	} else if orphanVertexBuffers {
 		context.ctx.BufferInit(gl.ARRAY_BUFFER, s.arrayBufferSizeInBytes, gl.DYNAMIC_DRAW)
 	}
@@ -245,10 +173,13 @@ func (s *openGLState) resetLastUniforms() {
 	for i := range s.lastUniforms {
 		s.lastUniforms[i] = s.lastUniforms[i][:0]
 	}
+	s.boundUniformBuffers = [2]buffer{}
+	s.boundUniformBuffer = 0
 }
 
 // setUniforms uploads the uniform blocks: the internal block, then the user's block, both laid
-// out as the shader expects. A block that has not changed since the last draw is not uploaded.
+// out as the shader expects. A block that has not changed since the last draw is not uploaded, nor
+// bound again: the binding points are context state, shared by every program.
 func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
 	blocks := [2][]uint32{uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:]}
 	bindings := [2]uint32{internalUniformBlockBinding, userUniformBlockBinding}
@@ -262,31 +193,32 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
 				context.ctx.DeleteBuffer(uint32(s.uniformBuffers[i]))
 			}
 			newSize := recent.NextPowerOf2(size)
+			// newUniformBuffer binds the buffer at the generic target. A deleted buffer's name can be
+			// reused, so its binding point is bound again.
 			s.uniformBuffers[i] = context.newUniformBuffer(newSize)
 			s.uniformBufferSizesInBytes[i] = newSize
 			s.lastUniforms[i] = s.lastUniforms[i][:0]
+			s.boundUniformBuffers[i] = 0
+			s.boundUniformBuffer = s.uniformBuffers[i]
 		}
-		context.ctx.BindBufferBase(gl.UNIFORM_BUFFER, bindings[i], uint32(s.uniformBuffers[i]))
-		if areSameUint32Array(s.lastUniforms[i], block) {
+		b := s.uniformBuffers[i]
+		if s.boundUniformBuffers[i] != b {
+			// BindBufferBase binds the generic target too.
+			context.ctx.BindBufferBase(gl.UNIFORM_BUFFER, bindings[i], uint32(b))
+			s.boundUniformBuffers[i] = b
+			s.boundUniformBuffer = b
+		}
+		if slices.Equal(s.lastUniforms[i], block) {
 			continue
+		}
+		if s.boundUniformBuffer != b {
+			context.ctx.BindBuffer(gl.UNIFORM_BUFFER, uint32(b))
+			s.boundUniformBuffer = b
 		}
 		bs := unsafe.Slice((*byte)(unsafe.Pointer(&block[0])), size)
 		context.ctx.BufferSubData(gl.UNIFORM_BUFFER, 0, bs)
 		s.lastUniforms[i] = append(s.lastUniforms[i][:0], block...)
 	}
-}
-
-// areSameUint32Array returns a boolean indicating if a and b are deeply equal.
-func areSameUint32Array(a, b []uint32) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 type textureVariable struct {
@@ -305,6 +237,10 @@ func (g *Graphics) deleteProgram(p program) {
 
 // useProgram uses the program (programTexture).
 func (g *Graphics) useProgram(s *Shader, uniforms []uint32, textures [graphics.ShaderSrcImageCount]textureVariable) error {
+	if err := s.link(); err != nil {
+		return err
+	}
+
 	program := s.p
 	if g.state.lastProgram != program {
 		g.context.ctx.UseProgram(uint32(program))
@@ -326,14 +262,13 @@ loop:
 
 		// If the texture is already bound, set the texture variable to point to the texture.
 		// Rebinding the same texture seems problematic (#1193).
-		name := s.textureNames[i]
-		if name == "" {
+		if s.samplerLocations[i] < 0 {
 			continue
 		}
 
 		for _, at := range g.activatedTextures {
 			if t.native == at.textureNative {
-				g.context.uniformInt(program, name, at.index)
+				s.setSamplerUnit(&g.context, i, at.index)
 				continue loop
 			}
 		}
@@ -342,7 +277,7 @@ loop:
 			textureNative: t.native,
 			index:         idx,
 		})
-		g.context.uniformInt(program, name, idx)
+		s.setSamplerUnit(&g.context, i, idx)
 		if g.state.lastActiveTexture != idx {
 			g.context.ctx.ActiveTexture(uint32(gl.TEXTURE0 + idx))
 			g.state.lastActiveTexture = idx
@@ -361,4 +296,14 @@ loop:
 	g.activatedTextures = g.activatedTextures[:0]
 
 	return nil
+}
+
+// setSamplerUnit points the sampler uniform of the source texture i at the texture unit. The
+// program must be in use.
+func (s *Shader) setSamplerUnit(context *context, i int, unit int) {
+	if s.samplerUnits[i] == int32(unit) {
+		return
+	}
+	context.ctx.Uniform1i(s.samplerLocations[i], int32(unit))
+	s.samplerUnits[i] = int32(unit)
 }

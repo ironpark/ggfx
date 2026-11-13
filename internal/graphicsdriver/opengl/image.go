@@ -25,7 +25,6 @@ import (
 )
 
 type Image struct {
-	id          graphicsdriver.ImageID
 	graphics    *Graphics
 	texture     textureNative
 	framebuffer *framebuffer
@@ -51,10 +50,6 @@ type framebuffer struct {
 	viewportHeight int
 }
 
-func (i *Image) ID() graphicsdriver.ImageID {
-	return i.id
-}
-
 func (i *Image) Dispose() {
 	if i.framebuffer != nil {
 		i.graphics.context.deleteFramebuffer(i.framebuffer.native)
@@ -65,8 +60,6 @@ func (i *Image) Dispose() {
 	if i.surface != nil && i.surface.screen == i {
 		i.surface.screen = nil
 	}
-
-	i.graphics.removeImage(i)
 }
 
 func (i *Image) setViewport() error {

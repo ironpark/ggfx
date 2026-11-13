@@ -40,13 +40,14 @@ type Image struct {
 	// readable reports whether the screen image can be a rendering source (see ScreenReadable).
 	readable bool
 
+	// screenFlipsY reports whether a draw to the screen image takes the projection with Y flipped
+	// (see graphicsdriver.Surface.FlipsY).
+	screenFlipsY bool
+
 	// attribute is used only for logs.
 	attribute string
 
 	// id is an identifier for the image. This is used only when dumping the information.
-	//
-	// This is duplicated with graphicsdriver.Image's ID, but this id is still necessary because this image might not
-	// have its graphicsdriver.Image.
 	id int
 
 	// bufferedWritePixelsArgs are the writes not enqueued yet, and bufferedBounds the union of their
@@ -93,6 +94,9 @@ func newImage(width, height int, format graphicsdriver.PixelFormat, surface grap
 		readable:  surface != nil && ScreenReadable(surface),
 		id:        genNextImageID(),
 		attribute: attribute,
+	}
+	if surface != nil {
+		i.screenFlipsY = surface.FlipsY()
 	}
 	c := &newImageCommand{
 		result:    i,

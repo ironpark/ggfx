@@ -32,19 +32,9 @@ import (
 var inputElementDescsForDX11 []_D3D11_INPUT_ELEMENT_DESC
 
 func init() {
-	// The semantics follow naga's HLSL output: attribute i is LOC with semantic index i.
-	loc := &([]byte("LOC\000"))[0]
-	formats := []_DXGI_FORMAT{_DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32_FLOAT, _DXGI_FORMAT_R32G32B32A32_FLOAT}
-	diff := graphics.VertexFloatCount - 8
-	if diff%4 != 0 {
-		panic("directx: unexpected attribute layout")
-	}
-	for range diff / 4 {
-		formats = append(formats, _DXGI_FORMAT_R32G32B32A32_FLOAT)
-	}
-	for i, f := range formats {
+	for i, f := range vertexAttributeFormats() {
 		inputElementDescsForDX11 = append(inputElementDescsForDX11, _D3D11_INPUT_ELEMENT_DESC{
-			SemanticName:         loc,
+			SemanticName:         vertexAttributeSemanticName,
 			SemanticIndex:        uint32(i),
 			Format:               f,
 			InputSlot:            0,
@@ -52,64 +42,6 @@ func init() {
 			InputSlotClass:       _D3D11_INPUT_PER_VERTEX_DATA,
 			InstanceDataStepRate: 0,
 		})
-	}
-}
-
-func blendFactorToBlend11(f graphicsdriver.BlendFactor, alpha bool) _D3D11_BLEND {
-	switch f {
-	case graphicsdriver.BlendFactorZero:
-		return _D3D11_BLEND_ZERO
-	case graphicsdriver.BlendFactorOne:
-		return _D3D11_BLEND_ONE
-	case graphicsdriver.BlendFactorSourceColor:
-		if alpha {
-			return _D3D11_BLEND_SRC_ALPHA
-		}
-		return _D3D11_BLEND_SRC_COLOR
-	case graphicsdriver.BlendFactorOneMinusSourceColor:
-		if alpha {
-			return _D3D11_BLEND_INV_SRC_ALPHA
-		}
-		return _D3D11_BLEND_INV_SRC_COLOR
-	case graphicsdriver.BlendFactorSourceAlpha:
-		return _D3D11_BLEND_SRC_ALPHA
-	case graphicsdriver.BlendFactorOneMinusSourceAlpha:
-		return _D3D11_BLEND_INV_SRC_ALPHA
-	case graphicsdriver.BlendFactorDestinationColor:
-		if alpha {
-			return _D3D11_BLEND_DEST_ALPHA
-		}
-		return _D3D11_BLEND_DEST_COLOR
-	case graphicsdriver.BlendFactorOneMinusDestinationColor:
-		if alpha {
-			return _D3D11_BLEND_INV_DEST_ALPHA
-		}
-		return _D3D11_BLEND_INV_DEST_COLOR
-	case graphicsdriver.BlendFactorDestinationAlpha:
-		return _D3D11_BLEND_DEST_ALPHA
-	case graphicsdriver.BlendFactorOneMinusDestinationAlpha:
-		return _D3D11_BLEND_INV_DEST_ALPHA
-	case graphicsdriver.BlendFactorSourceAlphaSaturated:
-		return _D3D11_BLEND_SRC_ALPHA_SAT
-	default:
-		panic(fmt.Sprintf("directx: invalid blend factor: %d", f))
-	}
-}
-
-func blendOperationToBlendOp11(o graphicsdriver.BlendOperation) _D3D11_BLEND_OP {
-	switch o {
-	case graphicsdriver.BlendOperationAdd:
-		return _D3D11_BLEND_OP_ADD
-	case graphicsdriver.BlendOperationSubtract:
-		return _D3D11_BLEND_OP_SUBTRACT
-	case graphicsdriver.BlendOperationReverseSubtract:
-		return _D3D11_BLEND_OP_REV_SUBTRACT
-	case graphicsdriver.BlendOperationMin:
-		return _D3D11_BLEND_OP_MIN
-	case graphicsdriver.BlendOperationMax:
-		return _D3D11_BLEND_OP_MAX
-	default:
-		panic(fmt.Sprintf("directx: invalid blend operation: %d", o))
 	}
 }
 
@@ -121,13 +53,8 @@ type blendStateKey struct {
 type graphics11 struct {
 	graphicsInfra *graphicsInfra
 
-	featureLevel _D3D_FEATURE_LEVEL
-
 	device        *_ID3D11Device
 	deviceContext *_ID3D11DeviceContext
-
-	images      map[graphicsdriver.ImageID]*image11
-	nextImageID graphicsdriver.ImageID
 
 	// surfaces are the surfaces that have a swap chain, in creation order.
 	surfaces []*surface11
@@ -135,9 +62,16 @@ type graphics11 struct {
 	// tmpSwapChains is a temporary slice of the swap chains to present.
 	tmpSwapChains []*swapChain
 
-	shaders      map[graphicsdriver.ShaderID]*shader11
-	tmpUniforms  []uint32
-	nextShaderID graphicsdriver.ShaderID
+	// vertexStages are the vertex shaders and input layouts the shaders share, by texture count.
+	vertexStages map[int]*vertexStage11
+
+	// internalConstantBuffer is the constant buffer for the internal uniform block, which every
+	// shader declares the same. internalUniforms is what it holds, or empty when unknown.
+	internalConstantBuffer *_ID3D11Buffer
+	internalUniforms       []uint32
+
+	// state is the pipeline state the last draw left bound.
+	state drawState11
 
 	vertexBuffer            *_ID3D11Buffer
 	vertexBufferSizeInBytes uint32
@@ -152,6 +86,27 @@ type graphics11 struct {
 
 	rasterizerState *_ID3D11RasterizerState
 	blendStates     map[blendStateKey]*_ID3D11BlendState
+}
+
+// drawState11 is the pipeline state the last draw bound, so that a draw sets only what changed, as
+// the Metal driver's rceState does. The device context holds a reference to each bound object, so a
+// pointer here cannot be reused by a new object while it is bound. The zero value means nothing is
+// known; a path that binds or unbinds state behind DrawTriangles' back must reset it.
+type drawState11 struct {
+	bound bool
+
+	viewportWidth  int
+	viewportHeight int
+	rtv            *_ID3D11RenderTargetView
+	srvs           [graphics.ShaderSrcImageCount]*_ID3D11ShaderResourceView
+
+	vertexShader    *_ID3D11VertexShader
+	inputLayout     *_ID3D11InputLayout
+	pixelShader     *_ID3D11PixelShader
+	constantBuffers [2]*_ID3D11Buffer
+	blendState      *_ID3D11BlendState
+	scissor         _D3D11_RECT
+	scissorValid    bool
 }
 
 // surface11 is the swap chain on one window.
@@ -189,7 +144,7 @@ func newGraphics11(useWARP bool, useDebugLayer bool) (gr11 *graphics11, ferr err
 
 	// Apparently, adapter must be nil if the driver type is not unknown. This is not documented explicitly.
 	// https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-d3d11createdevice
-	d, fl, ctx, err := _D3D11CreateDevice(nil, driverType, 0, uint32(flags), featureLevels, true, true)
+	d, _, ctx, err := _D3D11CreateDevice(nil, driverType, 0, uint32(flags), featureLevels, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +155,6 @@ func newGraphics11(useWARP bool, useDebugLayer bool) (gr11 *graphics11, ferr err
 			g.device = nil
 		}
 	}()
-	g.featureLevel = fl
 	g.deviceContext = (*_ID3D11DeviceContext)(ctx)
 	defer func() {
 		if ferr != nil {
@@ -311,6 +265,8 @@ func (g *graphics11) End(mode graphicsdriver.FlushMode) error {
 		s.drawn = false
 	}
 	err := g.graphicsInfra.present(swapChains)
+	// A flip-model present unbinds the back buffer from the pipeline.
+	g.state = drawState11{}
 	clear(swapChains)
 	g.tmpSwapChains = swapChains[:0]
 	if err != nil {
@@ -340,14 +296,17 @@ func (s *surface11) NewScreenImage(width, height int) (graphicsdriver.Image, err
 	return s.graphics.newScreenImage(s, width, height)
 }
 
+// FlipsY reports true: a back buffer's rows go down from clip-space Y = 1.
+func (s *surface11) FlipsY() bool { return true }
+
 // Dispose releases the swap chain. Dispose is called on the rendering thread.
 func (s *surface11) Dispose() {
 	g := s.graphics
 	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *surface11) bool { return t == s })
 
 	if s.screenImage != nil {
-		// Release the references to the swap chain's buffer. The image itself stays registered
-		// until its owner disposes it.
+		// Release the references to the swap chain's buffer. The image itself stays until its owner
+		// disposes it.
 		s.screenImage.disposeBuffers()
 		s.screenImage.surface = nil
 		s.screenImage = nil
@@ -356,6 +315,7 @@ func (s *surface11) Dispose() {
 		// Unbind the render target that might still be the swap chain's buffer. Direct3D 11 destroys
 		// a swap chain lazily, so flush the device context to destroy it now.
 		g.deviceContext.OMSetRenderTargets([]*_ID3D11RenderTargetView{nil}, nil)
+		g.state = drawState11{}
 		s.swapChain.release()
 		s.swapChain = nil
 		g.deviceContext.Flush()
@@ -464,12 +424,10 @@ func (g *graphics11) NewImage(width, height int, format graphicsdriver.PixelForm
 
 	i := &image11{
 		graphics: g,
-		id:       g.genNextImageID(),
 		width:    width,
 		height:   height,
 		texture:  t,
 	}
-	g.addImage(i)
 	return i, nil
 }
 
@@ -495,6 +453,7 @@ func (g *graphics11) newScreenImage(s *surface11, width, height int) (graphicsdr
 		//
 		// The render target might still be the old screen image's buffer.
 		g.deviceContext.OMSetRenderTargets([]*_ID3D11RenderTargetView{nil}, nil)
+		g.state = drawState11{}
 		if err := s.swapChain.resize(width, height); err != nil {
 			return nil, err
 		}
@@ -507,30 +466,14 @@ func (g *graphics11) newScreenImage(s *surface11, width, height int) (graphicsdr
 
 	i := &image11{
 		graphics: g,
-		id:       g.genNextImageID(),
 		width:    width,
 		height:   height,
 		screen:   true,
 		surface:  s,
 		texture:  (*_ID3D11Texture2D)(t),
 	}
-	g.addImage(i)
 	s.screenImage = i
 	return i, nil
-}
-
-func (g *graphics11) addImage(img *image11) {
-	if g.images == nil {
-		g.images = map[graphicsdriver.ImageID]*image11{}
-	}
-	if _, ok := g.images[img.id]; ok {
-		panic(fmt.Sprintf("directx: image ID %d was already registered", img.id))
-	}
-	g.images[img.id] = img
-}
-
-func (g *graphics11) removeImage(image *image11) {
-	delete(g.images, image.id)
 }
 
 func (g *graphics11) NeedsClearingScreen() bool {
@@ -538,123 +481,181 @@ func (g *graphics11) NeedsClearingScreen() bool {
 	return true
 }
 
+// MaxImageSize returns D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION: newGraphics11 requests feature level
+// 11_0 only, so the device has it.
 func (g *graphics11) MaxImageSize() int {
-	switch g.featureLevel {
-	case _D3D_FEATURE_LEVEL_10_0:
-		return 8192
-	case _D3D_FEATURE_LEVEL_10_1:
-		return 8192
-	case _D3D_FEATURE_LEVEL_11_0:
-		return 16384
-	default:
-		panic(fmt.Sprintf("directx: invalid feature level: 0x%x", g.featureLevel))
-	}
+	return 16384
 }
 
-func (g *graphics11) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
-	vsh, psh, err := compileShader(program)
+func (g *graphics11) NewShader(program *shader.Program) (_ graphicsdriver.Shader, ferr error) {
+	psh, err := compileShader(program)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if ferr != nil {
+			psh.Release()
+		}
+	}()
+	vs, err := g.vertexStage(program.TextureCount)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &shader11{
 		graphics:               g,
-		id:                     g.genNextShaderID(),
 		userConstantBufferSize: userConstantBufferSize(program),
-		vertexShaderBlob:       vsh,
 		pixelShaderBlob:        psh,
+		vertexStage:            vs,
 	}
-	g.addShader(s)
 	return s, nil
 }
 
-func (g *graphics11) addShader(s *shader11) {
-	if g.shaders == nil {
-		g.shaders = map[graphicsdriver.ShaderID]*shader11{}
-	}
-	if _, ok := g.shaders[s.id]; ok {
-		panic(fmt.Sprintf("directx: shader ID %d was already registered", s.id))
-	}
-	g.shaders[s.id] = s
+// FlipsY reports true: a texture's rows go down from clip-space Y = 1.
+func (g *graphics11) FlipsY() bool {
+	return true
 }
 
-func (g *graphics11) removeShader(s *shader11) {
-	s.disposeImpl()
-	delete(g.shaders, s.id)
-}
-
-func (g *graphics11) DrawTriangles(dstID graphicsdriver.ImageID, srcIDs [graphics.ShaderSrcImageCount]graphicsdriver.ImageID, shaderID graphicsdriver.ShaderID, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
-	// Remove bound textures first. This is needed to avoid warnings on the debugger.
-	g.deviceContext.OMSetRenderTargets([]*_ID3D11RenderTargetView{nil}, nil)
-	var srvs [graphics.ShaderSrcImageCount]*_ID3D11ShaderResourceView
-	g.deviceContext.PSSetShaderResources(0, srvs[:])
-
-	dst := g.images[dstID]
+func (g *graphics11) DrawTriangles(dstImage graphicsdriver.Image, srcImages [graphics.ShaderSrcImageCount]graphicsdriver.Image, shaderImpl graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+	dst := dstImage.(*image11)
 	if dst.surface != nil {
 		dst.surface.drawn = true
 	}
 	var srcs [graphics.ShaderSrcImageCount]*image11
-	for i, id := range srcIDs {
-		img := g.images[id]
-		if img == nil {
+	var srvs [graphics.ShaderSrcImageCount]*_ID3D11ShaderResourceView
+	for i, src := range srcImages {
+		if src == nil {
 			continue
 		}
+		img := src.(*image11)
 		srcs[i] = img
+		srv, err := img.getShaderResourceView()
+		if err != nil {
+			return err
+		}
+		srvs[i] = srv
 	}
-
-	w, h := dst.internalSize()
-	g.deviceContext.RSSetViewports([]_D3D11_VIEWPORT{
-		{
-			TopLeftX: 0,
-			TopLeftY: 0,
-			Width:    float32(w),
-			Height:   float32(h),
-			MinDepth: 0,
-			MaxDepth: 1,
-		},
-	})
-
-	if err := dst.setAsRenderTarget(); err != nil {
+	rtv, err := dst.ensureRenderTargetView()
+	if err != nil {
 		return err
 	}
 
-	// Set the shader parameters.
-	shader := g.shaders[shaderID]
-	g.tmpUniforms = flipProjectionY(g.tmpUniforms, uniforms)
-	if err := shader.use(g.tmpUniforms, srcs); err != nil {
+	shader := shaderImpl.(*shader11)
+	ps, err := shader.ensurePixelShader()
+	if err != nil {
 		return err
 	}
-
+	userCB, err := shader.ensureUserConstantBuffer()
+	if err != nil {
+		return err
+	}
+	if g.internalConstantBuffer == nil {
+		cb, err := g.newConstantBuffer(internalConstantBufferSize)
+		if err != nil {
+			return err
+		}
+		g.internalConstantBuffer = cb
+	}
 	bs, err := g.blendState(blend)
 	if err != nil {
 		return err
 	}
-	g.deviceContext.OMSetBlendState(bs, nil, 0xffffffff)
 
-	for _, dstRegion := range dstRegions {
-		g.deviceContext.RSSetScissorRects([]_D3D11_RECT{
+	// Bind only what differs from the last draw. Nothing below fails, so st matches the device
+	// context once it is done.
+	st := &g.state
+	known := st.bound
+	ctx := g.deviceContext
+
+	if !known || st.rtv != rtv {
+		// Direct3D 11 unbinds a shader input whose resource becomes the render target. Unbind the
+		// inputs first when dst is one of them, so that the runtime changes nothing behind st and the
+		// debug layer does not warn. With nothing known, unbind them as well.
+		if !known || (dst.shaderResourceView != nil && slices.Contains(st.srvs[:], dst.shaderResourceView)) {
+			st.srvs = [graphics.ShaderSrcImageCount]*_ID3D11ShaderResourceView{}
+			ctx.PSSetShaderResources(0, st.srvs[:])
+		}
+		ctx.OMSetRenderTargets([]*_ID3D11RenderTargetView{rtv}, nil)
+		st.rtv = rtv
+	}
+	if !known || st.srvs != srvs {
+		ctx.PSSetShaderResources(0, srvs[:])
+		st.srvs = srvs
+	}
+
+	if w, h := dst.internalSize(); !known || st.viewportWidth != w || st.viewportHeight != h {
+		ctx.RSSetViewports([]_D3D11_VIEWPORT{
 			{
-				left:   int32(dstRegion.Region.Min.X),
-				top:    int32(dstRegion.Region.Min.Y),
-				right:  int32(dstRegion.Region.Max.X),
-				bottom: int32(dstRegion.Region.Max.Y),
+				TopLeftX: 0,
+				TopLeftY: 0,
+				Width:    float32(w),
+				Height:   float32(h),
+				MinDepth: 0,
+				MaxDepth: 1,
 			},
 		})
+		st.viewportWidth, st.viewportHeight = w, h
+	}
+
+	if vs := shader.vertexStage; !known || st.vertexShader != vs.vertexShader || st.inputLayout != vs.inputLayout {
+		ctx.VSSetShader(vs.vertexShader, nil)
+		ctx.IASetInputLayout(vs.inputLayout)
+		st.vertexShader = vs.vertexShader
+		st.inputLayout = vs.inputLayout
+	}
+	if !known || st.pixelShader != ps {
+		ctx.PSSetShader(ps, nil)
+		st.pixelShader = ps
+	}
+
+	// A shader without a user uniform block leaves slot 1 as it was; it does not read it.
+	if cbs := [2]*_ID3D11Buffer{g.internalConstantBuffer, userCB}; !known || st.constantBuffers != cbs {
+		n := 1
+		if userCB != nil {
+			n = 2
+		}
+		ctx.VSSetConstantBuffers(0, cbs[:n])
+		ctx.PSSetConstantBuffers(0, cbs[:n])
+		st.constantBuffers = cbs
+	}
+
+	if !known || st.blendState != bs {
+		ctx.OMSetBlendState(bs, nil, 0xffffffff)
+		st.blendState = bs
+	}
+
+	// When a source is the destination itself, the runtime leaves that input unbound, which st does
+	// not record. Forget st then.
+	st.bound = !slices.Contains(srcs[:], dst)
+
+	// The internal uniform block comes first, then the user's block. Both are already laid out as
+	// the shader expects, the projection flipped for Direct3D's render targets (see FlipsY).
+	if err := g.uploadConstantBuffer(g.internalConstantBuffer, uniforms[:graphics.PreservedUniformDwordCount], &g.internalUniforms); err != nil {
+		return err
+	}
+	if userCB != nil {
+		if err := g.uploadConstantBuffer(userCB, uniforms[graphics.PreservedUniformDwordCount:], &shader.userUniforms); err != nil {
+			return err
+		}
+	}
+
+	for _, dstRegion := range dstRegions {
+		r := _D3D11_RECT{
+			left:   int32(dstRegion.Region.Min.X),
+			top:    int32(dstRegion.Region.Min.Y),
+			right:  int32(dstRegion.Region.Max.X),
+			bottom: int32(dstRegion.Region.Max.Y),
+		}
+		if !st.scissorValid || st.scissor != r {
+			ctx.RSSetScissorRects([]_D3D11_RECT{r})
+			st.scissor = r
+			st.scissorValid = true
+		}
 		g.deviceContext.DrawIndexed(uint32(dstRegion.IndexCount), uint32(indexOffset), 0)
 		indexOffset += dstRegion.IndexCount
 	}
 
 	return nil
-}
-
-func (g *graphics11) genNextImageID() graphicsdriver.ImageID {
-	g.nextImageID++
-	return g.nextImageID
-}
-
-func (g *graphics11) genNextShaderID() graphicsdriver.ShaderID {
-	g.nextShaderID++
-	return g.nextShaderID
 }
 
 func (g *graphics11) blendState(blend graphicsdriver.Blend) (*_ID3D11BlendState, error) {
@@ -673,12 +674,12 @@ func (g *graphics11) blendState(blend graphicsdriver.Blend) (*_ID3D11BlendState,
 		RenderTarget: [8]_D3D11_RENDER_TARGET_BLEND_DESC{
 			{
 				BlendEnable:           1,
-				SrcBlend:              blendFactorToBlend11(blend.BlendFactorSourceRGB, false),
-				DestBlend:             blendFactorToBlend11(blend.BlendFactorDestinationRGB, false),
-				BlendOp:               blendOperationToBlendOp11(blend.BlendOperationRGB),
-				SrcBlendAlpha:         blendFactorToBlend11(blend.BlendFactorSourceAlpha, true),
-				DestBlendAlpha:        blendFactorToBlend11(blend.BlendFactorDestinationAlpha, true),
-				BlendOpAlpha:          blendOperationToBlendOp11(blend.BlendOperationAlpha),
+				SrcBlend:              blendFactorToD3D[_D3D11_BLEND](blend.BlendFactorSourceRGB, false),
+				DestBlend:             blendFactorToD3D[_D3D11_BLEND](blend.BlendFactorDestinationRGB, false),
+				BlendOp:               blendOperationToD3D[_D3D11_BLEND_OP](blend.BlendOperationRGB),
+				SrcBlendAlpha:         blendFactorToD3D[_D3D11_BLEND](blend.BlendFactorSourceAlpha, true),
+				DestBlendAlpha:        blendFactorToD3D[_D3D11_BLEND](blend.BlendFactorDestinationAlpha, true),
+				BlendOpAlpha:          blendOperationToD3D[_D3D11_BLEND_OP](blend.BlendOperationAlpha),
 				RenderTargetWriteMask: writeMask,
 			},
 		},
