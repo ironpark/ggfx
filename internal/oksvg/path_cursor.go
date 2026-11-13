@@ -9,9 +9,9 @@ import (
 	"math"
 	"unicode"
 
-	"github.com/srwiley/rasterx"
-
 	"golang.org/x/image/math/fixed"
+
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // pathCursor is used to parse SVG format path strings into a rasterx Path

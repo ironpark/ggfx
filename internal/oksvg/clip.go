@@ -7,7 +7,7 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/srwiley/rasterx"
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // A shape drawn through a clipPath shows only where the clip's shapes are;

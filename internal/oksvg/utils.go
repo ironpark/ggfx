@@ -10,8 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/srwiley/rasterx"
 	"golang.org/x/image/colornames"
+
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // unitSuffixes are suffixes sometimes applied to the width and height attributes

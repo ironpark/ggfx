@@ -21,9 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/srwiley/rasterx"
-
 	"github.com/ironpark/ggfx/internal/oksvg"
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // Issue #2649

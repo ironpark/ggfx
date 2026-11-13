@@ -7,7 +7,7 @@ package oksvg
 import (
 	"image/color"
 
-	"github.com/srwiley/rasterx"
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // PathStyle holds the state of the SVG style.

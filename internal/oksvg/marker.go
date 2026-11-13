@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/srwiley/rasterx"
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // A shape that names markers, as a diagram's edges name the arrowheads

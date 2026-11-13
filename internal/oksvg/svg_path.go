@@ -8,8 +8,9 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/srwiley/rasterx"
 	"golang.org/x/image/math/fixed"
+
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // SvgPath binds a style to a path.

@@ -194,7 +194,8 @@ again here if it applies. What follows from that so far:
 - `image.go` is split by what its parts do: `image_draw.go`,
   `image_pixels.go`, `image_sub.go` and `image_usage.go`.
 
-The oksvg fork is at `internal/oksvg`, for the `svg` package. `text/v2` moved to ggui as
+The oksvg fork is at `internal/oksvg`, for the `svg` package. It rasterizes with `internal/rasterx`,
+a fork of srwiley/rasterx, which is unmaintained like oksvg. `text/v2` moved to ggui as
 `internal/text`, with a copy of the oksvg fork. The windowing and the run loop are ggwd's.
 
 ## Generic draw methods and uniform blocks

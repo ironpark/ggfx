@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/srwiley/rasterx"
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // captured is an element whose content is not drawn where it is, but

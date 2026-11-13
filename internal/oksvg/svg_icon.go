@@ -7,7 +7,7 @@ package oksvg
 import (
 	"image"
 
-	"github.com/srwiley/rasterx"
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // SvgIcon holds data from parsed SVGs.

@@ -13,8 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/srwiley/rasterx"
 	"golang.org/x/image/colornames"
+
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // ReadIconStream reads the Icon from the given io.Reader.

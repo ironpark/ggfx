@@ -9,8 +9,9 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/srwiley/rasterx"
 	"golang.org/x/image/math/fixed"
+
+	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
 // svgFunc defines function interface to use as drawing implementation.
