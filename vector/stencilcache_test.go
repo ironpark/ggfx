@@ -303,19 +303,26 @@ func TestStencilsExpireWithoutFills(t *testing.T) {
 		return pix
 	}
 
+	idle := func() {
+		for range 3 * vector.AtlasRecentWindow {
+			if err := vector.NextFrame(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if n, b := len(vector.StencilCachePageSizes()), vector.StencilBytes(); n != 0 || b != 0 {
+			t.Fatalf("after idle frames: got %d cache pages and %d stencil bytes, want none", n, b)
+		}
+	}
+
+	// A path's pixels depend on where its stencil buffers are, so both renders start from no
+	// stencils at all: what earlier tests left on the atlas would place the first one elsewhere.
 	vector.ResetStencilCache()
+	idle()
 	want := render()
 	if len(vector.StencilCachePageSizes()) == 0 || vector.StencilBytes() == 0 {
 		t.Fatalf("after filling: got %d cache pages and %d stencil bytes, want some", len(vector.StencilCachePageSizes()), vector.StencilBytes())
 	}
-	for range 3 * vector.AtlasRecentWindow {
-		if err := vector.NextFrame(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n, b := len(vector.StencilCachePageSizes()), vector.StencilBytes(); n != 0 || b != 0 {
-		t.Fatalf("after idle frames: got %d cache pages and %d stencil bytes, want none", n, b)
-	}
+	idle()
 	if diffs := diffPixels(render(), want, s.w, 5); len(diffs) > 0 {
 		t.Errorf("filling after the stencils expired renders different pixels: %v", diffs)
 	}
