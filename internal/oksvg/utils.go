@@ -145,8 +145,8 @@ func getColor(clr paint) color.Color {
 	return colornames.Black
 }
 
-func localizeGradIfStopClrNil(g *rasterx.Gradient, defaultColor paint) (grad rasterx.Gradient) {
-	grad = *g
+func localizeGradIfStopClrNil(g *rasterx.Gradient, defaultColor paint) *rasterx.Gradient {
+	grad := *g
 	for _, s := range grad.Stops {
 		if s.StopColor == nil { // This means we need copy the gradient's Stop slice
 			// and fill in the default color
@@ -165,5 +165,5 @@ func localizeGradIfStopClrNil(g *rasterx.Gradient, defaultColor paint) (grad ras
 			break // Only need to do this once
 		}
 	}
-	return
+	return &grad
 }

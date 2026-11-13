@@ -16,7 +16,7 @@ type PathStyle struct {
 	LineWidth, DashOffset, MiterLimit float64
 	Dash                              []float64
 	UseNonZeroWinding                 bool
-	evenOddClip                       bool // clip-rule: evenodd, for a clipPath's shapes
+	nonZeroClip                       bool // clip-rule: nonzero, for a clipPath's shapes
 	fillerColor, linerColor           paint
 	LineGap                           rasterx.GapFunc
 	LeadLineCap                       rasterx.CapFunc // This is used if different than LineCap
@@ -47,6 +47,6 @@ type styleAttribute = map[string]string
 // full opacity, no stroke, ButtCap line end and Bevel line connect.
 var defaultStyle = PathStyle{
 	FillOpacity: 1.0, LineOpacity: 1.0, LineWidth: 2.0, MiterLimit: 4.0,
-	UseNonZeroWinding: true, fillerColor: paint{color: color.NRGBA{0x00, 0x00, 0x00, 0xff}},
+	UseNonZeroWinding: true, nonZeroClip: true, fillerColor: paint{color: color.NRGBA{0x00, 0x00, 0x00, 0xff}},
 	LineCap: rasterx.ButtCap, LineJoin: rasterx.Bevel, mAdder: rasterx.MatrixAdder{M: rasterx.Identity},
 }

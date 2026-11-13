@@ -13,10 +13,10 @@ import (
 	"fmt"
 	"image"
 	"io"
-	"sync"
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/oksvg"
+	"github.com/ironpark/ggfx/internal/pool"
 	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
@@ -47,26 +47,21 @@ func (d *Document) ViewBox() (x, y, width, height float64) {
 // dst's pixels.
 func (d *Document) Draw(dst *image.RGBA, geoM ggfx.GeoM) {
 	b := dst.Bounds()
-	p := painters.Get().(*painter)
-	p.scanner.Dest, p.scanner.Targ = dst, b
-	p.dasher.SetBounds(b.Dx(), b.Dy())
-	d.icon.DrawTransformed(p.dasher, 1, rasterx.Matrix2D{
+	p := painters.Get()
+	p.Scanner.Dest, p.Scanner.Targ = dst, b
+	p.Dasher.SetBounds(b.Dx(), b.Dy())
+	d.icon.DrawTransformed(p, 1, rasterx.Matrix2D{
 		A: geoM.Element(0, 0), C: geoM.Element(0, 1), E: geoM.Element(0, 2),
 		B: geoM.Element(1, 0), D: geoM.Element(1, 1), F: geoM.Element(1, 2),
 	})
-	// Let go of dst before the painter is kept.
-	p.scanner.Dest, p.scanner.Touched = nil, image.Rectangle{}
+	// Let go of dst, and of the last paint, which may hold a mask, before
+	// the painter is kept.
+	p.Release()
 	painters.Put(p)
 }
 
-// A painter is a rasterizer and its buffers, kept between drawings, which
-// change nothing in a document and so need no lock.
-type painter struct {
-	scanner *rasterx.ScannerGV
-	dasher  *rasterx.Dasher
-}
-
-var painters = sync.Pool{New: func() any {
-	s := rasterx.NewScannerGV(0, 0, nil, image.Rectangle{})
-	return &painter{scanner: s, dasher: rasterx.NewDasher(0, 0, s)}
+// painters are rasterizers and their buffers, kept between drawings,
+// which change nothing in a document and so need no lock.
+var painters = pool.Pool[*oksvg.Painter]{New: func() *oksvg.Painter {
+	return oksvg.NewPainter(0, 0, nil, image.Rectangle{})
 }}

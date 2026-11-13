@@ -41,10 +41,8 @@ func TestDrawTransformedUserSpaceGradient(t *testing.T) {
 
 	const w, h = 100, 100
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	scanner := rasterx.NewScannerGV(w, h, img, img.Bounds())
-	dasher := rasterx.NewDasher(w, h, scanner)
 	icon.Transform = rasterx.Matrix2D{A: 0.1, D: 0.1}
-	icon.Draw(dasher, 1)
+	icon.Draw(oksvg.NewPainter(w, h, img, img.Bounds()), 1)
 
 	// The gradient center (500, 500) in user space maps to (50, 50).
 	if r, _, _, _ := img.At(50, 50).RGBA(); r>>8 < 0xc0 {
@@ -69,9 +67,7 @@ func TestScaleWithOneArgument(t *testing.T) {
 
 	const w, h = 100, 100
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	scanner := rasterx.NewScannerGV(w, h, img, img.Bounds())
-	dasher := rasterx.NewDasher(w, h, scanner)
-	icon.Draw(dasher, 1)
+	icon.Draw(oksvg.NewPainter(w, h, img, img.Bounds()), 1)
 
 	// The rectangle covers (0, 0)-(50, 50) after the scale.
 	for _, tc := range []struct {

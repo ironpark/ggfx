@@ -50,22 +50,36 @@ type (
 
 // ApplyOpacity is c, not premultiplied, its alpha scaled by opacity.
 func ApplyOpacity(c color.Color, opacity float64) color.NRGBA {
-	// Premultiplied to 16 bits, a faint color loses bits it has here.
-	switch n := c.(type) {
-	case color.NRGBA:
-		r, g, b, a := uint32(n.R)*0x101, uint32(n.G)*0x101, uint32(n.B)*0x101, uint32(n.A)*0x101
-		return applyOpacity64(r, g, b, a, opacity, false)
-	case color.NRGBA64:
-		return applyOpacity64(uint32(n.R), uint32(n.G), uint32(n.B), uint32(n.A), opacity, false)
-	}
-	r, g, b, a := c.RGBA()
-	return applyOpacity64(r, g, b, a, opacity, true)
+	r, g, b, a := nrgba64(c)
+	return applyOpacity64(r, g, b, a, opacity)
 }
 
-// applyOpacity64 is ApplyOpacity of the premultiplied r, g, b, a. RGBA's
-// values are 16-bit and premultiplied: their low byte, which the original
-// took, is the 8-bit color only for an opaque 8-bit one.
-func applyOpacity64(r, g, b, a uint32, opacity float64, premultiplied bool) color.NRGBA {
+// nrgba64 is c's 16-bit color and alpha, not premultiplied, and all 0
+// where it is transparent. Premultiplied to 16 bits, a faint color loses
+// bits it has here; and RGBA's values are premultiplied: their low byte,
+// which the original took, is the 8-bit color only for an opaque 8-bit
+// one.
+func nrgba64(c color.Color) (r, g, b, a uint32) {
+	switch n := c.(type) {
+	case color.NRGBA:
+		r, g, b, a = uint32(n.R)*0x101, uint32(n.G)*0x101, uint32(n.B)*0x101, uint32(n.A)*0x101
+	case color.NRGBA64:
+		r, g, b, a = uint32(n.R), uint32(n.G), uint32(n.B), uint32(n.A)
+	default:
+		r, g, b, a = c.RGBA()
+		if a != 0xffff && a != 0 {
+			r, g, b = unpremultiply(r, a), unpremultiply(g, a), unpremultiply(b, a)
+		}
+	}
+	if a == 0 {
+		return 0, 0, 0, 0
+	}
+	return r, g, b, a
+}
+
+// applyOpacity64 is ApplyOpacity of the 16-bit r, g, b, a, not
+// premultiplied.
+func applyOpacity64(r, g, b, a uint32, opacity float64) color.NRGBA {
 	opacity = max(0, min(opacity, 1))
 	switch a {
 	case 0xffff:
@@ -73,12 +87,16 @@ func applyOpacity64(r, g, b, a uint32, opacity float64, premultiplied bool) colo
 	case 0:
 		return color.NRGBA{}
 	}
-	if premultiplied {
-		r, g, b = unpremultiply(r, a), unpremultiply(g, a), unpremultiply(b, a)
-	}
 	// a/0x101 is an 8-bit alpha exactly, so an 8-bit color comes back as
 	// it was.
 	return color.NRGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), uint8(opacity * float64(a) / 0x101)}
+}
+
+// applyOpacity is ApplyOpacity of an opaque r, g, b, without boxing it,
+// which allocated at each pixel.
+func applyOpacity(r, g, b uint8, opacity float64) color.NRGBA {
+	opacity = max(0, min(opacity, 1))
+	return color.NRGBA{r, g, b, uint8(opacity * 0xFF)}
 }
 
 // unpremultiply is the 16-bit v premultiplied by a, not premultiplied,
@@ -87,142 +105,139 @@ func unpremultiply(v, a uint32) uint32 {
 	return min((v*0xffff+a/2)/a, 0xffff)
 }
 
-// nrgba64 is c's 16-bit color, not premultiplied, and its alpha as a
-// fraction.
-func nrgba64(c color.Color) (r, g, b uint32, a float64) {
-	if n, ok := c.(color.NRGBA); ok {
-		switch n.A {
-		case 0xff:
-			return uint32(n.R) * 0x101, uint32(n.G) * 0x101, uint32(n.B) * 0x101, 1
-		case 0:
-			return 0, 0, 0, 0
-		}
-		return uint32(n.R) * 0x101, uint32(n.G) * 0x101, uint32(n.B) * 0x101, float64(n.A) / 0xff
+type (
+	// gradStops are a gradient's stops as a paint of it at an opacity
+	// looks its colors up, each stop's decoded once, not at each pixel.
+	gradStops struct {
+		stops       []stop
+		spread      SpreadMethod
+		opacity     float64
+		first, last color.RGBA64 // the first and last stops at opacity
 	}
-	r, g, b, ca := c.RGBA()
-	switch ca {
-	case 0xffff:
-		return r, g, b, 1
-	case 0:
-		return 0, 0, 0, 0
+	// stop is a stop's 16-bit color and alpha, not premultiplied, its
+	// opacity, and that with its color's alpha in it, which blends.
+	stop struct {
+		offset     float64
+		r, g, b, a uint32
+		opacity    float64
+		blend      float64
 	}
-	return unpremultiply(r, ca), unpremultiply(g, ca), unpremultiply(b, ca), float64(ca) / 0xffff
+)
+
+// colors is g's stops for a paint at opacity.
+func (g *Gradient) colors(opacity float64) gradStops {
+	stops := make([]stop, len(g.Stops))
+	for i, s := range g.Stops {
+		r, gr, b, a := nrgba64(s.StopColor)
+		// Colors and opacities blend apart, not premultiplied, as SVG
+		// has it; a stop color's own alpha is part of its opacity.
+		stops[i] = stop{s.Offset, r, gr, b, a, s.Opacity, s.Opacity * (float64(a) / 0xffff)}
+	}
+	st := gradStops{stops: stops, spread: g.Spread, opacity: opacity}
+	st.first, st.last = st.at(&stops[0]), st.at(&stops[len(stops)-1])
+	return st
 }
 
-// tColor takes the paramaterized value along the gradient's stops and
+// at is s's color at the paint's opacity.
+func (st *gradStops) at(s *stop) color.RGBA64 {
+	return ColorPaint(applyOpacity64(s.r, s.g, s.b, s.a, s.opacity*st.opacity)).Color
+}
+
+// color takes the paramaterized value along the gradient's stops and
 // returns a color depending on the spreadMethod value of the gradient and
 // the gradient's slice of stop values.
-func (g *Gradient) tColor(t, opacity float64) color.NRGBA {
-	d := len(g.Stops)
-	// These cases can be taken care of early on
-	if t >= 1.0 && g.Spread == PadSpread {
-		s := g.Stops[d-1]
-		return ApplyOpacity(s.StopColor, s.Opacity*opacity)
-	}
-	if t <= 0.0 && g.Spread == PadSpread {
-		return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
-	}
-
-	var modRange = 1.0
-	if g.Spread == ReflectSpread {
-		modRange = 2.0
-	}
-	mod := math.Mod(t, modRange)
-	if mod < 0 {
-		mod += modRange
+func (st gradStops) color(t float64) color.RGBA64 {
+	s := st.stops
+	d := len(s)
+	mod := t
+	if st.spread == PadSpread {
+		// These cases can be taken care of early on; past them, t is in
+		// (0, 1), or NaN, as math.Mod would leave it.
+		if t >= 1.0 {
+			return st.last
+		}
+		if t <= 0.0 {
+			return st.first
+		}
+	} else {
+		var modRange = 1.0
+		if st.spread == ReflectSpread {
+			modRange = 2.0
+		}
+		mod = math.Mod(t, modRange)
+		if mod < 0 {
+			mod += modRange
+		}
 	}
 
 	place := 0 // Advance to place where mod is greater than the indicated stop
-	for place != len(g.Stops) && mod > g.Stops[place].Offset {
+	for place != d && mod > s[place].offset {
 		place++
 	}
-	switch g.Spread {
+	switch st.spread {
 	case RepeatSpread:
-		var s1, s2 GradStop
+		var s1, s2 *stop
 		switch place {
 		case 0, d:
-			s1, s2 = g.Stops[d-1], g.Stops[0]
+			s1, s2 = &s[d-1], &s[0]
 		default:
-			s1, s2 = g.Stops[place-1], g.Stops[place]
+			s1, s2 = &s[place-1], &s[place]
 		}
-		return g.blendStops(mod, opacity, s1, s2, false)
+		return st.blend(mod, s1, s2, false)
 	case ReflectSpread:
 		switch place {
 		case 0:
-			return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
+			return st.first
 		case d:
 			// Advance to place where mod-1 is greater than the stop indicated by place in reverse of the stop slice.
 			// Since this is the reflect spead mode, the mod interval is two, allowing the stop list to be
 			// iterated in reverse before repeating the sequence.
-			for place != d*2 && mod-1 > (1-g.Stops[d*2-place-1].Offset) {
+			for place != d*2 && mod-1 > (1-s[d*2-place-1].offset) {
 				place++
 			}
 			switch place {
 			case d:
-				s := g.Stops[d-1]
-				return ApplyOpacity(s.StopColor, s.Opacity*opacity)
+				return st.last
 			case d * 2:
-				return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
+				return st.first
 			default:
-				return g.blendStops(mod-1, opacity,
-					g.Stops[d*2-place], g.Stops[d*2-place-1], true)
+				return st.blend(mod-1, &s[d*2-place], &s[d*2-place-1], true)
 			}
 		default:
-			return g.blendStops(mod, opacity,
-				g.Stops[place-1], g.Stops[place], false)
+			return st.blend(mod, &s[place-1], &s[place], false)
 		}
 	default: // PadSpread
 		switch place {
 		case 0:
-			return ApplyOpacity(g.Stops[0].StopColor, g.Stops[0].Opacity*opacity)
-		case len(g.Stops):
-			s := g.Stops[len(g.Stops)-1]
-			return ApplyOpacity(s.StopColor, s.Opacity*opacity)
+			return st.first
+		case d:
+			return st.last
 		default:
-			return g.blendStops(mod, opacity, g.Stops[place-1], g.Stops[place], false)
+			return st.blend(mod, &s[place-1], &s[place], false)
 		}
 	}
 }
 
-func (g *Gradient) blendStops(t, opacity float64, s1, s2 GradStop, flip bool) color.NRGBA {
-	s1off := s1.Offset
-	if s1.Offset > s2.Offset && !flip { // happens in repeat spread mode
+func (st *gradStops) blend(t float64, s1, s2 *stop, flip bool) color.RGBA64 {
+	s1off := s1.offset
+	if s1.offset > s2.offset && !flip { // happens in repeat spread mode
 		s1off--
 		if t > 1 {
 			t--
 		}
 	}
-	if s2.Offset == s1off {
-		return ApplyOpacity(s2.StopColor, s2.Opacity*opacity)
+	if s2.offset == s1off {
+		return st.at(s2)
 	}
 	if flip {
 		t = 1 - t
 	}
-	tp := (t - s1off) / (s2.Offset - s1off)
-	// Colors and opacities blend apart, not premultiplied, as SVG has it;
-	// a stop color's own alpha is part of its opacity.
-	r1, g1, b1, a1 := nrgba64(s1.StopColor)
-	r2, g2, b2, a2 := nrgba64(s2.StopColor)
-	o1, o2 := s1.Opacity, s2.Opacity
-	if a1 != 1 {
-		o1 *= a1
-	}
-	if a2 != 1 {
-		o2 *= a2
-	}
-
-	return applyOpacity(color.RGBA{
-		uint8((float64(r1)*(1-tp) + float64(r2)*tp) / 256),
-		uint8((float64(g1)*(1-tp) + float64(g2)*tp) / 256),
-		uint8((float64(b1)*(1-tp) + float64(b2)*tp) / 256),
-		0xFF}, (o1*(1-tp)+o2*tp)*opacity)
-}
-
-// applyOpacity is ApplyOpacity of an opaque c, without boxing it, which
-// allocated at each pixel.
-func applyOpacity(c color.RGBA, opacity float64) color.NRGBA {
-	opacity = max(0, min(opacity, 1))
-	return color.NRGBA{c.R, c.G, c.B, uint8(opacity * 0xFF)}
+	tp := (t - s1off) / (s2.offset - s1off)
+	return ColorPaint(applyOpacity(
+		uint8((float64(s1.r)*(1-tp)+float64(s2.r)*tp)/256),
+		uint8((float64(s1.g)*(1-tp)+float64(s2.g)*tp)/256),
+		uint8((float64(s1.b)*(1-tp)+float64(s2.b)*tp)/256),
+		(s1.blend*(1-tp)+s2.blend*tp)*st.opacity)).Color
 }
 
 // GetColorFunction returns the color function
@@ -238,6 +253,8 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 	case 1:
 		return ColorPaint(ApplyOpacity(g.Stops[0].StopColor, opacity)) // Illegal, I think, should really should not happen.
 	}
+	st := g.colors(opacity)
+	obb := g.Units == ObjectBoundingBox
 
 	w, h := float64(g.Bounds.W), float64(g.Bounds.H)
 	oriX, oriY := float64(g.Bounds.X), float64(g.Bounds.Y)
@@ -246,7 +263,7 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 
 	if g.IsRadial {
 		cx, cy, fx, fy, rx, ry := g.Points[0], g.Points[1], g.Points[2], g.Points[3], g.Points[4], g.Points[4]
-		if g.Units == ObjectBoundingBox {
+		if obb {
 			cx = g.Bounds.X + g.Bounds.W*cx
 			cy = g.Bounds.Y + g.Bounds.H*cy
 			fx = g.Bounds.X + g.Bounds.W*fx
@@ -263,24 +280,7 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 		}
 
 		if cx == fx && cy == fy {
-			// When the focus and center are the same things are much simpler;
-			// t is just distance from center
-			// scaled by the bounds aspect ratio times r
-			if g.Units == ObjectBoundingBox {
-				return FuncPaint(func(xi, yi int) color.RGBA64 {
-					x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
-					dx := float64(x) - cx
-					dy := float64(y) - cy
-					return rgba64(g.tColor(math.Sqrt(dx*dx/(rx*rx)+(dy*dy)/(ry*ry)), opacity))
-				})
-			}
-			return FuncPaint(func(xi, yi int) color.RGBA64 {
-				x := float64(xi) + 0.5
-				y := float64(yi) + 0.5
-				dx := x - cx
-				dy := y - cy
-				return rgba64(g.tColor(math.Sqrt(dx*dx/(rx*rx)+(dy*dy)/(ry*ry)), opacity))
-			})
+			return st.centered(gradT, obb, cx, cy, rx, ry)
 		}
 		fx /= rx
 		fy /= ry
@@ -298,85 +298,106 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 				return ColorPaint(color.RGBA{255, 255, 0, 255}) // should not happen
 			}
 		}
-		if g.Units == ObjectBoundingBox {
-			return FuncPaint(func(xi, yi int) color.RGBA64 {
-				x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
-				ex := x / rx
-				ey := y / ry
+		return st.focal(gradT, obb, fx, fy, cx, cy, rx, ry)
+	}
+	p1x, p1y, p2x, p2y := g.Points[0], g.Points[1], g.Points[2], g.Points[3]
+	if obb {
+		p1x = g.Bounds.X + g.Bounds.W*p1x
+		p1y = g.Bounds.Y + g.Bounds.H*p1y
+		p2x = g.Bounds.X + g.Bounds.W*p2x
+		p2y = g.Bounds.Y + g.Bounds.H*p2y
+	} else {
+		p1x, p1y = g.Matrix.Transform(p1x, p1y)
+		p2x, p2y = g.Matrix.Transform(p2x, p2y)
+		p1x, p1y = objMatrix.Transform(p1x, p1y)
+		p2x, p2y = objMatrix.Transform(p2x, p2y)
+	}
+	return st.linear(gradT, obb, p1x, p1y, p2x, p2y)
+}
 
-				t1x, t1y, intersects := RayCircleIntersectionF(ex, ey, fx, fy, cx, cy, 1.0)
-				if intersects == false { //In this case, use the last stop color
-					s := g.Stops[len(g.Stops)-1]
-					return rgba64(ApplyOpacity(s.StopColor, s.Opacity*opacity))
-				}
-				tdx, tdy := t1x-fx, t1y-fy
-				dx, dy := ex-fx, ey-fy
-				if tdx*tdx+tdy*tdy < epsilonF {
-					s := g.Stops[len(g.Stops)-1]
-					return rgba64(ApplyOpacity(s.StopColor, s.Opacity*opacity))
-				}
-				return rgba64(g.tColor(math.Sqrt(dx*dx+dy*dy)/math.Sqrt(tdx*tdx+tdy*tdy), opacity))
-			})
-		}
+// The paints below take their geometry as parameters, which their
+// closures capture by value: a variable assigned after it is captured
+// would be moved to the heap.
+
+// centered is the paint of a radial gradient whose focus is its center:
+// t is just distance from center scaled by the bounds aspect ratio times
+// r.
+func (st gradStops) centered(gradT Matrix2D, obb bool, cx, cy, rx, ry float64) Paint {
+	if obb {
 		return FuncPaint(func(xi, yi int) color.RGBA64 {
-			x := float64(xi) + 0.5
-			y := float64(yi) + 0.5
+			x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
+			dx := float64(x) - cx
+			dy := float64(y) - cy
+			return st.color(math.Sqrt(dx*dx/(rx*rx) + (dy*dy)/(ry*ry)))
+		})
+	}
+	return FuncPaint(func(xi, yi int) color.RGBA64 {
+		x := float64(xi) + 0.5
+		y := float64(yi) + 0.5
+		dx := x - cx
+		dy := y - cy
+		return st.color(math.Sqrt(dx*dx/(rx*rx) + (dy*dy)/(ry*ry)))
+	})
+}
+
+// focal is the paint of a radial gradient whose focus, (fx, fy), is not
+// its center, (cx, cy), both divided by the radii.
+func (st gradStops) focal(gradT Matrix2D, obb bool, fx, fy, cx, cy, rx, ry float64) Paint {
+	if obb {
+		return FuncPaint(func(xi, yi int) color.RGBA64 {
+			x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
 			ex := x / rx
 			ey := y / ry
 
 			t1x, t1y, intersects := RayCircleIntersectionF(ex, ey, fx, fy, cx, cy, 1.0)
 			if intersects == false { //In this case, use the last stop color
-				s := g.Stops[len(g.Stops)-1]
-				return rgba64(ApplyOpacity(s.StopColor, s.Opacity*opacity))
+				return st.last
 			}
 			tdx, tdy := t1x-fx, t1y-fy
 			dx, dy := ex-fx, ey-fy
 			if tdx*tdx+tdy*tdy < epsilonF {
-				s := g.Stops[len(g.Stops)-1]
-				return rgba64(ApplyOpacity(s.StopColor, s.Opacity*opacity))
+				return st.last
 			}
-			return rgba64(g.tColor(math.Sqrt(dx*dx+dy*dy)/math.Sqrt(tdx*tdx+tdy*tdy), opacity))
+			return st.color(math.Sqrt(dx*dx+dy*dy) / math.Sqrt(tdx*tdx+tdy*tdy))
 		})
 	}
-	p1x, p1y, p2x, p2y := g.Points[0], g.Points[1], g.Points[2], g.Points[3]
-	if g.Units == ObjectBoundingBox {
-		p1x = g.Bounds.X + g.Bounds.W*p1x
-		p1y = g.Bounds.Y + g.Bounds.H*p1y
-		p2x = g.Bounds.X + g.Bounds.W*p2x
-		p2y = g.Bounds.Y + g.Bounds.H*p2y
+	return FuncPaint(func(xi, yi int) color.RGBA64 {
+		x := float64(xi) + 0.5
+		y := float64(yi) + 0.5
+		ex := x / rx
+		ey := y / ry
 
-		dx := p2x - p1x
-		dy := p2y - p1y
-		d := (dx*dx + dy*dy) // self inner prod
+		t1x, t1y, intersects := RayCircleIntersectionF(ex, ey, fx, fy, cx, cy, 1.0)
+		if intersects == false { //In this case, use the last stop color
+			return st.last
+		}
+		tdx, tdy := t1x-fx, t1y-fy
+		dx, dy := ex-fx, ey-fy
+		if tdx*tdx+tdy*tdy < epsilonF {
+			return st.last
+		}
+		return st.color(math.Sqrt(dx*dx+dy*dy) / math.Sqrt(tdx*tdx+tdy*tdy))
+	})
+}
+
+// linear is the paint of a linear gradient from (p1x, p1y) to (p2x, p2y).
+func (st gradStops) linear(gradT Matrix2D, obb bool, p1x, p1y, p2x, p2y float64) Paint {
+	dx := p2x - p1x
+	dy := p2y - p1y
+	d := (dx*dx + dy*dy) // self inner prod
+	if obb {
 		return FuncPaint(func(xi, yi int) color.RGBA64 {
 			x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
 			dfx := x - p1x
 			dfy := y - p1y
-			return rgba64(g.tColor((dx*dfx+dy*dfy)/d, opacity))
+			return st.color((dx*dfx + dy*dfy) / d)
 		})
 	}
-
-	p1x, p1y = g.Matrix.Transform(p1x, p1y)
-	p2x, p2y = g.Matrix.Transform(p2x, p2y)
-	p1x, p1y = objMatrix.Transform(p1x, p1y)
-	p2x, p2y = objMatrix.Transform(p2x, p2y)
-	dx := p2x - p1x
-	dy := p2y - p1y
-	d := (dx*dx + dy*dy)
-	// if d == 0.0 {
-	// 	fmt.Println("zero delta")
-	// }
 	return FuncPaint(func(xi, yi int) color.RGBA64 {
 		x := float64(xi) + 0.5
 		y := float64(yi) + 0.5
 		dfx := x - p1x
 		dfy := y - p1y
-		return rgba64(g.tColor((dx*dfx+dy*dfy)/d, opacity))
+		return st.color((dx*dfx + dy*dfy) / d)
 	})
-}
-
-// rgba64 is c as c.RGBA gives it.
-func rgba64(c color.NRGBA) color.RGBA64 {
-	r, g, b, a := c.RGBA()
-	return color.RGBA64{uint16(r), uint16(g), uint16(b), uint16(a)}
 }

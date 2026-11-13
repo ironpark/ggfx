@@ -37,9 +37,12 @@ below.
   make them. The `image.Image` sources `ColorFuncImage` and `ClipImage`,
   and `ScannerGV.Source`, which boxed a color at each pixel, are gone; a
   gradient no longer boxes one either.
-- `ScannerGV.Targ` is where the mask's origin goes in `Dest`, which may
-  hold only part of it; `Touched` records what a draw changed, and a nil
-  `Dest` draws nothing but records it.
+- `ScannerGV.Dest` is an `*image.RGBA`, not a `draw.Image`: every caller
+  draws into one, and the generic `At`/`Set` path is gone. `Targ` is where
+  the mask's origin goes in `Dest`, which may hold only part of it;
+  `Touched` records what a draw changed, and a nil `Dest` draws nothing
+  but records the window the path would be drawn in, without rasterizing
+  it.
 - `Gradient.GetColorFunctionUS` no longer sorts `Stops`, which mutated the
   gradient as it drew; its caller orders them.
 - The even-odd fill rule: `ScannerGV.SetWinding(false)` folds the
@@ -53,7 +56,11 @@ below.
   alpha part of its opacity, and the first stop, drawn where a repeated
   gradient's last and first stops meet, takes the gradient's opacity,
   which it dropped.
+- A gradient's paint decodes its stops' colors once, not at each pixel,
+  and an `NRGBA64` stop color blends by its own 16-bit values, not by
+  `RGBA`'s premultiplied ones unpremultiplied.
 - `rasterx_test.go` keeps the original's assertions; the drawings it wrote
   to `testdata` are compared with goldens, a hash per drawing and
-  `GOARCH`, in `testdata/golden.txt`. `bezier_test.go` seeds its random
-  numbers with constants, not the clock.
+  `GOARCH`, in `testdata/golden.txt`, through `internal/goldentest`.
+  `bezier_test.go` seeds its random numbers with constants, not the
+  clock.

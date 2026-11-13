@@ -77,87 +77,67 @@ func clamp(i, width int32) uint {
 	return uint(width)
 }
 
-// rowU32 is the window's row y, empty if it has none.
-func (z *rasterizer) rowU32(y int32) []uint32 {
+// row is the window's row y of cells, empty if it has none.
+func row[T uint32 | float32](z *rasterizer, cells []T, y int32) []T {
 	r := int(y) - z.win.Min.Y
 	if r < 0 || r >= z.win.Dy() {
 		return nil
 	}
 	w := z.win.Dx()
-	return z.u32[r*w : r*w+w]
+	return cells[r*w : r*w+w]
 }
 
-func (z *rasterizer) rowF32(y int32) []float32 {
-	r := int(y) - z.win.Min.Y
-	if r < 0 || r >= z.win.Dy() {
-		return nil
-	}
-	w := z.win.Dx()
-	return z.f32[r*w : r*w+w]
-}
-
-// addU32 adds v to the cell i, from 0 to the width, of row y, whose cells
-// in the window are buf.
-func (z *rasterizer) addU32(buf []uint32, y int32, i uint, v uint32) {
+// add adds v to the cell i, from 0 to the width, of row y, whose cells in
+// the window are buf; the window's are cells, and column 0's beside it
+// left.
+func add[T uint32 | float32](z *rasterizer, cells, left, buf []T, y int32, i uint, v T) {
 	if j := i - uint(z.win.Min.X); j < uint(len(buf)) {
 		buf[j] += v
 		return
 	}
-	z.outsideU32(y, i, v)
+	addOutside(z, cells, left, int(y), int(i), v)
 }
 
-func (z *rasterizer) outsideU32(y int32, i uint, v uint32) {
-	if r, ok := z.cell(&y, &i); ok {
-		if r < z.win.Dy() && i >= uint(z.win.Min.X) && i < uint(z.win.Max.X) {
-			z.u32[r*z.win.Dx()+int(i)-z.win.Min.X] += v
-		} else {
-			z.left[r] += v
+// addOutside is add of a cell outside its row's window: in the window of
+// the next row, past the row's end, or in column 0 kept apart. It drops a
+// cell past the mask's end, as vector does, and marks one it cannot keep
+// stray.
+func addOutside[T uint32 | float32](z *rasterizer, cells, left []T, y, i int, v T) {
+	if i == z.size.X {
+		if y, i = y+1, 0; y >= z.size.Y {
+			return
 		}
 	}
-}
-
-func (z *rasterizer) addF32(buf []float32, y int32, i uint, v float32) {
-	if j := i - uint(z.win.Min.X); j < uint(len(buf)) {
-		buf[j] += v
-		return
-	}
-	z.outsideF32(y, i, v)
-}
-
-func (z *rasterizer) outsideF32(y int32, i uint, v float32) {
-	if r, ok := z.cell(&y, &i); ok {
-		if r < z.win.Dy() && i >= uint(z.win.Min.X) && i < uint(z.win.Max.X) {
-			z.f32[r*z.win.Dx()+int(i)-z.win.Min.X] += v
-		} else {
-			z.leftF[r] += v
-		}
-	}
-}
-
-// cell finds the cell i of row y outside its row's window: in the window
-// of the next row, or column 0 kept apart, at the row r of the window. It
-// reports false for a cell vector drops, past the mask's end, and for one
-// it cannot keep, which it marks stray.
-func (z *rasterizer) cell(y *int32, i *uint) (r int, ok bool) {
-	if *i == uint(z.size.X) {
-		*y, *i = *y+1, 0
-		if int(*y) >= z.size.Y {
-			return 0, false
-		}
-	}
-	r = int(*y) - z.win.Min.Y
-	if r < 0 || r > z.win.Dy() {
+	switch k, in := z.locate(y, i); in {
+	case inWindow:
+		cells[k] += v
+	case inLeft:
+		left[k] += v
+	default:
 		z.stray = true
-		return 0, false
 	}
-	if r < z.win.Dy() && *i >= uint(z.win.Min.X) && *i < uint(z.win.Max.X) {
-		return r, true
+}
+
+// Where locate finds a cell.
+const (
+	nowhere = iota
+	inWindow
+	inLeft
+)
+
+// locate finds the cell x of row y: in the window, at k in its cells; in
+// column 0 kept apart, at k in left; or nowhere kept.
+func (z *rasterizer) locate(y, x int) (k, in int) {
+	r := y - z.win.Min.Y
+	switch {
+	case r < 0 || r > z.win.Dy():
+		return 0, nowhere
+	case r < z.win.Dy() && x >= z.win.Min.X && x < z.win.Max.X:
+		return r*z.win.Dx() + x - z.win.Min.X, inWindow
+	case x != 0 || (z.win.Min.X == 0 && r < z.win.Dy()):
+		return 0, nowhere
 	}
-	if *i != 0 || (z.win.Min.X == 0 && r < z.win.Dy()) {
-		z.stray = true
-		return 0, false
-	}
-	return r, true
+	return r, inLeft
 }
 
 const (
@@ -212,6 +192,7 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 		yMax = int32(z.size.Y)
 	}
 	width := int32(z.size.X)
+	cells, left := z.u32, z.left
 
 	for ; y < yMax; y++ {
 		dy := min(int1ϕ(y+1)<<ϕ, byϕ) - max(int1ϕ(y)<<ϕ, ayϕ)
@@ -220,7 +201,7 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 			x = xNext
 			continue
 		}
-		buf := z.rowU32(y)
+		buf := row(z, cells, y)
 		d := dy * dir // d ranges up to ±1<<(1*ϕ).
 		x0, x1 := x, xNext
 		if x > xNext {
@@ -233,8 +214,8 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 
 		if x1i <= x0i+1 {
 			xmf := (x+xNext)>>1 - x0Floor
-			z.addU32(buf, y, clamp(x0i+0, width), uint32(d*(fxOne-xmf)))
-			z.addU32(buf, y, clamp(x0i+1, width), uint32(d*xmf))
+			add(z, cells, left, buf, y, clamp(x0i+0, width), uint32(d*(fxOne-xmf)))
+			add(z, cells, left, buf, y, clamp(x0i+1, width), uint32(d*xmf))
 		} else {
 			oneOverS := x1 - x0
 			twoOverS := 2 * oneOverS
@@ -250,7 +231,7 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 				D := oneMinusX0fSquared // D ranges up to ±1<<(2*ϕ).
 				D *= d                  // D ranges up to ±1<<(3*ϕ).
 				D /= twoOverS
-				z.addU32(buf, y, clamp(x0i, width), uint32(D))
+				add(z, cells, left, buf, y, clamp(x0i, width), uint32(D))
 			}
 
 			if x1i == x0i+2 {
@@ -258,7 +239,7 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 				D := twoOverS<<ϕ - oneMinusX0fSquared - x1fSquared // D ranges up to ±1<<(2*ϕ+2).
 				D *= d                                             // D ranges up to ±1<<(3*ϕ+2).
 				D /= twoOverS
-				z.addU32(buf, y, clamp(x0i+1, width), uint32(D))
+				add(z, cells, left, buf, y, clamp(x0i+1, width), uint32(D))
 			} else {
 				// See vector's raster_fixed.go for the derivations of
 				// these.
@@ -266,11 +247,11 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 					D := (fxOneAndAHalf-x0f)<<(ϕ+1) - oneMinusX0fSquared // D ranges up to ±1<<(2*ϕ+2).
 					D *= d                                               // D ranges up to ±1<<(3*ϕ+2).
 					D /= twoOverS
-					z.addU32(buf, y, clamp(x0i+1, width), uint32(D))
+					add(z, cells, left, buf, y, clamp(x0i+1, width), uint32(D))
 				}
 				dTimesS := uint32((d << (2 * ϕ)) / oneOverS)
 				for xi := x0i + 2; xi < x1i-1; xi++ {
-					z.addU32(buf, y, clamp(xi, width), dTimesS)
+					add(z, cells, left, buf, y, clamp(xi, width), dTimesS)
 				}
 				{
 					const C = 1<<(ϕ+2) - fxOneAndAHalf<<1
@@ -279,7 +260,7 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 					D -= x1fSquared // D ranges up to ±1<<(2*ϕ+3).
 					D *= d          // D ranges up to ±1<<(3*ϕ+3).
 					D /= twoOverS
-					z.addU32(buf, y, clamp(x1i-1, width), uint32(D))
+					add(z, cells, left, buf, y, clamp(x1i-1, width), uint32(D))
 				}
 			}
 
@@ -289,7 +270,7 @@ func (z *rasterizer) fixedLineTo(ax, ay, bx, by float32) {
 				D := x1fSquared // D ranges up to ±1<<(2*ϕ).
 				D *= d          // D ranges up to ±1<<(3*ϕ).
 				D /= twoOverS
-				z.addU32(buf, y, clamp(x1i, width), uint32(D))
+				add(z, cells, left, buf, y, clamp(x1i, width), uint32(D))
 			}
 		}
 
@@ -321,6 +302,7 @@ func (z *rasterizer) floatingLineTo(ax, ay, bx, by float32) {
 		yMax = int32(z.size.Y)
 	}
 	width := int32(z.size.X)
+	cells, left := z.f32, z.leftF
 
 	for ; y < yMax; y++ {
 		dy := min(float32(y+1), by) - max(float32(y), ay)
@@ -335,7 +317,7 @@ func (z *rasterizer) floatingLineTo(ax, ay, bx, by float32) {
 			x = xNext
 			continue
 		}
-		buf := z.rowF32(y)
+		buf := row(z, cells, y)
 		d := float32(dy * dir)
 		x0, x1 := x, xNext
 		if x > xNext {
@@ -348,8 +330,8 @@ func (z *rasterizer) floatingLineTo(ax, ay, bx, by float32) {
 
 		if x1i <= x0i+1 {
 			xmf := float32(0.5*(x+xNext)) - x0Floor
-			z.addF32(buf, y, clamp(x0i+0, width), d-float32(d*xmf))
-			z.addF32(buf, y, clamp(x0i+1, width), float32(d*xmf))
+			add(z, cells, left, buf, y, clamp(x0i+0, width), d-float32(d*xmf))
+			add(z, cells, left, buf, y, clamp(x0i+1, width), float32(d*xmf))
 		} else {
 			s := 1 / (x1 - x0)
 			x0f := x0 - x0Floor
@@ -358,22 +340,22 @@ func (z *rasterizer) floatingLineTo(ax, ay, bx, by float32) {
 			x1f := x1 - x1Ceil + 1
 			am := float32(0.5 * s * x1f * x1f)
 
-			z.addF32(buf, y, clamp(x0i, width), float32(d*a0))
+			add(z, cells, left, buf, y, clamp(x0i, width), float32(d*a0))
 
 			if x1i == x0i+2 {
-				z.addF32(buf, y, clamp(x0i+1, width), float32(d*(1-a0-am)))
+				add(z, cells, left, buf, y, clamp(x0i+1, width), float32(d*(1-a0-am)))
 			} else {
 				a1 := float32(s * (1.5 - x0f))
-				z.addF32(buf, y, clamp(x0i+1, width), float32(d*(a1-a0)))
+				add(z, cells, left, buf, y, clamp(x0i+1, width), float32(d*(a1-a0)))
 				dTimesS := float32(d * s)
 				for xi := x0i + 2; xi < x1i-1; xi++ {
-					z.addF32(buf, y, clamp(xi, width), dTimesS)
+					add(z, cells, left, buf, y, clamp(xi, width), dTimesS)
 				}
 				a2 := a1 + float32(s*float32(x1i-x0i-3))
-				z.addF32(buf, y, clamp(x1i-1, width), float32(d*(1-a2-am)))
+				add(z, cells, left, buf, y, clamp(x1i-1, width), float32(d*(1-a2-am)))
 			}
 
-			z.addF32(buf, y, clamp(x1i, width), float32(d*am))
+			add(z, cells, left, buf, y, clamp(x1i, width), float32(d*am))
 		}
 
 		x = xNext
@@ -406,11 +388,22 @@ func fixedMask(acc int2ϕ) uint32 {
 	return uint32(a)
 }
 
+func floatingMask(acc float32) uint32 {
+	a := acc
+	if a < 0 {
+		a = -a
+	}
+	if a > 1 {
+		a = 1
+	}
+	return uint32(almost65536 * a)
+}
+
 // The even-odd rule folds the coverage, a sum of signed areas, modulo 2:
 // covered twice over is not covered, one and a half times is half. The
 // non-zero rule, vector's only, clamps it to 1.
 
-func fixedMaskEvenOdd(acc int2ϕ) uint32 {
+func foldFixed(acc int2ϕ) int2ϕ {
 	a := acc
 	if a < 0 {
 		a = -a
@@ -419,14 +412,10 @@ func fixedMaskEvenOdd(acc int2ϕ) uint32 {
 	if a > 1<<(2*ϕ) {
 		a = 1<<(2*ϕ+1) - a
 	}
-	a >>= 2*ϕ - 16
-	if a > 0xffff {
-		a = 0xffff
-	}
-	return uint32(a)
+	return a
 }
 
-func floatingMaskEvenOdd(acc float32) uint32 {
+func foldFloating(acc float32) float32 {
 	a := acc
 	if a < 0 {
 		a = -a
@@ -437,32 +426,24 @@ func floatingMaskEvenOdd(acc float32) uint32 {
 			a = 2 - a
 		}
 	}
-	return uint32(almost65536 * a)
+	return a
 }
 
-func (z *rasterizer) fixedMask(acc int2ϕ) uint32 {
+// fixedMaskByRule is the mask of acc by z's fill rule.
+func (z *rasterizer) fixedMaskByRule(acc int2ϕ) uint32 {
 	if z.evenOdd {
-		return fixedMaskEvenOdd(acc)
+		acc = foldFixed(acc)
 	}
 	return fixedMask(acc)
 }
 
-func (z *rasterizer) floatingMask(acc float32) uint32 {
+func (z *rasterizer) floatingMaskByRule(acc float32) uint32 {
 	if z.evenOdd {
-		return floatingMaskEvenOdd(acc)
+		// Folded into [0, 1], it needs floatingMask's scaling alone: its
+		// clamps cost in floatingAccumulate's loop.
+		return uint32(almost65536 * foldFloating(acc))
 	}
 	return floatingMask(acc)
-}
-
-func floatingMask(acc float32) uint32 {
-	a := acc
-	if a < 0 {
-		a = -a
-	}
-	if a > 1 {
-		a = 1
-	}
-	return uint32(almost65536 * a)
 }
 
 // accumulate turns the window's cells into its mask, alphas from 0 to
@@ -486,7 +467,7 @@ func (z *rasterizer) fixedAccumulate() bool {
 	for r := 0; r < h; r++ {
 		if split {
 			acc += int2ϕ(z.left[r])
-			if z.fixedMask(acc) >= faint {
+			if z.fixedMaskByRule(acc) >= faint {
 				return false
 			}
 		}
@@ -494,7 +475,7 @@ func (z *rasterizer) fixedAccumulate() bool {
 		if z.evenOdd {
 			for i, v := range row {
 				acc += int2ϕ(v)
-				row[i] = fixedMaskEvenOdd(acc)
+				row[i] = fixedMask(foldFixed(acc))
 			}
 		} else {
 			for i, v := range row {
@@ -502,12 +483,12 @@ func (z *rasterizer) fixedAccumulate() bool {
 				row[i] = fixedMask(acc)
 			}
 		}
-		if z.win.Max.X < z.size.X && z.fixedMask(acc) >= faint {
+		if z.win.Max.X < z.size.X && z.fixedMaskByRule(acc) >= faint {
 			return false
 		}
 	}
 	acc += int2ϕ(z.left[h])
-	return z.win.Max.Y >= z.size.Y || z.fixedMask(acc) < faint
+	return z.win.Max.Y >= z.size.Y || z.fixedMaskByRule(acc) < faint
 }
 
 func (z *rasterizer) floatingAccumulate() bool {
@@ -517,7 +498,7 @@ func (z *rasterizer) floatingAccumulate() bool {
 	for r := 0; r < h; r++ {
 		if split {
 			acc += z.leftF[r]
-			if z.floatingMask(acc) >= faint {
+			if z.floatingMaskByRule(acc) >= faint {
 				return false
 			}
 		}
@@ -526,7 +507,7 @@ func (z *rasterizer) floatingAccumulate() bool {
 		if z.evenOdd {
 			for i, v := range row {
 				acc += v
-				mask[i] = floatingMaskEvenOdd(acc)
+				mask[i] = uint32(almost65536 * foldFloating(acc)) // see floatingMaskByRule
 			}
 		} else {
 			for i, v := range row {
@@ -534,12 +515,12 @@ func (z *rasterizer) floatingAccumulate() bool {
 				mask[i] = floatingMask(acc)
 			}
 		}
-		if z.win.Max.X < z.size.X && z.floatingMask(acc) >= faint {
+		if z.win.Max.X < z.size.X && z.floatingMaskByRule(acc) >= faint {
 			return false
 		}
 	}
 	acc += z.leftF[h]
-	return z.win.Max.Y >= z.size.Y || z.floatingMask(acc) < faint
+	return z.win.Max.Y >= z.size.Y || z.floatingMaskByRule(acc) < faint
 }
 
 // floatingAccumulateSIMD is floatingAccumulate summing as vector's amd64
@@ -570,8 +551,8 @@ func (z *rasterizer) floatingAccumulateSIMD() bool {
 		if !c.skip(start) {
 			return false
 		}
-		for c.f < end {
-			if c.f < n4 {
+		for c.f() < end {
+			if c.f() < n4 {
 				s0, s1, s2, s3 := c.cell(0), c.cell(1), c.cell(2), c.cell(3)
 				x := [4]float32{s0, s1 + s0, (s2 + s1) + s0, (s3 + s2) + (s1 + s0)}
 				for k := range x {
@@ -592,25 +573,26 @@ func (z *rasterizer) floatingAccumulateSIMD() bool {
 	return c.skip(n)
 }
 
-// simdCursor is floatingAccumulateSIMD's place in vector's buffer: the
-// cell f, at row y, column x, and the sum before it.
+// simdCursor is floatingAccumulateSIMD's place in vector's buffer, at row
+// y, column x, and the sum before it.
 type simdCursor struct {
 	z      *rasterizer
-	f      int
 	y, x   int
 	offset float32
 }
 
+// f is c's place in vector's buffer.
+func (c *simdCursor) f() int { return c.y*c.z.size.X + c.x }
+
 // skip moves c to f over 0s, reporting false if they would change a
 // pixel.
 func (c *simdCursor) skip(f int) bool {
-	if f <= c.f {
+	if f <= c.f() {
 		return true
 	}
-	if c.z.floatingMask(c.offset) >= faint {
+	if c.z.floatingMaskByRule(c.offset) >= faint {
 		return false
 	}
-	c.f = f
 	c.y, c.x = f/c.z.size.X, f%c.z.size.X
 	return true
 }
@@ -622,14 +604,11 @@ func (c *simdCursor) cell(k int) float32 {
 	for x >= z.size.X {
 		x, y = x-z.size.X, y+1
 	}
-	r := y - z.win.Min.Y
-	switch {
-	case r < 0 || r > z.win.Dy():
-		return 0
-	case r < z.win.Dy() && x >= z.win.Min.X && x < z.win.Max.X:
-		return z.f32[r*z.win.Dx()+x-z.win.Min.X]
-	case x == 0:
-		return z.leftF[r]
+	switch i, in := z.locate(y, x); in {
+	case inWindow:
+		return z.f32[i]
+	case inLeft:
+		return z.leftF[i]
 	}
 	return 0
 }
@@ -640,14 +619,12 @@ func (c *simdCursor) cell(k int) float32 {
 func (c *simdCursor) set(x ...float32) bool {
 	z := c.z
 	for _, v := range x {
-		a := z.floatingMask(v)
-		r := c.y - z.win.Min.Y
-		if r >= 0 && r < z.win.Dy() && c.x >= z.win.Min.X && c.x < z.win.Max.X {
-			z.u32[r*z.win.Dx()+c.x-z.win.Min.X] = a
+		a := z.floatingMaskByRule(v)
+		if i, in := z.locate(c.y, c.x); in == inWindow {
+			z.u32[i] = a
 		} else if a >= faint {
 			return false
 		}
-		c.f++
 		if c.x++; c.x == z.size.X {
 			c.x, c.y = 0, c.y+1
 		}

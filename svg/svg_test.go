@@ -16,18 +16,14 @@ import (
 )
 
 func TestDrawMapsTheViewBoxThroughTheGeoM(t *testing.T) {
-	d, err := svg.Parse(strings.NewReader(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 10 10 10"><rect x="10" y="10" width="5" height="10" fill="#fff"/></svg>`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	d := parse(t, svgDoc("10 10 10 10", `<rect x="10" y="10" width="5" height="10" fill="#fff"/>`))
 	if x, y, w, h := d.ViewBox(); x != 10 || y != 10 || w != 10 || h != 10 {
 		t.Fatalf("viewBox %v %v %v %v; want 10 10 10 10", x, y, w, h)
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, 20, 20))
 	var g ggfx.GeoM
 	g.Translate(-10, -10)
 	g.Scale(2, 2)
-	d.Draw(dst, g)
+	dst := drawInto(d, image.Rect(0, 0, 20, 20), g)
 	if a := dst.RGBAAt(5, 10).A; a != 0xff {
 		t.Errorf("inside the rect alpha %d; want opaque", a)
 	}
@@ -44,29 +40,21 @@ func TestParseRefusesWhatItCannotDraw(t *testing.T) {
 }
 
 func TestParseSurvivesAUseOfItself(t *testing.T) {
-	src := `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1 1"><g id="a"><use xlink:href="#a"/></g></svg>`
+	src := svgDoc("0 0 1 1", `<g id="a"><use xlink:href="#a"/></g>`)
 	if d, err := svg.Parse(strings.NewReader(src)); err == nil {
-		d.Draw(image.NewRGBA(image.Rect(0, 0, 4, 4)), ggfx.GeoM{})
+		drawInto(d, image.Rect(0, 0, 4, 4), ggfx.GeoM{})
 	}
 }
 
-// draw draws src at scale into a w by h image.
-func draw(t *testing.T, src string, scale float64, w, h int) *image.RGBA {
+// draw draws src at s into a w by h image.
+func draw(t *testing.T, src string, s float64, w, h int) *image.RGBA {
 	t.Helper()
-	d, err := svg.Parse(strings.NewReader(src))
-	if err != nil {
-		t.Fatal(err)
-	}
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	var g ggfx.GeoM
-	g.Scale(scale, scale)
-	d.Draw(dst, g)
-	return dst
+	return drawInto(parse(t, src), image.Rect(0, 0, w, h), scale(s))
 }
 
 // A rect given one radius rounds its corners by it both ways.
 func TestARectWithOneRadiusIsRounded(t *testing.T) {
-	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><rect width="40" height="20" rx="8" fill="#fff"/></svg>`, 2, 80, 40)
+	dst := draw(t, svgDoc("0 0 40 20", `<rect width="40" height="20" rx="8" fill="#fff"/>`), 2, 80, 40)
 	if a := dst.RGBAAt(0, 0).A; a != 0 {
 		t.Errorf("the corner alpha %d; want clear", a)
 	}
@@ -79,11 +67,11 @@ func TestARectWithOneRadiusIsRounded(t *testing.T) {
 // the user space of the element that names it; through a mask, as light as
 // the mask is there.
 func TestClipsAndMasksLetThroughWhatTheyCover(t *testing.T) {
-	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+	dst := draw(t, svgDoc("0 0 40 20", `
 <defs><clipPath id="c"><rect width="10" height="10"/></clipPath>
 <mask id="m"><rect width="20" height="20" fill="#fff"/><rect x="20" width="20" height="20" fill="#000"/></mask></defs>
 <g clip-path="url(#c)" transform="translate(5,5)"><rect width="40" height="20" fill="#f00"/></g>
-<rect y="16" width="40" height="4" fill="#0f0" mask="url(#m)"/></svg>`, 2, 80, 40)
+<rect y="16" width="40" height="4" fill="#0f0" mask="url(#m)"/>`), 2, 80, 40)
 	if c := dst.RGBAAt(20, 20); c.R != 0xff || c.A != 0xff {
 		t.Errorf("inside the clip, moved with its group: %v; want red", c)
 	}
@@ -104,10 +92,10 @@ func TestClipsAndMasksLetThroughWhatTheyCover(t *testing.T) {
 // A path's markers are drawn at its ends, turned as it runs there and
 // sized by its stroke.
 func TestMarkersAreDrawnAtAPathsEnds(t *testing.T) {
-	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	dst := draw(t, goldenDoc(`
 <defs><marker id="dot" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4"><rect width="10" height="10" fill="#00f"/></marker>
 <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f00"/></marker></defs>
-<path d="M10,50 L90,50" stroke="#000" stroke-width="2" marker-start="url(#dot)" marker-end="url(#arrow)"/></svg>`, 1, 100, 100)
+<path d="M10,50 L90,50" stroke="#000" stroke-width="2" marker-start="url(#dot)" marker-end="url(#arrow)"/>`), 1, 100, 100)
 	if c := dst.RGBAAt(10, 50); c.B != 0xff {
 		t.Errorf("at the start: %v; want the blue marker", c)
 	}
@@ -122,16 +110,9 @@ func TestMarkersAreDrawnAtAPathsEnds(t *testing.T) {
 // Drawing changes nothing in a document, so goroutines can draw it at
 // once, each drawing what it would alone.
 func TestDrawFromGoroutinesAtOnce(t *testing.T) {
-	d, err := svg.Parse(strings.NewReader(iconSVG))
-	if err != nil {
-		t.Fatal(err)
-	}
+	d := parse(t, iconSVG)
 	drawAt := func(size int) *image.RGBA {
-		dst := image.NewRGBA(image.Rect(0, 0, size, size))
-		var g ggfx.GeoM
-		g.Scale(float64(size)/100, float64(size)/100)
-		d.Draw(dst, g)
-		return dst
+		return drawInto(d, image.Rect(0, 0, size, size), scale(float64(size)/100))
 	}
 	sizes := []int{24, 100, 256, 600}
 	want := map[int][]byte{}
@@ -153,11 +134,11 @@ func TestDrawFromGoroutinesAtOnce(t *testing.T) {
 // A gradient inside a mask ends with it: what follows is read as it would
 // be without it, here a definition that a use then places.
 func TestAGradientInAMaskEndsWithIt(t *testing.T) {
-	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	dst := draw(t, goldenDoc(`
 <mask id="m"><linearGradient id="fade"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><rect width="100" height="40" fill="url(#fade)"/></mask>
 <rect width="100" height="40" fill="#c00" mask="url(#m)"/>
 <defs><g id="later"><rect width="20" height="20" fill="#06c"/></g></defs>
-<use href="#later" x="40" y="60"/></svg>`, 1, 100, 100)
+<use href="#later" x="40" y="60"/>`), 1, 100, 100)
 	if c := dst.RGBAAt(50, 70); c != (color.RGBA{0, 0x66, 0xcc, 0xff}) {
 		t.Errorf("where the use places the definition: %v; want it", c)
 	}
@@ -188,7 +169,7 @@ func TestFillRule(t *testing.T) {
 		{"overridden", `<g fill-rule="evenodd"><polygon points="` + pentagram + `" fill-rule="nonzero"/></g>`, false},
 		{"use", `<defs><polygon id="p" points="` + pentagram + `"/></defs><use href="#p" fill-rule="evenodd"/>`, true},
 	} {
-		dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50">`+tc.src+`</svg>`, 1, 50, 50)
+		dst := draw(t, svgDoc("0 0 50 50", tc.src), 1, 50, 50)
 		if a := dst.RGBAAt(25, 25).A; (a == 0) != tc.hole || (a != 0 && a != 0xff) {
 			t.Errorf("%s: the middle's alpha %#x; want a hole %t", tc.name, a, tc.hole)
 		}
@@ -197,7 +178,7 @@ func TestFillRule(t *testing.T) {
 		}
 	}
 	// Where a stroke crosses itself, its outline's overlaps are filled.
-	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><polygon points="`+pentagram+`" fill="none" stroke="#000" stroke-width="3" fill-rule="evenodd"/></svg>`, 1, 50, 50)
+	dst := draw(t, svgDoc("0 0 50 50", `<polygon points="`+pentagram+`" fill="none" stroke="#000" stroke-width="3" fill-rule="evenodd"/>`), 1, 50, 50)
 	// The lines from the top meet the cross bar at x = 19.0 and 31.0.
 	for _, x := range []int{18, 31} {
 		if a := dst.RGBAAt(x, 18).A; a != 0xff {
@@ -218,7 +199,7 @@ func TestClipRule(t *testing.T) {
 		{"clipPath", `<clipPath id="c" clip-rule="evenodd"><polygon points="` + pentagram + `"/></clipPath>`, true},
 		{"fill-rule", `<clipPath id="c"><polygon points="` + pentagram + `" fill-rule="evenodd"/></clipPath>`, false},
 	} {
-		dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><defs>`+tc.clip+`</defs><rect width="50" height="50" fill="#f00" clip-path="url(#c)"/></svg>`, 1, 50, 50)
+		dst := draw(t, svgDoc("0 0 50 50", `<defs>`+tc.clip+`</defs><rect width="50" height="50" fill="#f00" clip-path="url(#c)"/>`), 1, 50, 50)
 		if a := dst.RGBAAt(25, 25).A; (a == 0) != tc.hole || (a != 0 && a != 0xff) {
 			t.Errorf("%s: the middle's alpha %#x; want a hole %t", tc.name, a, tc.hole)
 		}
@@ -235,14 +216,9 @@ func TestDrawIntoOffsetBounds(t *testing.T) {
 		var g ggfx.GeoM
 		g.Scale(1.1, 1.1)
 		g.Translate(2.5, 1.75)
-		d, err := svg.Parse(strings.NewReader(doc.src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		at0 := image.NewRGBA(image.Rect(0, 0, 100, 80))
-		d.Draw(at0, g)
-		off := image.NewRGBA(image.Rect(7, -11, 107, 69))
-		d.Draw(off, g)
+		d := parse(t, doc.src)
+		at0 := drawInto(d, image.Rect(0, 0, 100, 80), g)
+		off := drawInto(d, image.Rect(7, -11, 107, 69), g)
 		if !bytes.Equal(at0.Pix, off.Pix) {
 			t.Errorf("%s: drawn into %v differs from into %v", doc.name, off.Rect, at0.Rect)
 		}
@@ -252,10 +228,10 @@ func TestDrawIntoOffsetBounds(t *testing.T) {
 // A gradient's stops keep their order: one at an offset less than the one
 // before is at that one's, and offsets are in [0, 1].
 func TestGradientStopsKeepTheirOrder(t *testing.T) {
-	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 10"><defs>
+	dst := draw(t, svgDoc("0 0 100 10", `<defs>
 <linearGradient id="g" gradientUnits="userSpaceOnUse" x2="100"><stop offset="0.6" stop-color="#f00"/><stop offset="0.3" stop-color="#0f0"/><stop offset="1.5" stop-color="#00f"/></linearGradient>
 <linearGradient id="h" gradientUnits="userSpaceOnUse" x2="100"><stop offset="-1" stop-color="#ff0"/><stop offset="0.5" stop-color="#ff0"/><stop offset="0.5" stop-color="#0ff"/></linearGradient></defs>
-<rect width="100" height="5" fill="url(#g)"/><rect y="5" width="100" height="5" fill="url(#h)"/></svg>`, 1, 100, 10)
+<rect width="100" height="5" fill="url(#g)"/><rect y="5" width="100" height="5" fill="url(#h)"/>`), 1, 100, 10)
 	for _, tc := range []struct {
 		x, y int
 		want color.RGBA
@@ -275,10 +251,10 @@ func TestGradientStopsKeepTheirOrder(t *testing.T) {
 // An objectBoundingBox gradient spans the shape's geometry, without its
 // stroke, which takes the same gradient as its fill.
 func TestBoundingBoxLeavesOutTheStroke(t *testing.T) {
-	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>
+	dst := draw(t, goldenDoc(`<defs>
 <linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs>
 <rect x="20" y="20" width="60" height="60" fill="url(#g)" stroke="url(#g)" stroke-width="20"/>
-<path d="M20,95 H80" stroke="url(#g)" stroke-width="6"/></svg>`, 1, 100, 100)
+<path d="M20,95 H80" stroke="url(#g)" stroke-width="6"/>`), 1, 100, 100)
 	red, blue := color.RGBA{0xff, 0, 0, 0xff}, color.RGBA{0, 0, 0xff, 0xff}
 	for _, tc := range []struct {
 		x, y int

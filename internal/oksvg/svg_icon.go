@@ -22,31 +22,31 @@ type SvgIcon struct {
 	classes   map[string]styleAttribute
 }
 
-// Draw the compiled SVG icon into the GraphicContext.
+// Draw the compiled SVG icon with p.
 // All elements should be contained by the Bounds rectangle of the SvgIcon.
-func (s *SvgIcon) Draw(r *rasterx.Dasher, opacity float64) {
-	s.DrawTransformed(r, opacity, s.Transform)
+func (s *SvgIcon) Draw(p *Painter, opacity float64) {
+	s.DrawTransformed(p, opacity, s.Transform)
 }
 
 // DrawTransformed draws the icon as Draw does, under t in place of its
 // Transform. It changes nothing in s.
-func (s *SvgIcon) DrawTransformed(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D) {
+func (s *SvgIcon) DrawTransformed(p *Painter, opacity float64, t rasterx.Matrix2D) {
 	// Each clip or mask is drawn once a drawing, for every shape under it.
 	var masks map[*clipUse]*image.Alpha
 	for i := range s.SVGPaths {
 		svgp := &s.SVGPaths[i]
 		if svgp.clip == nil {
-			svgp.DrawTransformed(r, opacity, t)
+			svgp.DrawTransformed(p, opacity, t)
 			continue
 		}
 		mask, ok := masks[svgp.clip]
 		if !ok {
-			mask = svgp.clip.maskImage(r, t)
+			mask = svgp.clip.maskImage(p, t)
 			if masks == nil {
 				masks = map[*clipUse]*image.Alpha{}
 			}
 			masks[svgp.clip] = mask
 		}
-		svgp.drawThrough(r, opacity, t, mask)
+		svgp.drawThrough(p, opacity, t, mask)
 	}
 }

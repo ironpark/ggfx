@@ -1,8 +1,6 @@
 // Package rasterx implements a rasterizer in go.
-// By default rasterx uses ScannerGV to render images
-// which uses the rasterizer in the golang.org/x/image/vector package.
-// The freetype rasterizer under the GNU license can also be used, by
-// downloading the scanFT package.
+// ScannerGV renders images with a port of golang.org/x/image/vector's
+// rasterizer; see raster.go.
 //
 // Copyright 2018 All rights reserved.
 // Created: 5/12/2018 by S.R.Wiley
@@ -11,7 +9,6 @@ package rasterx
 import (
 	"image"
 	"image/color"
-	"image/draw"
 	"math"
 
 	"golang.org/x/image/math/fixed"
@@ -30,7 +27,7 @@ type (
 	// would, byte for byte; but each path costs its extent, not the
 	// target's area. See raster.go.
 	ScannerGV struct {
-		Dest draw.Image
+		Dest *image.RGBA
 		// Targ is where the mask goes in Dest: its origin at Targ.Min,
 		// as far as Targ.Max. Dest may hold only part of it.
 		Targ image.Rectangle
@@ -38,7 +35,8 @@ type (
 		// place at which Paint.Func is asked its color.
 		Offset image.Point
 		// Touched is the part of Targ that a Draw changed or, with Dest
-		// nil, would have; callers reset it.
+		// nil, the window it would draw in without rasterizing; callers
+		// reset it.
 		Touched image.Rectangle
 
 		paint                  Paint
@@ -123,7 +121,7 @@ func (s *ScannerGV) Draw() {
 		return
 	}
 	win := s.window()
-	if !s.rasterize(win) {
+	if s.Dest != nil && !s.rasterize(win) {
 		// The coverage's rounding errors outside the window show, or a
 		// line strayed from it: do as vector does, all over.
 		win = image.Rectangle{Max: s.size}
@@ -140,25 +138,19 @@ func (s *ScannerGV) Draw() {
 	if s.Dest == nil {
 		return
 	}
-	r = r.Intersect(s.Dest.Bounds().Sub(s.Targ.Min))
-	if dst, ok := s.Dest.(*image.RGBA); ok {
-		s.drawRGBA(dst, r)
-	} else {
-		s.drawImage(r)
-	}
+	s.drawRGBA(s.Dest, r.Intersect(s.Dest.Rect.Sub(s.Targ.Min)))
 }
 
 // window is the part of the mask the path can cover: its extent, and as
 // far around it as vector's lines can stray in rounding.
 func (s *ScannerGV) window() image.Rectangle {
-	minX, minY := float32(math.Inf(1)), float32(math.Inf(1))
-	maxX, maxY := float32(math.Inf(-1)), float32(math.Inf(-1))
+	// The points' own extent: rounding to float32 keeps the order, so
+	// the least of the points is the least of the fixed ones, rounded.
+	minX, minY := float32(s.minX)/64, float32(s.minY)/64
+	maxX, maxY := float32(s.maxX)/64, float32(s.maxY)/64
 	if !s.pts[0].move {
-		minX, minY, maxX, maxY = 0, 0, 0, 0 // a line from the pen's start
-	}
-	for _, p := range s.pts {
-		minX, maxX = min(minX, p.x), max(maxX, p.x)
-		minY, maxY = min(minY, p.y), max(maxY, p.y)
+		// A line from the pen's start, at the origin.
+		minX, minY, maxX, maxY = min(minX, 0), min(minY, 0), max(maxX, 0), max(maxY, 0)
 	}
 	clampTo := func(v float64, n int) int {
 		return int(max(0, min(v, float64(n))))
@@ -194,81 +186,47 @@ func (s *ScannerGV) rasterize(win image.Rectangle) bool {
 }
 
 // drawRGBA draws the paint through the mask in r over dst, with the
-// arithmetic vector's Draw uses: its fast path for a uniform color, and
-// its generic one, through color.RGBA64 and image.RGBA.Set, otherwise. A
-// pixel the mask does not cover is left alone, as both leave it.
+// arithmetic of vector's Draw: its generic path, through color.RGBA64 and
+// image.RGBA.Set, which for a premultiplied color is its fast path for a
+// uniform one too. A pixel the mask does not cover is left alone, as both
+// leave it.
 func (s *ScannerGV) drawRGBA(dst *image.RGBA, r image.Rectangle) {
 	z := &s.z
 	w := z.win.Dx()
-	p := s.paint
-	uniform := p.Func == nil && s.clip == image.ZR
-	sr, sg, sb, sa := uint32(p.Color.R), uint32(p.Color.G), uint32(p.Color.B), uint32(p.Color.A)
+	f := s.paint.Func
 	for y := r.Min.Y; y < r.Max.Y; y++ {
-		mask := z.u32[(y-z.win.Min.Y)*w:]
+		mask := z.u32[(y-z.win.Min.Y)*w+r.Min.X-z.win.Min.X:][:r.Dx()]
 		pix := dst.Pix[dst.PixOffset(s.Targ.Min.X+r.Min.X, s.Targ.Min.Y+y):]
-		for x := r.Min.X; x < r.Max.X; x++ {
-			ma := mask[x-z.win.Min.X]
-			if ma == 0 {
-				continue
+		if f == nil {
+			blend(pix, mask, s.paint.Color)
+			continue
+		}
+		for i, ma := range mask {
+			if ma != 0 {
+				blend(pix[4*i:], mask[i:i+1], f(s.Offset.X+r.Min.X+i, s.Offset.Y+y))
 			}
-			i := 4 * (x - r.Min.X)
-			if uniform {
-				if ma == 0xffff && sa == 0xffff {
-					// Opaque over all: what both paths come to.
-					pix[i+0], pix[i+1], pix[i+2], pix[i+3] = uint8(sr>>8), uint8(sg>>8), uint8(sb>>8), 0xff
-					continue
-				}
-				a := 0xffff - (sa * ma / 0xffff)
-				pix[i+0] = uint8(((uint32(pix[i+0])*0x101*a + sr*ma) / 0xffff) >> 8)
-				pix[i+1] = uint8(((uint32(pix[i+1])*0x101*a + sg*ma) / 0xffff) >> 8)
-				pix[i+2] = uint8(((uint32(pix[i+2])*0x101*a + sb*ma) / 0xffff) >> 8)
-				pix[i+3] = uint8(((uint32(pix[i+3])*0x101*a + sa*ma) / 0xffff) >> 8)
-				continue
-			}
-			if p.Func != nil {
-				c := p.Func(s.Offset.X+x, s.Offset.Y+y)
-				sr, sg, sb, sa = uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
-			}
-			if ma == 0xffff && sa == 0xffff {
-				pix[i+0], pix[i+1], pix[i+2], pix[i+3] = uint8(sr>>8), uint8(sg>>8), uint8(sb>>8), 0xff
-				continue
-			}
-			a := 0xffff - (sa * ma / 0xffff)
-			pix[i+0] = uint8(uint16((uint32(pix[i+0])*0x101*a+sr*ma)/0xffff) >> 8)
-			pix[i+1] = uint8(uint16((uint32(pix[i+1])*0x101*a+sg*ma)/0xffff) >> 8)
-			pix[i+2] = uint8(uint16((uint32(pix[i+2])*0x101*a+sb*ma)/0xffff) >> 8)
-			pix[i+3] = uint8(uint16((uint32(pix[i+3])*0x101*a+sa*ma)/0xffff) >> 8)
 		}
 	}
 }
 
-// drawImage is drawRGBA for any other Dest, as vector's generic path.
-func (s *ScannerGV) drawImage(r image.Rectangle) {
-	z := &s.z
-	w := z.win.Dx()
-	p := s.paint
-	sr, sg, sb, sa := uint32(p.Color.R), uint32(p.Color.G), uint32(p.Color.B), uint32(p.Color.A)
-	for y := r.Min.Y; y < r.Max.Y; y++ {
-		mask := z.u32[(y-z.win.Min.Y)*w:]
-		for x := r.Min.X; x < r.Max.X; x++ {
-			ma := mask[x-z.win.Min.X]
-			if ma == 0 {
-				continue
-			}
-			if p.Func != nil {
-				c := p.Func(s.Offset.X+x, s.Offset.Y+y)
-				sr, sg, sb, sa = uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
-			}
-			dx, dy := s.Targ.Min.X+x, s.Targ.Min.Y+y
-			dr, dg, db, da := s.Dest.At(dx, dy).RGBA()
-			a := 0xffff - (sa * ma / 0xffff)
-			s.Dest.Set(dx, dy, color.RGBA64{
-				uint16((dr*a + sr*ma) / 0xffff),
-				uint16((dg*a + sg*ma) / 0xffff),
-				uint16((db*a + sb*ma) / 0xffff),
-				uint16((da*a + sa*ma) / 0xffff),
-			})
+// blend draws c through the mask's alphas over the pixels p, four bytes
+// to an alpha.
+func blend(p []uint8, mask []uint32, c color.RGBA64) {
+	sr, sg, sb, sa := uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
+	for i, ma := range mask {
+		if ma == 0 {
+			continue
 		}
+		q := p[4*i : 4*i+4 : 4*i+4]
+		if ma == 0xffff && sa == 0xffff {
+			q[0], q[1], q[2], q[3] = uint8(sr>>8), uint8(sg>>8), uint8(sb>>8), 0xff
+			continue
+		}
+		a := 0xffff - (sa * ma / 0xffff)
+		q[0] = uint8(uint16((uint32(q[0])*0x101*a+sr*ma)/0xffff) >> 8)
+		q[1] = uint8(uint16((uint32(q[1])*0x101*a+sg*ma)/0xffff) >> 8)
+		q[2] = uint8(uint16((uint32(q[2])*0x101*a+sb*ma)/0xffff) >> 8)
+		q[3] = uint8(uint16((uint32(q[3])*0x101*a+sa*ma)/0xffff) >> 8)
 	}
 }
 
@@ -279,16 +237,17 @@ func (s *ScannerGV) Clear() {
 	s.minX, s.minY, s.maxX, s.maxY = mxfi, mxfi, -mxfi, -mxfi
 }
 
-// SetBounds sets the maximum width and height of the rasterized image and
-// calls Clear. The width and height are in pixels, not fixed.Int26_6 units.
+// SetBounds sets the maximum width and height of the rasterized image. The
+// width and height are in pixels, not fixed.Int26_6 units.
 func (s *ScannerGV) SetBounds(width, height int) {
 	s.size = image.Point{width, height}
 }
 
 // NewScannerGV creates a new Scanner with the given bounds.
-func NewScannerGV(width, height int, dest draw.Image,
+func NewScannerGV(width, height int, dest *image.RGBA,
 	targ image.Rectangle) *ScannerGV {
 	s := new(ScannerGV)
+	s.Clear()
 	s.SetBounds(width, height)
 	s.Dest = dest
 	s.Targ = targ

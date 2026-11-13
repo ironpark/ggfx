@@ -8,9 +8,6 @@ import (
 	"image"
 	"strings"
 	"testing"
-
-	"github.com/ironpark/ggfx"
-	"github.com/ironpark/ggfx/svg"
 )
 
 // rectsSVG is n 4 by 4 rects on a grid in a 100 by 100 viewBox, filled
@@ -22,7 +19,6 @@ func rectsSVG(n int, gradient bool) string {
 // shapesSVG is rectsSVG with each rect holding a hole, filled with rule.
 func shapesSVG(n int, gradient bool, rule string) string {
 	var b strings.Builder
-	b.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">`)
 	fill := "#c33"
 	if gradient {
 		b.WriteString(`<defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs>`)
@@ -39,18 +35,13 @@ func shapesSVG(n int, gradient bool, rule string) string {
 			fmt.Fprintf(&b, `<path d="M%d,%d h4 v4 h-4 z m1,1 h2 v2 h-2 z" fill="%s" fill-rule="%s"/>`, x, y, fill, rule)
 		}
 	}
-	b.WriteString(`</svg>`)
-	return b.String()
+	return goldenDoc(b.String())
 }
 
 func benchmarkDraw(b *testing.B, src string, size int) {
-	d, err := svg.Parse(strings.NewReader(src))
-	if err != nil {
-		b.Fatal(err)
-	}
+	d := parse(b, src)
 	dst := image.NewRGBA(image.Rect(0, 0, size, size))
-	var g ggfx.GeoM
-	g.Scale(float64(size)/100, float64(size)/100)
+	g := scale(float64(size) / 100)
 	b.ReportAllocs()
 	for b.Loop() {
 		d.Draw(dst, g)

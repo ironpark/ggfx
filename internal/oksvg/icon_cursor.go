@@ -38,8 +38,7 @@ func (c *iconCursor) ReadGradURL(v string, defaultColor paint) (grad *rasterx.Gr
 			var g *rasterx.Gradient
 			g, ok = c.icon.Grads[urlStr[1:]]
 			if ok {
-				l := localizeGradIfStopClrNil(g, defaultColor)
-				grad = &l
+				grad = localizeGradIfStopClrNil(g, defaultColor)
 			}
 		}
 	}
@@ -225,18 +224,18 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 			curStyle.linerColor = paint{}
 		}
 	case "fill-rule", "clip-rule":
-		var evenOdd bool
+		var nonZero bool
 		switch v {
-		case "evenodd":
-			evenOdd = true
 		case "nonzero":
+			nonZero = true
+		case "evenodd":
 		default: // inherit, or what is not a rule
 			return nil
 		}
 		if k == "fill-rule" {
-			curStyle.UseNonZeroWinding = !evenOdd
+			curStyle.UseNonZeroWinding = nonZero
 		} else {
-			curStyle.evenOddClip = evenOdd
+			curStyle.nonZeroClip = nonZero
 		}
 	case "stroke-linegap":
 		switch v {

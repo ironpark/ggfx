@@ -43,43 +43,51 @@ func (c *iconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
 			paths[i].FillOpacity = 1
 			paths[i].clip = nil
 			// A clip's shapes are filled by its rule, not their fill's.
-			paths[i].UseNonZeroWinding = !paths[i].evenOddClip
+			paths[i].UseNonZeroWinding = paths[i].nonZeroClip
 		}
 	}
 	u.paths = paths
 	return nil
 }
 
-// maskImage is u drawn under t over r's target: how much each pixel lets
+// maskImage is u drawn under t over p's target: how much each pixel lets
 // through, in an image over just the part of the target u's shapes cover,
 // the rest letting nothing through, placed as the target's pixels are to
 // the paint.
-func (u *clipUse) maskImage(r *rasterx.Dasher, t rasterx.Matrix2D) *image.Alpha {
-	gv, ok := r.Scanner.(*rasterx.ScannerGV)
-	if !ok {
-		return nil
+func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D) *image.Alpha {
+	b := p.Scanner.Dest.Bounds()
+	if p.clips == nil {
+		p.clips = NewPainter(0, 0, nil, image.Rectangle{})
 	}
-	b := gv.Dest.Bounds()
-	// Find what the shapes cover, then draw them over just that.
-	scanner := rasterx.NewScannerGV(b.Dx(), b.Dy(), nil, b)
-	dasher := rasterx.NewDasher(b.Dx(), b.Dy(), scanner)
-	for i := range u.paths {
-		u.paths[i].DrawTransformed(dasher, 1, t)
+	c := p.clips
+	c.Dasher.SetBounds(b.Dx(), b.Dy())
+	c.Scanner.Targ = b
+	draw := func(dst *image.RGBA) {
+		c.Scanner.Dest, c.Scanner.Touched = dst, image.Rectangle{}
+		for i := range u.paths {
+			u.paths[i].DrawTransformed(c, 1, t)
+		}
 	}
-	area := scanner.Touched
-	drawn := image.NewRGBA(area)
-	scanner.Dest = drawn
-	for i := range u.paths {
-		u.paths[i].DrawTransformed(dasher, 1, t)
+	// Find the shapes' windows, without rasterizing them, then draw them
+	// over just those. A shape drawn all over, not in its window, is
+	// drawn again over all the shapes cover.
+	draw(nil)
+	area := c.Scanner.Touched
+	draw(c.scratch(area))
+	if !c.Scanner.Touched.In(area) {
+		area = c.Scanner.Touched
+		draw(c.scratch(area))
 	}
+	drawn := c.Scanner.Dest
+	c.Scanner.Dest = nil
 	mask := image.NewAlpha(area)
 	for i := 0; i < len(mask.Pix); i++ {
-		p := drawn.Pix[4*i : 4*i+4 : 4*i+4]
+		px := drawn.Pix[4*i : 4*i+4 : 4*i+4]
 		if u.def.mask {
 			// Premultiplied, so the light is already its alpha's.
-			mask.Pix[i] = uint8((2126*uint32(p[0]) + 7152*uint32(p[1]) + 722*uint32(p[2])) / 10000)
+			mask.Pix[i] = uint8((2126*uint32(px[0]) + 7152*uint32(px[1]) + 722*uint32(px[2])) / 10000)
 		} else {
-			mask.Pix[i] = p[3]
+			mask.Pix[i] = px[3]
 		}
 	}
 	// The paint is asked its color in the target's own coordinates, from
@@ -93,21 +101,16 @@ func through(paint rasterx.Paint, mask *image.Alpha) rasterx.Paint {
 	if mask == nil {
 		return paint
 	}
-	at := func(c color.RGBA64, a uint32) color.RGBA64 {
-		r, g, b, ca := uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
-		return color.RGBA64{uint16(r * a / 255), uint16(g * a / 255), uint16(b * a / 255), uint16(ca * a / 255)}
-	}
-	if f := paint.Func; f != nil {
-		return rasterx.FuncPaint(func(x, y int) color.RGBA64 {
-			a := uint32(mask.AlphaAt(x, y).A)
-			if a == 0 {
-				return color.RGBA64{}
-			}
-			return at(f(x, y), a)
-		})
-	}
-	c := paint.Color
+	f, c := paint.Func, paint.Color
 	return rasterx.FuncPaint(func(x, y int) color.RGBA64 {
-		return at(c, uint32(mask.AlphaAt(x, y).A))
+		a := uint32(mask.AlphaAt(x, y).A)
+		if a == 0 {
+			return color.RGBA64{}
+		}
+		c := c
+		if f != nil {
+			c = f(x, y)
+		}
+		return color.RGBA64{uint16(uint32(c.R) * a / 255), uint16(uint32(c.G) * a / 255), uint16(uint32(c.B) * a / 255), uint16(uint32(c.A) * a / 255)}
 	})
 }

@@ -4,41 +4,35 @@
 package svg_test
 
 import (
-	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
-	"flag"
-	"fmt"
 	"image"
-	"image/png"
-	"os"
-	"path/filepath"
-	"runtime"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/goldentest"
 	"github.com/ironpark/ggfx/svg"
 )
 
 // The goldens pin what Draw draws, byte for byte, as a hash of the pixels
-// of each document drawn each way. They differ by GOARCH: arm64 fuses
-// multiplies and adds that amd64 and wasm do not, and x/image/vector's
-// floating-point accumulator, which the rasterizer follows, sums in a
-// different order on amd64.
-var (
-	update = flag.Bool("golden.update", false, "rewrite this GOARCH's goldens in testdata/golden.txt")
-	dump   = flag.String("golden.dump", "", "write each mismatching drawing as a PNG into this directory")
-)
+// of each document drawn each way, per GOARCH; see goldentest.
+var goldens = goldentest.File{
+	Path:   "testdata/golden.txt",
+	Header: "# case GOARCH sha256[:12] of the pixels; go test ./svg -run TestGolden -golden.update",
+}
 
-const goldenFile = "testdata/golden.txt"
+func TestMain(m *testing.M) { goldens.Main(m) }
 
 // goldenView is a way of drawing a document of a 100 by 100 viewBox.
 type goldenView struct {
 	name   string
 	bounds image.Rectangle
 	geoM   func(*ggfx.GeoM)
+}
+
+func (v goldenView) transform() ggfx.GeoM {
+	var g ggfx.GeoM
+	v.geoM(&g)
+	return g
 }
 
 // The vector rasterizer accumulates in fixed point up to 512 pixels a
@@ -60,9 +54,12 @@ var goldenViews = []goldenView{
 	}},
 }
 
-func goldenDoc(body string) string {
-	return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 100">` + body + `</svg>`
+// svgDoc is a document of body in viewBox.
+func svgDoc(viewBox, body string) string {
+	return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="` + viewBox + `">` + body + `</svg>`
 }
+
+func goldenDoc(body string) string { return svgDoc("0 0 100 100", body) }
 
 var goldenDocs = []struct{ name, src string }{
 	{"solid", goldenDoc(`
@@ -312,122 +309,39 @@ const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
 <circle cx="50" cy="50" r="46" fill="none" stroke="#a65c00" stroke-width="2"/>
 </svg>`
 
-func goldenDraw(t testing.TB, src string, v goldenView) *image.RGBA {
+// parse parses src, failing tb if it cannot.
+func parse(tb testing.TB, src string) *svg.Document {
+	tb.Helper()
 	d, err := svg.Parse(strings.NewReader(src))
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	dst := image.NewRGBA(v.bounds)
-	var g ggfx.GeoM
-	v.geoM(&g)
+	return d
+}
+
+// drawInto draws d into a new image of bounds r through g.
+func drawInto(d *svg.Document, r image.Rectangle, g ggfx.GeoM) *image.RGBA {
+	dst := image.NewRGBA(r)
 	d.Draw(dst, g)
 	return dst
 }
 
-func goldenHash(img *image.RGBA) string {
-	h := sha256.New()
-	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
-		i := img.PixOffset(img.Rect.Min.X, y)
-		h.Write(img.Pix[i : i+4*img.Rect.Dx()])
-	}
-	return hex.EncodeToString(h.Sum(nil)[:12])
-}
-
-// readGoldens reads lines of "case arch hash".
-func readGoldens(t *testing.T) map[string]map[string]string {
-	g := map[string]map[string]string{}
-	f, err := os.Open(goldenFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return g
-		}
-		t.Fatal(err)
-	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		fs := strings.Fields(s.Text())
-		if len(fs) != 3 || strings.HasPrefix(fs[0], "#") {
-			continue
-		}
-		if g[fs[0]] == nil {
-			g[fs[0]] = map[string]string{}
-		}
-		g[fs[0]][fs[1]] = fs[2]
-	}
-	if err := s.Err(); err != nil {
-		t.Fatal(err)
-	}
+// scale is a GeoM scaling by s.
+func scale(s float64) ggfx.GeoM {
+	var g ggfx.GeoM
+	g.Scale(s, s)
 	return g
 }
 
-func writeGoldens(t *testing.T, g map[string]map[string]string) {
-	var b strings.Builder
-	b.WriteString("# case GOARCH sha256[:12] of the pixels; go test ./svg -run TestGolden -golden.update\n")
-	for _, name := range slices.Sorted(func(yield func(string) bool) {
-		for k := range g {
-			if !yield(k) {
-				return
-			}
-		}
-	}) {
-		for _, arch := range slices.Sorted(func(yield func(string) bool) {
-			for k := range g[name] {
-				if !yield(k) {
-					return
-				}
-			}
-		}) {
-			fmt.Fprintf(&b, "%s %s %s\n", name, arch, g[name][arch])
-		}
-	}
-	if err := os.WriteFile(goldenFile, []byte(b.String()), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestGolden(t *testing.T) {
-	goldens := readGoldens(t)
-	arch := runtime.GOARCH
-	missing := 0
 	for _, doc := range goldenDocs {
-		for _, v := range goldenViews {
-			name := doc.name + "/" + v.name
-			got := goldenHash(goldenDraw(t, doc.src, v))
-			if *update {
-				if goldens[name] == nil {
-					goldens[name] = map[string]string{}
-				}
-				goldens[name][arch] = got
-				continue
+		t.Run(doc.name, func(t *testing.T) {
+			d := parse(t, doc.src)
+			for _, v := range goldenViews {
+				t.Run(v.name, func(t *testing.T) {
+					goldens.Check(t, doc.name+"/"+v.name, drawInto(d, v.bounds, v.transform()))
+				})
 			}
-			want, ok := goldens[name][arch]
-			if !ok {
-				missing++
-				continue
-			}
-			if got != want {
-				t.Errorf("%s: drew %s; want %s", name, got, want)
-				if *dump != "" {
-					img := goldenDraw(t, doc.src, v)
-					p := filepath.Join(*dump, strings.ReplaceAll(name, "/", "_")+".png")
-					f, err := os.Create(p)
-					if err != nil {
-						t.Fatal(err)
-					}
-					if err := png.Encode(f, img); err != nil {
-						t.Fatal(err)
-					}
-					f.Close()
-				}
-			}
-		}
-	}
-	if *update {
-		writeGoldens(t, goldens)
-		return
-	}
-	if missing > 0 {
-		t.Skipf("%d cases have no golden for GOARCH=%s", missing, arch)
+		})
 	}
 }

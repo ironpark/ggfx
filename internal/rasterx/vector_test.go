@@ -56,9 +56,7 @@ func TestScannerDrawsAsVector(t *testing.T) {
 			for pi, paint := range paints {
 				name := fmt.Sprintf("%v/%d/%d", size, n, pi)
 				bg := randomImage(rnd, size)
-				want := bg.(*image.RGBA)
-				want = &image.RGBA{Pix: bytes.Clone(want.Pix), Stride: want.Stride, Rect: want.Rect}
-				got := &image.RGBA{Pix: bytes.Clone(want.Pix), Stride: want.Stride, Rect: want.Rect}
+				want, got := cloneRGBA(bg), cloneRGBA(bg)
 
 				z := vector.NewRasterizer(size.X, size.Y)
 				for _, p := range pts {
@@ -103,8 +101,7 @@ func TestScannerDrawsAsVector(t *testing.T) {
 					continue
 				}
 				s.SetWinding(false)
-				eo := &image.RGBA{Pix: bytes.Clone(bg.(*image.RGBA).Pix), Stride: want.Stride, Rect: want.Rect}
-				all := &image.RGBA{Pix: bytes.Clone(eo.Pix), Stride: want.Stride, Rect: want.Rect}
+				eo, all := cloneRGBA(bg), cloneRGBA(bg)
 				s.Dest = eo
 				s.Draw()
 				s.Dest = all
@@ -125,7 +122,11 @@ func (f funcImage) ColorModel() color.Model { return color.RGBA64Model }
 func (f funcImage) Bounds() image.Rectangle { return image.Rect(-1e9, -1e9, 1e9, 1e9) }
 func (f funcImage) At(x, y int) color.Color { return f(x, y) }
 
-func randomImage(rnd *rand.Rand, size image.Point) image.Image {
+func cloneRGBA(m *image.RGBA) *image.RGBA {
+	return &image.RGBA{Pix: bytes.Clone(m.Pix), Stride: m.Stride, Rect: m.Rect}
+}
+
+func randomImage(rnd *rand.Rand, size image.Point) *image.RGBA {
 	img := image.NewRGBA(image.Rectangle{Max: size})
 	rnd.Read(img.Pix)
 	for i := 0; i < len(img.Pix); i += 4 {
@@ -218,26 +219,18 @@ func randomPath(rnd *rand.Rand, size image.Point, kind int) []pathPoint {
 // non-zero rule draws it.
 func TestEvenOdd(t *testing.T) {
 	for _, size := range []image.Point{{40, 40}, {600, 40}} { // fixed and floating point
-		draw := func(evenOdd bool, rects ...[4]float32) *image.RGBA {
+		draw := func(evenOdd bool, rects ...[4]float64) *image.RGBA {
 			img := image.NewRGBA(image.Rectangle{Max: size})
-			s := NewScannerGV(size.X, size.Y, img, img.Bounds())
-			s.Clear()
-			s.SetWinding(!evenOdd)
-			s.SetPaint(ColorPaint(color.White))
+			f := NewFiller(size.X, size.Y, NewScannerGV(size.X, size.Y, img, img.Bounds()))
+			f.SetWinding(!evenOdd)
+			f.SetPaint(ColorPaint(color.White))
 			for _, r := range rects {
-				pt := func(x, y float32) fixed.Point26_6 {
-					return fixed.Point26_6{X: fixed.Int26_6(x * 64), Y: fixed.Int26_6(y * 64)}
-				}
-				s.Start(pt(r[0], r[1]))
-				s.Line(pt(r[2], r[1]))
-				s.Line(pt(r[2], r[3]))
-				s.Line(pt(r[0], r[3]))
-				s.Line(pt(r[0], r[1]))
+				AddRect(r[0], r[1], r[2], r[3], 0, f)
 			}
-			s.Draw()
+			f.Draw()
 			return img
 		}
-		ring := [][4]float32{{5, 5, 35, 35}, {15, 15, 25, 25}}
+		ring := [][4]float64{{5, 5, 35, 35}, {15, 15, 25, 25}}
 		eo, nz := draw(true, ring...), draw(false, ring...)
 		for _, tc := range []struct {
 			x, y   int
@@ -253,12 +246,12 @@ func TestEvenOdd(t *testing.T) {
 			}
 		}
 		// Abutting at a half pixel, the pixel is covered once.
-		if a := draw(true, [4]float32{5, 5, 20.5, 35}, [4]float32{20.5, 5, 35, 35}).RGBAAt(20, 20).A; a != 0xff {
+		if a := draw(true, [4]float64{5, 5, 20.5, 35}, [4]float64{20.5, 5, 35, 35}).RGBAAt(20, 20).A; a != 0xff {
 			t.Errorf("%v: where two squares meet: alpha %#x; want opaque", size, a)
 		}
 		// Overlapping by half a pixel, the pixel is covered one and a
 		// half times: half, by the even-odd rule.
-		if a := draw(true, [4]float32{5, 5, 20.5, 35}, [4]float32{20, 5, 35, 35}).RGBAAt(20, 20).A; a < 0x7f || a > 0x80 {
+		if a := draw(true, [4]float64{5, 5, 20.5, 35}, [4]float64{20, 5, 35, 35}).RGBAAt(20, 20).A; a < 0x7f || a > 0x80 {
 			t.Errorf("%v: where two squares overlap by half a pixel: alpha %#x; want half", size, a)
 		}
 	}

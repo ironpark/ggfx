@@ -3,23 +3,13 @@
 package rasterx_test
 
 import (
-	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
-	"flag"
-	"fmt"
 	"image"
 	"image/color"
-	"image/png"
 	"math"
-	"os"
-	"path/filepath"
-	"runtime"
 	"slices"
-	"strings"
-	"sync"
 	"testing"
 
+	"github.com/ironpark/ggfx/internal/goldentest"
 	. "github.com/ironpark/ggfx/internal/rasterx"
 	"golang.org/x/image/colornames"
 	"golang.org/x/image/math/fixed"
@@ -158,118 +148,12 @@ func BenchmarkDashGV(b *testing.B) {
 // The original tests wrote these drawings to testdata to be looked at;
 // here each is pinned by a hash of its pixels, per GOARCH as for the svg
 // package's goldens.
-var (
-	update = flag.Bool("golden.update", false, "rewrite this GOARCH's goldens in testdata/golden.txt")
-	dump   = flag.String("golden.dump", "", "write each mismatching drawing as a PNG into this directory")
-)
-
-const goldenFile = "testdata/golden.txt"
-
-var goldens struct {
-	sync.Mutex
-	read    bool
-	hashes  map[string]map[string]string
-	changed bool
+var goldens = goldentest.File{
+	Path:   "testdata/golden.txt",
+	Header: "# drawing GOARCH sha256[:12] of the pixels; go test ./internal/rasterx -golden.update",
 }
 
-func TestMain(m *testing.M) {
-	flag.Parse()
-	code := m.Run()
-	if *update && goldens.changed {
-		if err := writeGoldens(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			code = 1
-		}
-	}
-	os.Exit(code)
-}
-
-func readGoldens() error {
-	goldens.hashes = map[string]map[string]string{}
-	goldens.read = true
-	f, err := os.Open(goldenFile)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		fs := strings.Fields(s.Text())
-		if len(fs) != 3 || strings.HasPrefix(fs[0], "#") {
-			continue
-		}
-		if goldens.hashes[fs[0]] == nil {
-			goldens.hashes[fs[0]] = map[string]string{}
-		}
-		goldens.hashes[fs[0]][fs[1]] = fs[2]
-	}
-	return s.Err()
-}
-
-func writeGoldens() error {
-	var b strings.Builder
-	b.WriteString("# drawing GOARCH sha256[:12] of the pixels; go test ./internal/rasterx -golden.update\n")
-	names := make([]string, 0, len(goldens.hashes))
-	for k := range goldens.hashes {
-		names = append(names, k)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		archs := make([]string, 0, len(goldens.hashes[name]))
-		for k := range goldens.hashes[name] {
-			archs = append(archs, k)
-		}
-		slices.Sort(archs)
-		for _, arch := range archs {
-			fmt.Fprintf(&b, "%s %s %s\n", name, arch, goldens.hashes[name][arch])
-		}
-	}
-	return os.WriteFile(goldenFile, []byte(b.String()), 0o644)
-}
-
-// checkGolden compares img with the golden drawing called name.
-func checkGolden(t *testing.T, name string, img *image.RGBA) {
-	t.Helper()
-	goldens.Lock()
-	defer goldens.Unlock()
-	if !goldens.read {
-		if err := readGoldens(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	h := sha256.Sum256(img.Pix)
-	got := hex.EncodeToString(h[:12])
-	arch := runtime.GOARCH
-	if *update {
-		if goldens.hashes[name] == nil {
-			goldens.hashes[name] = map[string]string{}
-		}
-		goldens.hashes[name][arch] = got
-		goldens.changed = true
-		return
-	}
-	want, ok := goldens.hashes[name][arch]
-	if !ok {
-		t.Logf("%s: no golden for GOARCH=%s", name, arch)
-		return
-	}
-	if got != want {
-		t.Errorf("%s: drew %s; want %s", name, got, want)
-		if *dump != "" {
-			f, err := os.Create(filepath.Join(*dump, name+".png"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer f.Close()
-			if err := png.Encode(f, img); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-}
+func TestMain(m *testing.M) { goldens.Main(m) }
 
 func TestRoundRect(t *testing.T) {
 	var (
@@ -307,7 +191,7 @@ func TestRoundRect(t *testing.T) {
 		f.Draw()
 		f.Clear()
 	}
-	checkGolden(t, "roundRect", img)
+	goldens.Check(t, "roundRect", img)
 }
 
 func isClose(a, b Matrix2D, epsilon float64) bool {
@@ -503,7 +387,7 @@ func TestShapes(t *testing.T) {
 	scannerGV.Dest = imgs
 	s.Draw()
 	s.Clear()
-	checkGolden(t, "shapeT1", imgs)
+	goldens.Check(t, "shapeT1", imgs)
 
 	s.SetStroke(4<<6, 2<<6, SquareCap, nil, RoundGap, ArcClip)
 	getOpenCubicPath2().AddTo(s)
@@ -511,7 +395,7 @@ func TestShapes(t *testing.T) {
 	scannerGV.Dest = imgs
 	s.Draw()
 	s.Clear()
-	checkGolden(t, "shapeT2", imgs)
+	goldens.Check(t, "shapeT2", imgs)
 
 	s.SetStroke(25<<6, 200<<6, CubicCap, CubicCap, CubicGap, ArcClip)
 	p := getOpenCubicPath2()
@@ -520,7 +404,7 @@ func TestShapes(t *testing.T) {
 	scannerGV.Dest = imgs
 	s.Draw()
 	s.Clear()
-	checkGolden(t, "shapeT3", imgs)
+	goldens.Check(t, "shapeT3", imgs)
 
 	d.SetBounds(-20, -12) // Test min x and y value checking
 }
@@ -569,7 +453,7 @@ func doShapes(t *testing.T, f Scanner, fa Adder, name string, img *image.RGBA) {
 	f.Draw()
 	f.Clear()
 
-	checkGolden(t, name, img)
+	goldens.Check(t, name, img)
 }
 
 func TestFindElipsecenter(t *testing.T) {
@@ -713,7 +597,7 @@ func TestGradient(t *testing.T) {
 	f.Draw()
 	f.Clear()
 
-	checkGolden(t, "gradGV", img)
+	goldens.Check(t, "gradGV", img)
 }
 
 // TestMultiFunction tests a Dasher's ability to function
@@ -762,7 +646,7 @@ func TestMultiFunctionGV(t *testing.T) {
 	d.Draw()
 	d.Clear()
 
-	checkGolden(t, "tmfGV", img)
+	goldens.Check(t, "tmfGV", img)
 }
 
 // A drawing the size of the destination's floating-point accumulator, and
@@ -801,7 +685,7 @@ func TestLargeAndOffsetDestinations(t *testing.T) {
 		AddCircle(350, 300, 220, &d.Filler)
 		d.Draw()
 		d.Clear()
-		checkGolden(t, "dest-"+tc.name, img)
+		goldens.Check(t, "dest-"+tc.name, img)
 	}
 }
 
@@ -829,7 +713,7 @@ func TestTranslucentColors(t *testing.T) {
 	AddRect(100, 60, 190, 90, 0, f)
 	f.Draw()
 	f.Clear()
-	checkGolden(t, "translucent", img)
+	goldens.Check(t, "translucent", img)
 }
 
 // ApplyOpacity gives back an 8-bit color as it was, whatever its alpha,
@@ -873,9 +757,7 @@ func TestGradientBlendsTranslucentStops(t *testing.T) {
 		}}
 	g.Points = [5]float64{0, 0, 100, 0, 0}
 	got := g.GetColorFunction(1).Func(49, 0) // t = 0.495
-	r, g2, b, a := color.NRGBA{0x81, 0, 0x7e, 0xbe}.RGBA()
-	want := color.RGBA64{uint16(r), uint16(g2), uint16(b), uint16(a)}
-	if got != want {
+	if want := ColorPaint(color.NRGBA{0x81, 0, 0x7e, 0xbe}).Color; got != want {
 		t.Errorf("halfway: %v; want %v", got, want)
 	}
 }

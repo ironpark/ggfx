@@ -102,6 +102,13 @@ included.
   or skew it is the transformed shape's box, not its user space one.
 - Color names are converted by their 8-bit components, not by the low
   byte of their 16-bit ones (the same for opaque colors).
+- An icon is drawn with a `Painter`, in place of a `rasterx.Dasher`: the
+  dasher and its `rasterx.ScannerGV`, the transform each path is placed
+  by, and a second scanner, dasher and image that clips and masks are
+  drawn with, all kept between paths and drawings instead of made for
+  each. A clip's or mask's extent is found from its shapes' windows
+  without rasterizing them, and its shapes drawn again over all they
+  cover only where one of them is drawn over the whole target.
 
 ## Missing features for OpenType SVG
 
