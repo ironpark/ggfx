@@ -17,12 +17,16 @@ import (
 )
 
 // maxVectorDiff is how far, in any byte, the scanner may draw from
-// vector's Rasterizer. It sums each row on its own; vector all its mask
-// at once, each row's rounding error carried into the rows under it,
-// which in fixed point, after many rows, can show.
-const maxVectorDiff = 3
+// vector's Rasterizer in floating point. Both accumulate in float32, but
+// vector sums all its mask at once and steps x from row to row, where the
+// scanner sums each row on its own and finds x from each line's start.
+const maxVectorDiff = 1
 
-// The scanner draws what vector's Rasterizer, sized to the target, draws,
+// floatingPointMathThreshold is the width or height above which vector's
+// Rasterizer accumulates in floating point rather than fixed point.
+const floatingPointMathThreshold = 512
+
+// The scanner draws what vector's Rasterizer draws in floating point,
 // within maxVectorDiff; and a part of the target, clipped, exactly as it
 // draws the whole, by either rule.
 func TestScannerDrawsAsVector(t *testing.T) {
@@ -46,15 +50,11 @@ func TestScannerDrawsAsVector(t *testing.T) {
 
 				// vector's mask is one buffer, a row's coverage past its
 				// end the next row's: it is drawn wide enough to hold the
-				// path, if that keeps it in the target's fixed or
-				// floating point.
-				vw := size.X
+				// path, and at least 513 pixels wide, so that it is in
+				// floating point, as the scanner is at every size.
+				vw := max(size.X, floatingPointMathThreshold+1)
 				for _, p := range pts {
 					vw = max(vw, int(p.x)+3)
-				}
-				leaks := vw > floatingPointMathThreshold && size.X <= floatingPointMathThreshold && size.Y <= floatingPointMathThreshold
-				if leaks {
-					vw = size.X
 				}
 				z := vector.NewRasterizer(vw, size.Y)
 				for _, p := range pts {
@@ -85,9 +85,7 @@ func TestScannerDrawsAsVector(t *testing.T) {
 					}
 				}
 				s.Draw()
-				if d := maxByteDiff(got.Pix, want.Pix); leaks {
-					// vector draws what leaks wrong.
-				} else if d > maxVectorDiff {
+				if d := maxByteDiff(got.Pix, want.Pix); d > maxVectorDiff {
 					t.Errorf("%s: drew up to %d from vector", name, d)
 				} else {
 					worst = max(worst, d)

@@ -73,8 +73,10 @@ func (m *viewM) Skew(skewX, skewY float64) {
 	}
 }
 
-// The vector rasterizer accumulates in fixed point up to 512 pixels a
-// side, and in floating point past that: the views straddle it.
+// The views are small and large, some past 512 pixels a side, where
+// x/image/vector, which the rasterizer was ported from, would have changed
+// from fixed point to floating point; it accumulates in floating point at
+// every size.
 var goldenViews = []goldenView{
 	{"s24", image.Rect(0, 0, 24, 24), func(g *viewM) { g.Scale(0.24, 0.24) }},
 	{"s64", image.Rect(0, 0, 64, 48), func(g *viewM) { g.Scale(0.64, 0.64); g.Translate(0.37, -3.61) }},

@@ -161,7 +161,7 @@ func (s *ScannerGV) window() image.Rectangle {
 // rasterize accumulates the path's cells in win.
 func (s *ScannerGV) rasterize(win image.Rectangle) {
 	z := &s.z
-	z.reset(s.size, win, s.evenOdd)
+	z.reset(win, s.evenOdd)
 	var penX, penY float32
 	for _, p := range s.pts {
 		if !p.move {

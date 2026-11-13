@@ -18,20 +18,27 @@ below.
   `Rasterizer`, sized to the target, which made each path cost the
   target's whole area. `raster.go` ports its line rasterization, under the
   Go Authors' BSD license (see NOTICE.md), to accumulate only a window
-  around the path's extent, clipped to what is drawn: in fixed point up to
-  512 pixels a side and in floating point past that, as vector chooses,
-  but each row summed on its own, from 0 at its start, in one scalar
-  order. Coverage left of the window starts a row's sum, and coverage
-  past the right edge falls in a spare cell past the row's end, where
-  vector carried it into the next row's first pixel; so the window's mask
-  is the whole target's whatever part of the path it holds (in floating
-  point, but for the order the cells left of it are added in), with no
-  fallback to accumulating the whole target, and the same on every
-  architecture, where vector's amd64 assembly summed in an order of its
-  own. A path's lines must enclose, as a `Filler`'s and a `Stroker`'s do:
-  what an open path would cover past its right end is not drawn.
-  `TestScannerDrawsAsVector` checks the result against vector's on random
-  paths, within `maxVectorDiff`, and a clipped draw against the whole.
+  around the path's extent, clipped to what is drawn. Only vector's
+  floating-point accumulator is ported, used at every size: its fixed
+  point, which vector chose up to 512 pixels a side, stepped x down a
+  line row by row, rounding each step the same way, and along a long
+  steep edge drifted by most of a pixel. Each row is summed on its own,
+  from 0 at its start, in one scalar order, and where a line enters and
+  leaves a row is found from the line's start, not stepped to from the
+  row above, so rows above the window are skipped. Coverage left of the
+  window starts a row's sum, and coverage past the right edge falls in a
+  spare cell past the row's end, where vector carried it into the next
+  row's first pixel; so the window's mask is the whole target's whatever
+  part of the path it holds (but for the order the cells left of it are
+  added in), with no fallback to accumulating the whole target, and the
+  same on every architecture, where vector's amd64 assembly summed in an
+  order of its own. A path's lines must enclose, as a `Filler`'s and a
+  `Stroker`'s do: what an open path would cover past its right end is not
+  drawn. `TestCoverageIsExact` checks the mask against polygons' exact
+  per-pixel areas, long steep edges and slivers among them, within 1e-4
+  of full coverage; `TestScannerDrawsAsVector` checks the result against
+  vector's, in floating point, on random paths, within one in each byte
+  (`maxVectorDiff`), and a clipped draw against the whole.
   The scanner keeps the path's points until `Draw`, which draws only the
   pixels the mask covers, with the arithmetic of vector's `Draw`.
 - No multiplication is fused with an addition: each product that is
@@ -73,7 +80,7 @@ below.
   where the original intersected the ray with the circle and took two
   more.
 - The even-odd fill rule: `ScannerGV.SetWinding(false)` folds the
-  accumulated coverage modulo 2, in fixed and floating point, where the
+  accumulated coverage modulo 2, where the
   original ignored it. The non-zero rule clamps it to 1, as vector does.
 - `ApplyOpacity` returns the color not premultiplied, its alpha scaled by
   the opacity and clamped to [0, 1]. The original took the low byte of
