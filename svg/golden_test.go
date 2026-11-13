@@ -250,6 +250,47 @@ var goldenDocs = []struct{ name, src string }{
 	{"classes", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><style>.a{fill:#c60;stroke:#000;stroke-width:2}.b{fill:#06c;opacity:0.5}</style></defs>
 <rect class="a" x="10" y="10" width="50" height="50"/><circle class="b" cx="60" cy="60" r="30"/></svg>`},
 	{"icon", iconSVG},
+	{"evenodd", goldenDoc(`
+<defs><style>.eo{fill-rule:evenodd}</style></defs>
+<polygon points="25,5 36.76,41.18 5.98,18.82 44.02,18.82 13.24,41.18" fill="#36c" fill-rule="evenodd"/>
+<polygon points="75,5 86.76,41.18 55.98,18.82 94.02,18.82 63.24,41.18" fill="#c63" fill-rule="nonzero"/>
+<path d="M5,50 h30 v30 h-30 z M12,57 h16 v16 h-16 z" fill="#393" fill-rule="evenodd"/>
+<path d="M40,50 h30 v30 h-30 z M47,57 v16 h16 v-16 z" fill="#939"/>
+<g fill-rule="evenodd"><path d="M75,55 a10,10 0 1 0 0.01,0 z M85,62 a10,10 0 1 0 0.01,0 z" fill="#c90" fill-opacity="0.8"/></g>
+<path class="eo" d="M5,85 h20.5 v10 h-20.5 z M25.5,85 h20 v10 h-20 z M15,87 h20 v6 h-20 z" fill="#069"/>
+<polygon style="fill-rule:evenodd" points="72,78 77.88,96.09 62.49,84.91 81.51,84.91 66.12,96.09" fill="#6c6" stroke="#000" stroke-width="2"/>`)},
+	{"cliprule", goldenDoc(`
+<defs>
+<clipPath id="star"><polygon points="25,5 36.76,41.18 5.98,18.82 44.02,18.82 13.24,41.18" clip-rule="evenodd"/></clipPath>
+<clipPath id="ring" clip-rule="evenodd"><path d="M55,5 h40 v40 h-40 z M65,15 h20 v20 h-20 z"/></clipPath>
+<clipPath id="fillrule"><path d="M5,55 h40 v40 h-40 z M15,65 h20 v20 h-20 z" fill-rule="evenodd"/></clipPath>
+<mask id="m"><path d="M55,55 h40 v40 h-40 z M65,65 h20 v20 h-20 z" fill="#fff" fill-rule="evenodd"/></mask>
+</defs>
+<rect width="50" height="50" fill="#c33" clip-path="url(#star)"/>
+<rect x="50" width="50" height="50" fill="#33c" clip-path="url(#ring)"/>
+<rect y="50" width="50" height="50" fill="#3c3" clip-path="url(#fillrule)"/>
+<rect x="50" y="50" width="50" height="50" fill="#cc3" mask="url(#m)"/>`)},
+	{"stop-order", goldenDoc(`
+<defs>
+<linearGradient id="back"><stop offset="0.6" stop-color="#f00"/><stop offset="0.3" stop-color="#0f0"/><stop offset="0.9" stop-color="#00f"/></linearGradient>
+<linearGradient id="range"><stop offset="-0.5" stop-color="#ff0"/><stop offset="1.5" stop-color="#0ff"/></linearGradient>
+<linearGradient id="hard"><stop offset="0" stop-color="#000"/><stop offset="0.5" stop-color="#f80"/><stop offset="0.5" stop-color="#08f"/><stop offset="1" stop-color="#fff"/></linearGradient>
+<linearGradient id="rep" x2="0.25" spreadMethod="repeat"><stop offset="0" stop-color="#f0f"/><stop offset="1" stop-color="#0f0"/></linearGradient>
+</defs>
+<rect x="5" y="5" width="90" height="20" fill="url(#back)"/>
+<rect x="5" y="28" width="90" height="20" fill="url(#range)"/>
+<rect x="5" y="51" width="90" height="20" fill="url(#hard)"/>
+<rect x="5" y="74" width="90" height="20" fill="url(#rep)" fill-opacity="0.5"/>`)},
+	{"grad-in-mask", goldenDoc(`
+<mask id="m"><linearGradient id="fade"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><rect width="100" height="40" fill="url(#fade)"/></mask>
+<rect width="100" height="40" fill="#c00" mask="url(#m)"/>
+<defs><g id="later"><rect width="20" height="20" fill="#06c"/></g></defs>
+<use href="#later" x="40" y="60"/>`)},
+	{"stroke-bbox", goldenDoc(`
+<defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="0.5" stop-color="#ff0"/><stop offset="1" stop-color="#00f"/></linearGradient>
+<radialGradient id="r"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#080"/></radialGradient></defs>
+<rect x="15" y="10" width="70" height="30" fill="url(#g)" stroke="url(#g)" stroke-width="16"/>
+<path d="M15,60 L85,60 L50,92 Z" fill="none" stroke="url(#r)" stroke-width="12" stroke-linejoin="round"/>`)},
 }
 
 // iconSVG is a small icon in the style of an emoji glyph: a few paths, a

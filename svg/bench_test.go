@@ -16,6 +16,11 @@ import (
 // rectsSVG is n 4 by 4 rects on a grid in a 100 by 100 viewBox, filled
 // with a color or a gradient.
 func rectsSVG(n int, gradient bool) string {
+	return shapesSVG(n, gradient, "")
+}
+
+// shapesSVG is rectsSVG with each rect holding a hole, filled with rule.
+func shapesSVG(n int, gradient bool, rule string) string {
 	var b strings.Builder
 	b.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">`)
 	fill := "#c33"
@@ -28,7 +33,11 @@ func rectsSVG(n int, gradient bool) string {
 		if n > 1 {
 			x, y = i%10*10+3, i/10*10+3
 		}
-		fmt.Fprintf(&b, `<rect x="%d" y="%d" width="4" height="4" fill="%s"/>`, x, y, fill)
+		if rule == "" {
+			fmt.Fprintf(&b, `<rect x="%d" y="%d" width="4" height="4" fill="%s"/>`, x, y, fill)
+		} else {
+			fmt.Fprintf(&b, `<path d="M%d,%d h4 v4 h-4 z m1,1 h2 v2 h-2 z" fill="%s" fill-rule="%s"/>`, x, y, fill, rule)
+		}
 	}
 	b.WriteString(`</svg>`)
 	return b.String()
@@ -56,6 +65,13 @@ func BenchmarkDraw(b *testing.B) {
 					benchmarkDraw(b, rectsSVG(n, paint == "gradient"), size)
 				})
 			}
+		}
+	}
+	for _, rule := range []string{"nonzero", "evenodd"} {
+		for _, size := range []int{64, 1024} {
+			b.Run(fmt.Sprintf("%s/rects=100/%d", rule, size), func(b *testing.B) {
+				benchmarkDraw(b, shapesSVG(100, false, rule), size)
+			})
 		}
 	}
 	for _, size := range []int{24, 256, 1024} {

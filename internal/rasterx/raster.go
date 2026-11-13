@@ -31,6 +31,7 @@ const floatingPointMathThreshold = 512
 type rasterizer struct {
 	size     image.Point
 	floating bool
+	evenOdd  bool // fill by the even-odd rule, not the non-zero one
 	win      image.Rectangle
 	u32      []uint32  // the window's cells, row by row, or its mask
 	f32      []float32 // the window's cells when floating
@@ -39,9 +40,11 @@ type rasterizer struct {
 	stray    bool // a cell outside win and left was written
 }
 
-// reset clears the window win of a mask of size.
-func (z *rasterizer) reset(size image.Point, win image.Rectangle) {
+// reset clears the window win of a mask of size, filled by the even-odd
+// rule or not.
+func (z *rasterizer) reset(size image.Point, win image.Rectangle, evenOdd bool) {
 	z.size = size
+	z.evenOdd = evenOdd
 	z.floating = size.X > floatingPointMathThreshold || size.Y > floatingPointMathThreshold
 	z.win = win
 	z.stray = false
@@ -403,6 +406,54 @@ func fixedMask(acc int2ϕ) uint32 {
 	return uint32(a)
 }
 
+// The even-odd rule folds the coverage, a sum of signed areas, modulo 2:
+// covered twice over is not covered, one and a half times is half. The
+// non-zero rule, vector's only, clamps it to 1.
+
+func fixedMaskEvenOdd(acc int2ϕ) uint32 {
+	a := acc
+	if a < 0 {
+		a = -a
+	}
+	a &= 1<<(2*ϕ+1) - 1
+	if a > 1<<(2*ϕ) {
+		a = 1<<(2*ϕ+1) - a
+	}
+	a >>= 2*ϕ - 16
+	if a > 0xffff {
+		a = 0xffff
+	}
+	return uint32(a)
+}
+
+func floatingMaskEvenOdd(acc float32) uint32 {
+	a := acc
+	if a < 0 {
+		a = -a
+	}
+	if a > 1 {
+		a -= 2 * float32(int32(a/2)) // exact: a/2 and its whole part are
+		if a > 1 {
+			a = 2 - a
+		}
+	}
+	return uint32(almost65536 * a)
+}
+
+func (z *rasterizer) fixedMask(acc int2ϕ) uint32 {
+	if z.evenOdd {
+		return fixedMaskEvenOdd(acc)
+	}
+	return fixedMask(acc)
+}
+
+func (z *rasterizer) floatingMask(acc float32) uint32 {
+	if z.evenOdd {
+		return floatingMaskEvenOdd(acc)
+	}
+	return floatingMask(acc)
+}
+
 func floatingMask(acc float32) uint32 {
 	a := acc
 	if a < 0 {
@@ -435,21 +486,28 @@ func (z *rasterizer) fixedAccumulate() bool {
 	for r := 0; r < h; r++ {
 		if split {
 			acc += int2ϕ(z.left[r])
-			if fixedMask(acc) >= faint {
+			if z.fixedMask(acc) >= faint {
 				return false
 			}
 		}
 		row := z.u32[r*w : r*w+w]
-		for i, v := range row {
-			acc += int2ϕ(v)
-			row[i] = fixedMask(acc)
+		if z.evenOdd {
+			for i, v := range row {
+				acc += int2ϕ(v)
+				row[i] = fixedMaskEvenOdd(acc)
+			}
+		} else {
+			for i, v := range row {
+				acc += int2ϕ(v)
+				row[i] = fixedMask(acc)
+			}
 		}
-		if z.win.Max.X < z.size.X && fixedMask(acc) >= faint {
+		if z.win.Max.X < z.size.X && z.fixedMask(acc) >= faint {
 			return false
 		}
 	}
 	acc += int2ϕ(z.left[h])
-	return z.win.Max.Y >= z.size.Y || fixedMask(acc) < faint
+	return z.win.Max.Y >= z.size.Y || z.fixedMask(acc) < faint
 }
 
 func (z *rasterizer) floatingAccumulate() bool {
@@ -459,22 +517,29 @@ func (z *rasterizer) floatingAccumulate() bool {
 	for r := 0; r < h; r++ {
 		if split {
 			acc += z.leftF[r]
-			if floatingMask(acc) >= faint {
+			if z.floatingMask(acc) >= faint {
 				return false
 			}
 		}
 		row := z.f32[r*w : r*w+w]
 		mask := z.u32[r*w : r*w+w]
-		for i, v := range row {
-			acc += v
-			mask[i] = floatingMask(acc)
+		if z.evenOdd {
+			for i, v := range row {
+				acc += v
+				mask[i] = floatingMaskEvenOdd(acc)
+			}
+		} else {
+			for i, v := range row {
+				acc += v
+				mask[i] = floatingMask(acc)
+			}
 		}
-		if z.win.Max.X < z.size.X && floatingMask(acc) >= faint {
+		if z.win.Max.X < z.size.X && z.floatingMask(acc) >= faint {
 			return false
 		}
 	}
 	acc += z.leftF[h]
-	return z.win.Max.Y >= z.size.Y || floatingMask(acc) < faint
+	return z.win.Max.Y >= z.size.Y || z.floatingMask(acc) < faint
 }
 
 // floatingAccumulateSIMD is floatingAccumulate summing as vector's amd64
@@ -542,7 +607,7 @@ func (c *simdCursor) skip(f int) bool {
 	if f <= c.f {
 		return true
 	}
-	if floatingMask(c.offset) >= faint {
+	if c.z.floatingMask(c.offset) >= faint {
 		return false
 	}
 	c.f = f
@@ -575,7 +640,7 @@ func (c *simdCursor) cell(k int) float32 {
 func (c *simdCursor) set(x ...float32) bool {
 	z := c.z
 	for _, v := range x {
-		a := floatingMask(v)
+		a := z.floatingMask(v)
 		r := c.y - z.win.Min.Y
 		if r >= 0 && r < z.win.Dy() && c.x >= z.win.Min.X && c.x < z.win.Max.X {
 			z.u32[r*z.win.Dx()+c.x-z.win.Min.X] = a

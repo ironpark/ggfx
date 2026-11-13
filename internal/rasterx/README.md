@@ -41,7 +41,18 @@ below.
   hold only part of it; `Touched` records what a draw changed, and a nil
   `Dest` draws nothing but records it.
 - `Gradient.GetColorFunctionUS` no longer sorts `Stops`, which mutated the
-  gradient as it drew; its caller sorts them.
+  gradient as it drew; its caller orders them.
+- The even-odd fill rule: `ScannerGV.SetWinding(false)` folds the
+  accumulated coverage modulo 2, in fixed and floating point, where the
+  original ignored it. The non-zero rule's mask is vector's as before.
+- `ApplyOpacity` returns the color not premultiplied, its alpha scaled by
+  the opacity and clamped to [0, 1]. The original took the low byte of
+  `RGBA`'s 16-bit premultiplied values and dropped the color's alpha,
+  right only for an opaque 8-bit color. A gradient blends its stops'
+  colors not premultiplied and their opacities apart, a stop color's
+  alpha part of its opacity, and the first stop, drawn where a repeated
+  gradient's last and first stops meet, takes the gradient's opacity,
+  which it dropped.
 - `rasterx_test.go` keeps the original's assertions; the drawings it wrote
   to `testdata` are compared with goldens, a hash per drawing and
   `GOARCH`, in `testdata/golden.txt`. `bezier_test.go` seeds its random

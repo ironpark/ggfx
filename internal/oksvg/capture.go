@@ -64,8 +64,13 @@ func (c *iconCursor) endCapture(se xml.EndElement) bool {
 		return true
 	}
 	c.captureDepth--
-	if se.Name.Local == "g" {
+	switch se.Name.Local {
+	case "g":
 		c.capture.defs = append(c.capture.defs, definition{Tag: "endg"})
+	case "linearGradient", "radialGradient":
+		// Without its end, a gradient expanded from here would take in
+		// all that follows as its own.
+		c.capture.defs = append(c.capture.defs, definition{Tag: "endGradient"})
 	}
 	return true
 }
@@ -93,8 +98,9 @@ func (c *iconCursor) expandCaptured(def *captured, m rasterx.Matrix2D, add bool)
 	base := defaultStyle
 	base.mAdder.M = m
 	c.StyleStack = []PathStyle{base}
-	// The element's own transform, as a clipPath's, places what it holds.
-	if err := c.PushStyle(transformOnly(def.attrs)); err != nil {
+	// The element's own transform, as a clipPath's, places what it holds,
+	// and its rules are its shapes'.
+	if err := c.PushStyle(placing(def.attrs)); err != nil {
 		c.StyleStack = stack
 		return nil, err
 	}
@@ -108,12 +114,14 @@ func (c *iconCursor) expandCaptured(def *captured, m rasterx.Matrix2D, add bool)
 	return paths, nil
 }
 
-// transformOnly is attrs' transform, alone.
-func transformOnly(attrs []xml.Attr) []xml.Attr {
+// placing is attrs' transform and fill and clip rules, alone.
+func placing(attrs []xml.Attr) []xml.Attr {
+	var p []xml.Attr
 	for _, a := range attrs {
-		if a.Name.Local == "transform" {
-			return []xml.Attr{a}
+		switch a.Name.Local {
+		case "transform", "fill-rule", "clip-rule":
+			p = append(p, a)
 		}
 	}
-	return nil
+	return p
 }

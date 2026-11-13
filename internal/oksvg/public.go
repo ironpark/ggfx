@@ -139,8 +139,7 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 	default:
 		cn, ok := colornames.Map[v]
 		if ok {
-			r, g, b, a := cn.RGBA()
-			return color.NRGBA{uint8(r), uint8(g), uint8(b), uint8(a)}, nil
+			return color.NRGBA{cn.R, cn.G, cn.B, cn.A}, nil
 		}
 	}
 	cStr := strings.TrimPrefix(colorStr, "rgb(")

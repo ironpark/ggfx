@@ -42,6 +42,8 @@ func (c *iconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
 			paths[i].linerColor = paint{}
 			paths[i].FillOpacity = 1
 			paths[i].clip = nil
+			// A clip's shapes are filled by its rule, not their fill's.
+			paths[i].UseNonZeroWinding = !paths[i].evenOddClip
 		}
 	}
 	u.paths = paths
@@ -50,7 +52,8 @@ func (c *iconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
 
 // maskImage is u drawn under t over r's target: how much each pixel lets
 // through, in an image over just the part of the target u's shapes cover,
-// the rest letting nothing through.
+// the rest letting nothing through, placed as the target's pixels are to
+// the paint.
 func (u *clipUse) maskImage(r *rasterx.Dasher, t rasterx.Matrix2D) *image.Alpha {
 	gv, ok := r.Scanner.(*rasterx.ScannerGV)
 	if !ok {
@@ -79,6 +82,9 @@ func (u *clipUse) maskImage(r *rasterx.Dasher, t rasterx.Matrix2D) *image.Alpha 
 			mask.Pix[i] = p[3]
 		}
 	}
+	// The paint is asked its color in the target's own coordinates, from
+	// 0 at its corner, not in the image's.
+	mask.Rect = mask.Rect.Sub(b.Min)
 	return mask
 }
 

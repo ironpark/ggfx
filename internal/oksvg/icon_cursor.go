@@ -9,7 +9,6 @@ import (
 	"errors"
 	"image/color"
 	"math"
-	"sort"
 	"strings"
 
 	"github.com/ironpark/ggfx/internal/rasterx"
@@ -26,7 +25,6 @@ type iconCursor struct {
 	useExpansions               int
 	capture                     *captured // the clip, mask or marker being read
 	captureDepth                int
-	sorted                      map[*rasterx.Gradient]bool // gradients whose stops are sorted
 }
 
 // ReadGradURL reads an SVG format gradient url
@@ -40,31 +38,12 @@ func (c *iconCursor) ReadGradURL(v string, defaultColor paint) (grad *rasterx.Gr
 			var g *rasterx.Gradient
 			g, ok = c.icon.Grads[urlStr[1:]]
 			if ok {
-				c.sortStops(g)
 				l := localizeGradIfStopClrNil(g, defaultColor)
 				grad = &l
 			}
 		}
 	}
 	return
-}
-
-// sortStops puts g's stops in order of their offsets when a style first
-// names it, its stops all read, rather than at each drawing, which changed
-// the document as it drew. It sorts as the drawing did, with sort.Slice:
-// stable up to 12 stops, an insertion sort; past that, stops of one offset
-// are left in whatever order the first drawing's sort left them.
-func (c *iconCursor) sortStops(g *rasterx.Gradient) {
-	if c.sorted[g] {
-		return
-	}
-	if c.sorted == nil {
-		c.sorted = map[*rasterx.Gradient]bool{}
-	}
-	c.sorted[g] = true
-	sort.Slice(g.Stops, func(i, j int) bool {
-		return g.Stops[i].Offset < g.Stops[j].Offset
-	})
 }
 
 // ReadGradAttr reads an SVG gradient attribute
@@ -244,6 +223,20 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 			curStyle.linerColor = paint{color: col.(color.NRGBA)}
 		} else {
 			curStyle.linerColor = paint{}
+		}
+	case "fill-rule", "clip-rule":
+		var evenOdd bool
+		switch v {
+		case "evenodd":
+			evenOdd = true
+		case "nonzero":
+		default: // inherit, or what is not a rule
+			return nil
+		}
+		if k == "fill-rule" {
+			curStyle.UseNonZeroWinding = !evenOdd
+		} else {
+			curStyle.evenOddClip = evenOdd
 		}
 	case "stroke-linegap":
 		switch v {

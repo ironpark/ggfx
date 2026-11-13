@@ -6,6 +6,7 @@ package svg_test
 import (
 	"bytes"
 	"image"
+	"image/color"
 	"strings"
 	"sync"
 	"testing"
@@ -147,4 +148,156 @@ func TestDrawFromGoroutinesAtOnce(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// A gradient inside a mask ends with it: what follows is read as it would
+// be without it, here a definition that a use then places.
+func TestAGradientInAMaskEndsWithIt(t *testing.T) {
+	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<mask id="m"><linearGradient id="fade"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></linearGradient><rect width="100" height="40" fill="url(#fade)"/></mask>
+<rect width="100" height="40" fill="#c00" mask="url(#m)"/>
+<defs><g id="later"><rect width="20" height="20" fill="#06c"/></g></defs>
+<use href="#later" x="40" y="60"/></svg>`, 1, 100, 100)
+	if c := dst.RGBAAt(50, 70); c != (color.RGBA{0, 0x66, 0xcc, 0xff}) {
+		t.Errorf("where the use places the definition: %v; want it", c)
+	}
+	if c := dst.RGBAAt(10, 50); c.A != 0 {
+		t.Errorf("where the definition is, undrawn: %v; want clear", c)
+	}
+	if c := dst.RGBAAt(5, 20); c.R < 0xb0 || c.G != 0 {
+		t.Errorf("under the mask's white: %v; want red", c)
+	}
+}
+
+const pentagram = `25,5 36.76,41.18 5.98,18.82 44.02,18.82 13.24,41.18`
+
+// fill-rule, as an attribute, a style property, a class's and a group's,
+// leaves a self-intersecting shape's middle empty by evenodd and fills it
+// by nonzero; a stroke is filled whatever the rule.
+func TestFillRule(t *testing.T) {
+	for _, tc := range []struct {
+		name, src string
+		hole      bool
+	}{
+		{"default", `<polygon points="` + pentagram + `"/>`, false},
+		{"nonzero", `<polygon points="` + pentagram + `" fill-rule="nonzero"/>`, false},
+		{"attribute", `<polygon points="` + pentagram + `" fill-rule="evenodd"/>`, true},
+		{"style", `<polygon points="` + pentagram + `" style="fill-rule: evenodd"/>`, true},
+		{"class", `<defs><style>.eo{fill-rule:evenodd}</style></defs><polygon class="eo" points="` + pentagram + `"/>`, true},
+		{"group", `<g fill-rule="evenodd"><g><polygon points="` + pentagram + `"/></g></g>`, true},
+		{"overridden", `<g fill-rule="evenodd"><polygon points="` + pentagram + `" fill-rule="nonzero"/></g>`, false},
+		{"use", `<defs><polygon id="p" points="` + pentagram + `"/></defs><use href="#p" fill-rule="evenodd"/>`, true},
+	} {
+		dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50">`+tc.src+`</svg>`, 1, 50, 50)
+		if a := dst.RGBAAt(25, 25).A; (a == 0) != tc.hole || (a != 0 && a != 0xff) {
+			t.Errorf("%s: the middle's alpha %#x; want a hole %t", tc.name, a, tc.hole)
+		}
+		if a := dst.RGBAAt(25, 10).A; a != 0xff {
+			t.Errorf("%s: a point's alpha %#x; want opaque", tc.name, a)
+		}
+	}
+	// Where a stroke crosses itself, its outline's overlaps are filled.
+	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><polygon points="`+pentagram+`" fill="none" stroke="#000" stroke-width="3" fill-rule="evenodd"/></svg>`, 1, 50, 50)
+	// The lines from the top meet the cross bar at x = 19.0 and 31.0.
+	for _, x := range []int{18, 31} {
+		if a := dst.RGBAAt(x, 18).A; a != 0xff {
+			t.Errorf("where the stroke crosses itself at (%d, 18): alpha %#x; want opaque", x, a)
+		}
+	}
+}
+
+// clip-rule, on a clip's shape or on the clipPath, fills it by evenodd; a
+// fill-rule there does not.
+func TestClipRule(t *testing.T) {
+	for _, tc := range []struct {
+		name, clip string
+		hole       bool
+	}{
+		{"default", `<clipPath id="c"><polygon points="` + pentagram + `"/></clipPath>`, false},
+		{"shape", `<clipPath id="c"><polygon points="` + pentagram + `" clip-rule="evenodd"/></clipPath>`, true},
+		{"clipPath", `<clipPath id="c" clip-rule="evenodd"><polygon points="` + pentagram + `"/></clipPath>`, true},
+		{"fill-rule", `<clipPath id="c"><polygon points="` + pentagram + `" fill-rule="evenodd"/></clipPath>`, false},
+	} {
+		dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><defs>`+tc.clip+`</defs><rect width="50" height="50" fill="#f00" clip-path="url(#c)"/></svg>`, 1, 50, 50)
+		if a := dst.RGBAAt(25, 25).A; (a == 0) != tc.hole || (a != 0 && a != 0xff) {
+			t.Errorf("%s: the middle's alpha %#x; want a hole %t", tc.name, a, tc.hole)
+		}
+		if c := dst.RGBAAt(25, 10); c != (color.RGBA{0xff, 0, 0, 0xff}) {
+			t.Errorf("%s: a point: %v; want red", tc.name, c)
+		}
+	}
+}
+
+// A document drawn into an image whose bounds do not start at 0 draws
+// there as into one that does.
+func TestDrawIntoOffsetBounds(t *testing.T) {
+	for _, doc := range goldenDocs {
+		var g ggfx.GeoM
+		g.Scale(1.1, 1.1)
+		g.Translate(2.5, 1.75)
+		d, err := svg.Parse(strings.NewReader(doc.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		at0 := image.NewRGBA(image.Rect(0, 0, 100, 80))
+		d.Draw(at0, g)
+		off := image.NewRGBA(image.Rect(7, -11, 107, 69))
+		d.Draw(off, g)
+		if !bytes.Equal(at0.Pix, off.Pix) {
+			t.Errorf("%s: drawn into %v differs from into %v", doc.name, off.Rect, at0.Rect)
+		}
+	}
+}
+
+// A gradient's stops keep their order: one at an offset less than the one
+// before is at that one's, and offsets are in [0, 1].
+func TestGradientStopsKeepTheirOrder(t *testing.T) {
+	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 10"><defs>
+<linearGradient id="g" gradientUnits="userSpaceOnUse" x2="100"><stop offset="0.6" stop-color="#f00"/><stop offset="0.3" stop-color="#0f0"/><stop offset="1.5" stop-color="#00f"/></linearGradient>
+<linearGradient id="h" gradientUnits="userSpaceOnUse" x2="100"><stop offset="-1" stop-color="#ff0"/><stop offset="0.5" stop-color="#ff0"/><stop offset="0.5" stop-color="#0ff"/></linearGradient></defs>
+<rect width="100" height="5" fill="url(#g)"/><rect y="5" width="100" height="5" fill="url(#h)"/></svg>`, 1, 100, 10)
+	for _, tc := range []struct {
+		x, y int
+		want color.RGBA
+	}{
+		{30, 2, color.RGBA{0xff, 0, 0, 0xff}}, // before the first stop, at 0.6
+		{59, 2, color.RGBA{0xff, 0, 0, 0xff}},
+		{99, 2, color.RGBA{0, 3, 252, 0xff}},     // green to blue, from 0.6 to 1
+		{49, 7, color.RGBA{0xff, 0xff, 0, 0xff}}, // a hard stop at 0.5
+		{50, 7, color.RGBA{0, 0xff, 0xff, 0xff}},
+	} {
+		if c := dst.RGBAAt(tc.x, tc.y); c != tc.want {
+			t.Errorf("(%d, %d): %v; want %v", tc.x, tc.y, c, tc.want)
+		}
+	}
+}
+
+// An objectBoundingBox gradient spans the shape's geometry, without its
+// stroke, which takes the same gradient as its fill.
+func TestBoundingBoxLeavesOutTheStroke(t *testing.T) {
+	dst := draw(t, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs>
+<linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs>
+<rect x="20" y="20" width="60" height="60" fill="url(#g)" stroke="url(#g)" stroke-width="20"/>
+<path d="M20,95 H80" stroke="url(#g)" stroke-width="6"/></svg>`, 1, 100, 100)
+	red, blue := color.RGBA{0xff, 0, 0, 0xff}, color.RGBA{0, 0, 0xff, 0xff}
+	for _, tc := range []struct {
+		x, y int
+		want color.RGBA
+	}{
+		{12, 50, red}, {87, 50, blue}, // the stroke outside the box, padded
+	} {
+		if c := dst.RGBAAt(tc.x, tc.y); c != tc.want {
+			t.Errorf("(%d, %d): %v; want %v", tc.x, tc.y, c, tc.want)
+		}
+	}
+	for _, x := range []int{30, 50, 70} {
+		if fill, stroke := dst.RGBAAt(x, 50), dst.RGBAAt(x, 15); fill != stroke {
+			t.Errorf("at x = %d the fill is %v, the stroke %v; want one gradient", x, fill, stroke)
+		}
+	}
+	// A line's box has no height, nor so a place for the gradient: SVG
+	// leaves it undrawn.
+	if c := dst.RGBAAt(50, 95); c.A != 0 {
+		t.Errorf("a line stroked by its bounding box: %v; want clear", c)
+	}
 }

@@ -56,3 +56,6 @@ shapeT3 wasm 486752497be01b573a4cc3fa
 tmfGV amd64 35d599590bd825e6b4e07e46
 tmfGV arm64 ea03a6116216c2fe275efaaf
 tmfGV wasm 35d599590bd825e6b4e07e46
+translucent amd64 56a235496260d07eb6bf90f0
+translucent arm64 56a235496260d07eb6bf90f0
+translucent wasm 56a235496260d07eb6bf90f0

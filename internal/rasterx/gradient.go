@@ -48,10 +48,65 @@ type (
 	}
 )
 
-// ApplyOpacity sets the color's alpha channel to the given value
+// ApplyOpacity is c, not premultiplied, its alpha scaled by opacity.
 func ApplyOpacity(c color.Color, opacity float64) color.NRGBA {
-	r, g, b, _ := c.RGBA()
-	return color.NRGBA{uint8(r), uint8(g), uint8(b), uint8(opacity * 0xFF)}
+	// Premultiplied to 16 bits, a faint color loses bits it has here.
+	switch n := c.(type) {
+	case color.NRGBA:
+		r, g, b, a := uint32(n.R)*0x101, uint32(n.G)*0x101, uint32(n.B)*0x101, uint32(n.A)*0x101
+		return applyOpacity64(r, g, b, a, opacity, false)
+	case color.NRGBA64:
+		return applyOpacity64(uint32(n.R), uint32(n.G), uint32(n.B), uint32(n.A), opacity, false)
+	}
+	r, g, b, a := c.RGBA()
+	return applyOpacity64(r, g, b, a, opacity, true)
+}
+
+// applyOpacity64 is ApplyOpacity of the premultiplied r, g, b, a. RGBA's
+// values are 16-bit and premultiplied: their low byte, which the original
+// took, is the 8-bit color only for an opaque 8-bit one.
+func applyOpacity64(r, g, b, a uint32, opacity float64, premultiplied bool) color.NRGBA {
+	opacity = max(0, min(opacity, 1))
+	switch a {
+	case 0xffff:
+		return color.NRGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), uint8(opacity * 0xFF)}
+	case 0:
+		return color.NRGBA{}
+	}
+	if premultiplied {
+		r, g, b = unpremultiply(r, a), unpremultiply(g, a), unpremultiply(b, a)
+	}
+	// a/0x101 is an 8-bit alpha exactly, so an 8-bit color comes back as
+	// it was.
+	return color.NRGBA{uint8(r >> 8), uint8(g >> 8), uint8(b >> 8), uint8(opacity * float64(a) / 0x101)}
+}
+
+// unpremultiply is the 16-bit v premultiplied by a, not premultiplied,
+// rounded so that an 8-bit color survives premultiplying.
+func unpremultiply(v, a uint32) uint32 {
+	return min((v*0xffff+a/2)/a, 0xffff)
+}
+
+// nrgba64 is c's 16-bit color, not premultiplied, and its alpha as a
+// fraction.
+func nrgba64(c color.Color) (r, g, b uint32, a float64) {
+	if n, ok := c.(color.NRGBA); ok {
+		switch n.A {
+		case 0xff:
+			return uint32(n.R) * 0x101, uint32(n.G) * 0x101, uint32(n.B) * 0x101, 1
+		case 0:
+			return 0, 0, 0, 0
+		}
+		return uint32(n.R) * 0x101, uint32(n.G) * 0x101, uint32(n.B) * 0x101, float64(n.A) / 0xff
+	}
+	r, g, b, ca := c.RGBA()
+	switch ca {
+	case 0xffff:
+		return r, g, b, 1
+	case 0:
+		return 0, 0, 0, 0
+	}
+	return unpremultiply(r, ca), unpremultiply(g, ca), unpremultiply(b, ca), float64(ca) / 0xffff
 }
 
 // tColor takes the paramaterized value along the gradient's stops and
@@ -138,27 +193,36 @@ func (g *Gradient) blendStops(t, opacity float64, s1, s2 GradStop, flip bool) co
 		}
 	}
 	if s2.Offset == s1off {
-		return ApplyOpacity(s2.StopColor, s2.Opacity)
+		return ApplyOpacity(s2.StopColor, s2.Opacity*opacity)
 	}
 	if flip {
 		t = 1 - t
 	}
 	tp := (t - s1off) / (s2.Offset - s1off)
-	r1, g1, b1, _ := s1.StopColor.RGBA()
-	r2, g2, b2, _ := s2.StopColor.RGBA()
+	// Colors and opacities blend apart, not premultiplied, as SVG has it;
+	// a stop color's own alpha is part of its opacity.
+	r1, g1, b1, a1 := nrgba64(s1.StopColor)
+	r2, g2, b2, a2 := nrgba64(s2.StopColor)
+	o1, o2 := s1.Opacity, s2.Opacity
+	if a1 != 1 {
+		o1 *= a1
+	}
+	if a2 != 1 {
+		o2 *= a2
+	}
 
 	return applyOpacity(color.RGBA{
 		uint8((float64(r1)*(1-tp) + float64(r2)*tp) / 256),
 		uint8((float64(g1)*(1-tp) + float64(g2)*tp) / 256),
 		uint8((float64(b1)*(1-tp) + float64(b2)*tp) / 256),
-		0xFF}, (s1.Opacity*(1-tp)+s2.Opacity*tp)*opacity)
+		0xFF}, (o1*(1-tp)+o2*tp)*opacity)
 }
 
-// applyOpacity is ApplyOpacity without boxing c, which allocated at each
-// pixel.
+// applyOpacity is ApplyOpacity of an opaque c, without boxing it, which
+// allocated at each pixel.
 func applyOpacity(c color.RGBA, opacity float64) color.NRGBA {
-	r, g, b, _ := c.RGBA()
-	return color.NRGBA{uint8(r), uint8(g), uint8(b), uint8(opacity * 0xFF)}
+	opacity = max(0, min(opacity, 1))
+	return color.NRGBA{c.R, c.G, c.B, uint8(opacity * 0xFF)}
 }
 
 // GetColorFunction returns the color function

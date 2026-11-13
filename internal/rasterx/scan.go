@@ -43,6 +43,7 @@ type (
 
 		paint                  Paint
 		clip                   image.Rectangle
+		evenOdd                bool
 		size                   image.Point
 		z                      rasterizer
 		pts                    []pathPoint
@@ -74,7 +75,7 @@ func (s *ScannerGV) GetPathExtent() fixed.Rectangle26_6 {
 
 // SetWinding set the winding rule for the scanner
 func (s *ScannerGV) SetWinding(useNonZeroWinding bool) {
-	// no-op as scanner gv does not support even-odd winding
+	s.evenOdd = !useNonZeroWinding
 }
 
 // SetPaint sets what the scanner draws with.
@@ -178,7 +179,7 @@ func (s *ScannerGV) window() image.Rectangle {
 // does not hold all of it that shows.
 func (s *ScannerGV) rasterize(win image.Rectangle) bool {
 	z := &s.z
-	z.reset(s.size, win)
+	z.reset(s.size, win, s.evenOdd)
 	var penX, penY float32
 	for _, p := range s.pts {
 		if !p.move {

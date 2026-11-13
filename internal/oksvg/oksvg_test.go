@@ -198,3 +198,22 @@ func TestParseSVGColorEmptyComponent(t *testing.T) {
 		}
 	}
 }
+
+// Stops keep the document's order, each offset clamped to [0, 1] and to
+// the one before.
+func TestGradientStopOffsets(t *testing.T) {
+	icon, err := oksvg.ReadIconStream(strings.NewReader(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs>
+<linearGradient id="g"><stop offset="-0.5" stop-color="#100"/><stop offset="0.6" stop-color="#200"/><stop offset="0.3" stop-color="#300"/><stop offset="60%" stop-color="#400"/><stop offset="2" stop-color="#500"/></linearGradient>
+</defs><rect width="10" height="10" fill="url(#g)"/></svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, s := range icon.Grads["g"].Stops {
+		got = append(got, fmt.Sprintf("%v@%v", s.StopColor, s.Offset))
+	}
+	want := []string{"{17 0 0 255}@0", "{34 0 0 255}@0.6", "{51 0 0 255}@0.6", "{68 0 0 255}@0.6", "{85 0 0 255}@1"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("stops %v; want %v", got, want)
+	}
+}

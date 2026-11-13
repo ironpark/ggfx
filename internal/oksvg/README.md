@@ -73,14 +73,35 @@ included.
   from goroutines at once: `SvgPath.DrawTransformed` transforms through a
   `rasterx.MatrixAdder` of its own instead of setting the path's,
   `SvgIcon.DrawTransformed` takes the transform `Draw` reads from
-  `Transform`, a gradient's bounding box is set on a copy, and a
-  gradient's stops are sorted when a style first names it, all its stops
-  read, instead of at each drawing. They are sorted with `sort.Slice`, as
-  the drawing sorted them, so stops of one offset are drawn in the order
-  they were: the document's for up to 12 stops, which `sort.Slice` sorts
-  by insertion, and the order its first sort left them in past that.
+  `Transform`, and a gradient's bounding box is set on a copy.
 - A fill or stroke is a `paint`, a color or a gradient, in place of `any`
   holding either, and is drawn with a `rasterx.Paint`.
+- `fill-rule` and `clip-rule`, as attributes, style properties and
+  classes', inherited as the other properties are, and from a
+  `<clipPath>`, `<mask>` or `<marker>` element by its shapes. A shape is
+  filled by its `fill-rule`, a clip's shape by its `clip-rule`, and a
+  stroke always by `nonzero`. The original read neither and filled every
+  shape by `nonzero`.
+- A gradient's stops keep the document's order, each offset clamped to
+  [0, 1] and up to the offset before it, as SVG has it. The original
+  sorted them by offset when drawing, with `sort.Slice`, which also left
+  equal offsets in an order of its own past 12 stops.
+- A clip or mask is placed as the target's pixels are, from 0 at its
+  corner. The original looked it up at the target image's coordinates,
+  and so, into an image whose bounds did not start at 0, drew a shape
+  through the wrong part of it.
+- The end of a gradient inside a `<clipPath>`, `<mask>` or `<marker>` is
+  kept with the element's content. Without it, the gradient expanded from
+  there took all that followed in the document as its own: a later
+  `<defs>` was drawn where it stood and its ids not defined.
+- An `objectBoundingBox` gradient on a stroke takes the fill geometry's
+  bounding box, as SVG defines it, not the stroke's outline's; one on a
+  shape whose box has no width or height, as a line's, is not drawn, as
+  SVG says, instead of filling with its first stop. The box is still
+  taken in device space, after the shape's transform, so under a rotation
+  or skew it is the transformed shape's box, not its user space one.
+- Color names are converted by their 8-bit components, not by the low
+  byte of their 16-bit ones (the same for opaque colors).
 
 ## Missing features for OpenType SVG
 
@@ -100,8 +121,6 @@ Required by the OpenType SVG specification but not implemented:
   foreground color. It is not substituted or inherited anywhere, gradient
   stops included.
 - `<image>` elements with embedded base64 PNG or JPEG data.
-- The `fill-rule` property. `evenodd` is not parsed; all paths are filled
-  with the nonzero rule.
 - Gradient templating via `xlink:href` on `<linearGradient>` and
   `<radialGradient>` (a gradient inheriting stops and attributes from
   another). `href` is resolved only on `<use>`.

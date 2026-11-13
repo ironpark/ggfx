@@ -804,3 +804,78 @@ func TestLargeAndOffsetDestinations(t *testing.T) {
 		checkGolden(t, "dest-"+tc.name, img)
 	}
 }
+
+// Stops of translucent and 16-bit colors, and a translucent fill.
+func TestTranslucentColors(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 200, 100))
+	scannerGV := NewScannerGV(200, 100, img, img.Bounds())
+	f := NewFiller(200, 100, scannerGV)
+	g := &Gradient{Points: [5]float64{0, 0, 1, 0, 0}, Matrix: Identity,
+		Bounds: struct{ X, Y, W, H float64 }{X: 10, Y: 10, W: 180, H: 40},
+		Stops: []GradStop{
+			{StopColor: color.NRGBA{0xff, 0x80, 0x00, 0x80}, Offset: 0, Opacity: 1},
+			{StopColor: color.RGBA64{0x1234, 0x5678, 0x9abc, 0xffff}, Offset: 0.5, Opacity: 1},
+			{StopColor: color.NRGBA{0x00, 0x40, 0xff, 0x40}, Offset: 1, Opacity: 0.8},
+		}}
+	scannerGV.SetPaint(g.GetColorFunction(1))
+	AddRect(10, 10, 190, 50, 0, f)
+	f.Draw()
+	f.Clear()
+	scannerGV.SetPaint(ColorPaint(ApplyOpacity(color.NRGBA{0x20, 0xa0, 0x60, 0x99}, 0.7)))
+	AddRect(10, 60, 100, 90, 0, f)
+	f.Draw()
+	f.Clear()
+	scannerGV.SetPaint(ColorPaint(ApplyOpacity(color.RGBA64{0xfedc, 0x0123, 0x8000, 0xffff}, 1)))
+	AddRect(100, 60, 190, 90, 0, f)
+	f.Draw()
+	f.Clear()
+	checkGolden(t, "translucent", img)
+}
+
+// ApplyOpacity gives back an 8-bit color as it was, whatever its alpha,
+// takes a 16-bit one's high byte, and scales the alpha.
+func TestApplyOpacity(t *testing.T) {
+	for c := 0; c < 0x100; c++ {
+		for a := 1; a < 0x100; a++ {
+			in := color.NRGBA{uint8(c), uint8(255 - c), uint8(c / 3), uint8(a)}
+			if got := ApplyOpacity(in, 1); got != in {
+				t.Fatalf("ApplyOpacity(%v, 1) = %v", in, got)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		in      color.Color
+		opacity float64
+		want    color.NRGBA
+	}{
+		{color.RGBA64{0x1234, 0x5678, 0x9abc, 0xffff}, 1, color.NRGBA{0x12, 0x56, 0x9a, 0xff}},
+		{color.RGBA{0x40, 0x20, 0, 0x80}, 1, color.NRGBA{0x80, 0x40, 0, 0x80}},
+		{color.NRGBA64{0x1234, 0x5678, 0x9abc, 0x8000}, 1, color.NRGBA{0x12, 0x56, 0x9a, 0x7f}},
+		{color.NRGBA{10, 20, 30, 0x80}, 0.5, color.NRGBA{10, 20, 30, 0x40}},
+		{color.NRGBA{10, 20, 30, 0xff}, 0.6, color.NRGBA{10, 20, 30, 153}},
+		{color.NRGBA{10, 20, 30, 0xff}, 2, color.NRGBA{10, 20, 30, 0xff}},
+		{color.NRGBA{10, 20, 30, 0}, 1, color.NRGBA{}},
+	} {
+		if got := ApplyOpacity(tc.in, tc.opacity); got != tc.want {
+			t.Errorf("ApplyOpacity(%v, %v) = %v; want %v", tc.in, tc.opacity, got, tc.want)
+		}
+	}
+}
+
+// A gradient blends its stops' colors and opacities apart: halfway from
+// half-transparent red to opaque blue is purple, three quarters opaque.
+func TestGradientBlendsTranslucentStops(t *testing.T) {
+	g := &Gradient{Points: [5]float64{0, 0, 1, 0, 0}, Matrix: Identity, Units: UserSpaceOnUse,
+		Bounds: struct{ X, Y, W, H float64 }{W: 1, H: 1},
+		Stops: []GradStop{
+			{StopColor: color.NRGBA{0xff, 0, 0, 0x80}, Offset: 0, Opacity: 1},
+			{StopColor: color.NRGBA{0, 0, 0xff, 0xff}, Offset: 1, Opacity: 1},
+		}}
+	g.Points = [5]float64{0, 0, 100, 0, 0}
+	got := g.GetColorFunction(1).Func(49, 0) // t = 0.495
+	r, g2, b, a := color.NRGBA{0x81, 0, 0x7e, 0xbe}.RGBA()
+	want := color.RGBA64{uint16(r), uint16(g2), uint16(b), uint16(a)}
+	if got != want {
+		t.Errorf("halfway: %v; want %v", got, want)
+	}
+}

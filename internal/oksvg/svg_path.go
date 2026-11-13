@@ -28,19 +28,31 @@ func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t raste
 // so that a document can be drawn from goroutines at once.
 func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D, mask *image.Alpha) {
 	adder := rasterx.MatrixAdder{M: t.Mult(svgp.mAdder.M)}
+	rf := &r.Filler
+	// box is the fill's extent: a gradient's bounding box, for the stroke
+	// too, which SVG leaves out of it.
+	var box fixed.Rectangle26_6
 	if !svgp.fillerColor.none() {
 		r.Clear()
-		rf := &r.Filler
 		rf.SetWinding(svgp.UseNonZeroWinding)
 		adder.Adder = rf // This allows transformations to be applied
 		svgp.Path.AddTo(&adder)
-		rf.SetPaint(through(svgp.fillerColor.paint(rf.Scanner, svgp.FillOpacity*opacity, adder.M), mask))
+		box = rf.Scanner.GetPathExtent()
+		rf.SetPaint(through(svgp.fillerColor.paint(box, svgp.FillOpacity*opacity, adder.M), mask))
 		rf.Draw()
 		// default is true
 		rf.SetWinding(true)
+	} else if g := svgp.linerColor.grad; g != nil && g.Units == rasterx.ObjectBoundingBox {
+		r.Clear()
+		adder.Adder = rf
+		svgp.Path.AddTo(&adder)
+		box = rf.Scanner.GetPathExtent()
 	}
 	if !svgp.linerColor.none() {
 		r.Clear()
+		// A stroke's outline overlaps itself where it turns: non-zero
+		// fills it all, whatever the fill's rule.
+		r.SetWinding(true)
 		adder.Adder = r
 		lineGap := svgp.LineGap
 		if lineGap == nil {
@@ -58,21 +70,26 @@ func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.M
 			fixed.Int26_6(svgp.MiterLimit*64), leadLineCap, lineCap,
 			lineGap, svgp.LineJoin, svgp.Dash, svgp.DashOffset)
 		svgp.Path.AddTo(&adder)
-		r.SetPaint(through(svgp.linerColor.paint(r.Scanner, svgp.LineOpacity*opacity, adder.M), mask))
+		r.SetPaint(through(svgp.linerColor.paint(box, svgp.LineOpacity*opacity, adder.M), mask))
 		r.Draw()
 	}
 }
 
-// paint is p as s draws it, at opacity, for the path s holds, which m
-// placed: a gradient in the path's bounding box, or in the user space m
+// paint is p as drawn at opacity for a path whose fill's extent is box,
+// which m placed: a gradient in that bounding box, or in the user space m
 // maps.
-func (p paint) paint(s rasterx.Scanner, opacity float64, m rasterx.Matrix2D) rasterx.Paint {
+func (p paint) paint(box fixed.Rectangle26_6, opacity float64, m rasterx.Matrix2D) rasterx.Paint {
 	if p.grad == nil {
 		return rasterx.ColorPaint(rasterx.ApplyOpacity(p.color, opacity))
 	}
 	g := *p.grad
 	if g.Units == rasterx.ObjectBoundingBox {
-		fRect := s.GetPathExtent()
+		if box.Min.X >= box.Max.X || box.Min.Y >= box.Max.Y {
+			// A box without width or height, as a line's, has no place
+			// for the gradient, which SVG says is then not drawn.
+			return rasterx.Paint{}
+		}
+		fRect := box
 		mnx, mny := float64(fRect.Min.X)/64, float64(fRect.Min.Y)/64
 		mxx, mxy := float64(fRect.Max.X)/64, float64(fRect.Max.Y)/64
 		g.Bounds.X, g.Bounds.Y = mnx, mny

@@ -96,6 +96,23 @@ func TestScannerDrawsAsVector(t *testing.T) {
 				if !bytes.Equal(got.Pix, want.Pix) {
 					t.Errorf("%s: drew differently from vector", name)
 				}
+
+				// vector has no even-odd rule: the scanner's, in a window,
+				// draws what it draws over all the mask.
+				if len(pts) == 0 {
+					continue
+				}
+				s.SetWinding(false)
+				eo := &image.RGBA{Pix: bytes.Clone(bg.(*image.RGBA).Pix), Stride: want.Stride, Rect: want.Rect}
+				all := &image.RGBA{Pix: bytes.Clone(eo.Pix), Stride: want.Stride, Rect: want.Rect}
+				s.Dest = eo
+				s.Draw()
+				s.Dest = all
+				s.rasterize(image.Rectangle{Max: size})
+				s.drawRGBA(all, image.Rectangle{Max: size})
+				if !bytes.Equal(eo.Pix, all.Pix) {
+					t.Errorf("%s: drew by the even-odd rule differently in a window", name)
+				}
 			}
 		}
 	}
@@ -194,4 +211,55 @@ func randomPath(rnd *rand.Rand, size image.Point, kind int) []pathPoint {
 		add(-10, -10+0.03, false)
 	}
 	return pts
+}
+
+// The even-odd rule leaves a hole where a path covers twice; the non-zero
+// one fills it. Each side of a hole, or of a shared edge, is as the
+// non-zero rule draws it.
+func TestEvenOdd(t *testing.T) {
+	for _, size := range []image.Point{{40, 40}, {600, 40}} { // fixed and floating point
+		draw := func(evenOdd bool, rects ...[4]float32) *image.RGBA {
+			img := image.NewRGBA(image.Rectangle{Max: size})
+			s := NewScannerGV(size.X, size.Y, img, img.Bounds())
+			s.Clear()
+			s.SetWinding(!evenOdd)
+			s.SetPaint(ColorPaint(color.White))
+			for _, r := range rects {
+				pt := func(x, y float32) fixed.Point26_6 {
+					return fixed.Point26_6{X: fixed.Int26_6(x * 64), Y: fixed.Int26_6(y * 64)}
+				}
+				s.Start(pt(r[0], r[1]))
+				s.Line(pt(r[2], r[1]))
+				s.Line(pt(r[2], r[3]))
+				s.Line(pt(r[0], r[3]))
+				s.Line(pt(r[0], r[1]))
+			}
+			s.Draw()
+			return img
+		}
+		ring := [][4]float32{{5, 5, 35, 35}, {15, 15, 25, 25}}
+		eo, nz := draw(true, ring...), draw(false, ring...)
+		for _, tc := range []struct {
+			x, y   int
+			eo, nz uint8
+		}{
+			{20, 20, 0, 0xff}, {10, 20, 0xff, 0xff}, {2, 20, 0, 0},
+		} {
+			if a := eo.RGBAAt(tc.x, tc.y).A; a != tc.eo {
+				t.Errorf("%v: even-odd at (%d, %d): alpha %#x; want %#x", size, tc.x, tc.y, a, tc.eo)
+			}
+			if a := nz.RGBAAt(tc.x, tc.y).A; a != tc.nz {
+				t.Errorf("%v: non-zero at (%d, %d): alpha %#x; want %#x", size, tc.x, tc.y, a, tc.nz)
+			}
+		}
+		// Abutting at a half pixel, the pixel is covered once.
+		if a := draw(true, [4]float32{5, 5, 20.5, 35}, [4]float32{20.5, 5, 35, 35}).RGBAAt(20, 20).A; a != 0xff {
+			t.Errorf("%v: where two squares meet: alpha %#x; want opaque", size, a)
+		}
+		// Overlapping by half a pixel, the pixel is covered one and a
+		// half times: half, by the even-odd rule.
+		if a := draw(true, [4]float32{5, 5, 20.5, 35}, [4]float32{20, 5, 35, 35}).RGBAAt(20, 20).A; a < 0x7f || a > 0x80 {
+			t.Errorf("%v: where two squares overlap by half a pixel: alpha %#x; want half", size, a)
+		}
+	}
 }

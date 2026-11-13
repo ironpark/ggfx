@@ -16,6 +16,7 @@ type PathStyle struct {
 	LineWidth, DashOffset, MiterLimit float64
 	Dash                              []float64
 	UseNonZeroWinding                 bool
+	evenOddClip                       bool // clip-rule: evenodd, for a clipPath's shapes
 	fillerColor, linerColor           paint
 	LineGap                           rasterx.GapFunc
 	LeadLineCap                       rasterx.CapFunc // This is used if different than LineCap

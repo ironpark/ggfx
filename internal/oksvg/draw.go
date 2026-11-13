@@ -308,6 +308,12 @@ var (
 					return err
 				}
 			}
+			// An offset is in [0, 1], and none is less than the one before
+			// it: the stops keep the document's order, as SVG has it.
+			stop.Offset = max(0, min(stop.Offset, 1))
+			if n := len(c.grad.Stops); n > 0 {
+				stop.Offset = max(stop.Offset, c.grad.Stops[n-1].Offset)
+			}
 			c.grad.Stops = append(c.grad.Stops, stop)
 		}
 		return nil
@@ -362,6 +368,10 @@ func (c *iconCursor) expandDefs(defs []definition) error {
 		if def.Tag == "endg" {
 			// pop style
 			c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
+			continue
+		}
+		if def.Tag == "endGradient" {
+			c.inGrad = false
 			continue
 		}
 		if err := c.PushStyle(def.Attrs); err != nil {
