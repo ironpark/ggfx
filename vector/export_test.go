@@ -82,10 +82,18 @@ func FillPathsStateCount() int {
 	return len(theFillPathsStates)
 }
 
+// CallbackTokenCount returns the number of destinations with a usage callback, which are the ones
+// with pending paths.
 func CallbackTokenCount() int {
 	theFillPathM.Lock()
 	defer theFillPathM.Unlock()
-	return len(theCallbackTokens)
+	var n int
+	for _, d := range theFillPathsStates {
+		if d.state != nil {
+			n++
+		}
+	}
+	return n
 }
 
 func CircleVertexCount(radius float32) int {
@@ -116,11 +124,19 @@ type AtlasRegion struct {
 	Contained      bool
 }
 
+// setPaths lays out paths in the atlas at time now, in frames, and returns whether each path lies
+// in its rendering bounds, and the bounds.
+func (a *atlas) setPaths(now int64, dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) (rbs []image.Rectangle, contained []bool) {
+	rbs, contained = setRenderingBounds(nil, nil, dstBounds, paths, bounds)
+	a.layout(now, dstBounds, rbs, antialias, nil)
+	return rbs, contained
+}
+
 // AtlasRegions lays out paths in a fresh atlas and returns their regions, in the order of paths.
 // A path without a region has a zero AtlasRegion.
 func AtlasRegions(dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) []AtlasRegion {
 	var a atlas
-	a.setPaths(0, dstBounds, paths, bounds, antialias)
+	_, contained := a.setPaths(0, dstBounds, paths, bounds, antialias)
 	defer a.dispose()
 	regions := make([]AtlasRegion, len(paths))
 	for i := range paths {
@@ -131,14 +147,15 @@ func AtlasRegions(dstBounds image.Rectangle, paths []*Path, bounds []image.Recta
 		r := AtlasRegion{
 			ImageIndex: ar.imageIndex,
 			Region:     ar.imageBounds,
-			Contained:  a.isContained(i),
+			Contained:  contained[i],
 		}
 		n := 1
 		if antialias {
 			n = 2
 		}
 		for k := range n {
-			img, b, _ := a.stencilBufferRegionAt(i, antialias, k)
+			img := a.atlasImages[ar.imageIndex]
+			b := stencilBuffer(ar.imageBounds, antialias, k)
 			if !b.In(img.Bounds()) {
 				panic(fmt.Sprintf("vector: a stencil buffer %v is out of its atlas image %v", b, img.Bounds()))
 			}
@@ -152,13 +169,16 @@ func AtlasRegions(dstBounds image.Rectangle, paths []*Path, bounds []image.Recta
 // PathRenderingBounds returns the bounds in which a path is rendered, as the atlas computes them.
 func PathRenderingBounds(dstBounds image.Rectangle, path *Path, bounds image.Rectangle) image.Rectangle {
 	var a atlas
-	a.setPaths(0, dstBounds, []*Path{path}, []image.Rectangle{bounds}, false)
+	rbs, _ := a.setPaths(0, dstBounds, []*Path{path}, []image.Rectangle{bounds}, false)
 	defer a.dispose()
-	return a.pathRenderingBounds[0]
+	return rbs[0]
 }
 
 // AtlasRecentWindow is how many frames a stencil atlas's recent peak covers at least.
 const AtlasRecentWindow = recent.Window
+
+// StencilCacheMaxBytes bounds the size of the stencil cache's pages.
+const StencilCacheMaxBytes = stencilCacheMaxBytes
 
 // StencilAtlas is a stencil atlas with its own clock, in frames, that the test advances.
 type StencilAtlas struct {
@@ -211,3 +231,49 @@ func (s *StencilAtlas) Allocations() int { return s.a.allocations }
 func (s *StencilAtlas) Bytes() int64 { return s.a.bytes.Load() }
 
 func (s *StencilAtlas) Dispose() { s.a.dispose() }
+
+func RoundUpAtlasSize(size int) int {
+	return roundUpAtlasSize(size)
+}
+
+// SetStencilCacheDisabled makes every path's stencil buffers drawn anew on the transient atlas if
+// disabled is true, as before the stencil cache.
+func SetStencilCacheDisabled(disabled bool) {
+	theFillPathM.Lock()
+	defer theFillPathM.Unlock()
+	disableStencilCacheForTesting = disabled
+}
+
+// ResetStencilCache empties the stencil cache and deallocates its pages.
+func ResetStencilCache() {
+	theFillPathM.Lock()
+	defer theFillPathM.Unlock()
+	theStencilCache.dispose()
+}
+
+// RenderTargetSwitchCount returns how many times fillPaths has changed the render target, from the
+// destination back to it.
+func RenderTargetSwitchCount() int {
+	theFillPathM.Lock()
+	defer theFillPathM.Unlock()
+	return theRenderTargetSwitchCountForTesting
+}
+
+// StencilCachePageSizes returns the sizes of the stencil cache's pages.
+func StencilCachePageSizes() []image.Point {
+	theFillPathM.Lock()
+	defer theFillPathM.Unlock()
+	var sizes []image.Point
+	for _, pg := range theStencilCache.pages {
+		sizes = append(sizes, pg.size)
+	}
+	return sizes
+}
+
+// SetStencilCacheRedrawn makes the cached stencil buffers cleared and drawn again where they are if
+// redrawn is true, which must render the same pixels as reusing them.
+func SetStencilCacheRedrawn(redrawn bool) {
+	theFillPathM.Lock()
+	defer theFillPathM.Unlock()
+	redrawStencilCacheForTesting = redrawn
+}

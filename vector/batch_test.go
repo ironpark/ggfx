@@ -139,6 +139,24 @@ var gridScenes = []batchScene{
 			fillPath(sub, gridPolygon(r, cx, cy, 5+r.Float32()*45, 3+r.IntN(8)), randomColor(r), aa, rule, ggfx.BlendSourceOver)
 		}
 	}},
+	// Paths across sub-images' edges with blends that change the destination where the source is
+	// zero, for which a quad's pixels past the sub-image must be left out, not drawn with zero.
+	{"subimage blends", 240, 200, func(dst *ggfx.Image, r *rand.Rand, aa bool, rule vector.FillRule) {
+		dst.Fill(color.RGBA{0x30, 0x50, 0x70, 0xff})
+		subs := []*ggfx.Image{
+			dst,
+			dst.SubImage(image.Rect(17, 23, 141, 119)).(*ggfx.Image),
+			dst.SubImage(image.Rect(100, 60, 230, 190)).(*ggfx.Image),
+		}
+		blends := []ggfx.Blend{ggfx.BlendCopy, ggfx.BlendSourceOver, ggfx.BlendClear, ggfx.BlendXor}
+		for i := range 80 {
+			sub := subs[r.IntN(len(subs))]
+			b := sub.Bounds()
+			cx := float32(b.Min.X) + r.Float32()*float32(b.Dx()+40) - 20
+			cy := float32(b.Min.Y) + r.Float32()*float32(b.Dy()+40) - 20
+			fillPath(sub, gridCurves(r, cx, cy, 3+r.Float32()*35, true), randomColor(r), aa, rule, blends[(i/5)%len(blends)])
+		}
+	}},
 	// Changing the blend flushes the paths so far, so every flush renders a few paths.
 	{"blends", 180, 180, func(dst *ggfx.Image, r *rand.Rand, aa bool, rule vector.FillRule) {
 		dst.Fill(color.RGBA{0x40, 0x40, 0x40, 0xff})
@@ -206,9 +224,11 @@ func manyPath(r *rand.Rand) *vector.Path {
 	return gridPolygon(r, 145+r.Float32()*10, 145+r.Float32()*10, 60+r.Float32()*80, 3+r.IntN(20))
 }
 
-// renderBoth renders a scene with and without batching and returns the pixels of each.
+// renderBoth renders a scene with and without batching and returns the pixels of each. Both start
+// with an empty stencil cache, so their paths' stencil buffers are at the same places.
 func renderBoth(s batchScene, seed uint64, aa bool, rule vector.FillRule) (batched, unbatched []byte) {
 	render := func(disabled bool) []byte {
+		vector.ResetStencilCache()
 		vector.SetBatchingDisabled(disabled)
 		defer vector.SetBatchingDisabled(false)
 		dst := ggfx.NewImage(s.w, s.h)
@@ -337,7 +357,10 @@ func TestFillPathBatchingWithGeneratedPaths(t *testing.T) {
 
 // TestFillPathBatchingDrawCalls checks how many draw calls rendering paths takes.
 func TestFillPathBatchingDrawCalls(t *testing.T) {
+	// The paths are moved by different fractions of a pixel, so that the stencil cache holds each
+	// of them rather than one for all.
 	polygon := func(x, y float32) *vector.Path {
+		x += y / 256
 		var p vector.Path
 		p.MoveTo(x, y)
 		p.LineTo(x+10, y)
@@ -346,6 +369,7 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 		return &p
 	}
 	curve := func(x, y float32) *vector.Path {
+		x += y / 256
 		var p vector.Path
 		p.MoveTo(x, y)
 		p.QuadTo(x+10, y, x+10, y+10)
@@ -353,9 +377,13 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 		return &p
 	}
 	const n = 50
-	// With antialiasing, a path takes 8 samples, and a stencil pass draws each sample.
-	const samples = 8
+	// With antialiasing, a path takes 8 samples in 2 stencil buffers, and a stencil pass draws each
+	// stencil buffer of a path drawn alone.
+	const buffers = 2
 
+	// The stencil cache takes the paths filled a second time, which are drawn as the first time
+	// but to the cache. Filling them a third time takes their colors only: in one call, or one call
+	// per path drawn alone.
 	tests := []struct {
 		name  string
 		draw  func(dst *ggfx.Image)
@@ -371,7 +399,7 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 			},
 			// The polygons, then the colors. No path has a curve.
 			want:  2,
-			wantU: n*samples + n,
+			wantU: n*buffers + n,
 		},
 		{
 			name: "contained curves",
@@ -381,7 +409,7 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 				}
 			},
 			want:  3,
-			wantU: n*samples*2 + n,
+			wantU: n*buffers*2 + n,
 		},
 		{
 			name: "a clipped polygon",
@@ -394,10 +422,10 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 					fillPath(dst, polygon(x, y), color.White, true, vector.FillRuleNonZero, ggfx.BlendSourceOver)
 				}
 			},
-			// The clipped path's samples are drawn one by one. Its bounds are the destination's,
-			// so its color is drawn with the others.
-			want:  1 + samples + 1,
-			wantU: n*samples + n,
+			// The clipped path's stencil buffers are drawn one by one. Its color is drawn with
+			// the others.
+			want:  1 + buffers + 1,
+			wantU: n*buffers + n,
 		},
 		{
 			name: "a polygon on a sub-image",
@@ -412,10 +440,9 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 				}
 			},
 			// The path on the sub-image is contained in it, so its stencil is drawn with the
-			// others. Its color is drawn to the sub-image alone, between the colors of the
-			// paths before and after it.
-			want:  1 + 3,
-			wantU: n*samples + n,
+			// others. Its color is drawn with the others too, its quad cut to the sub-image.
+			want:  1 + 1,
+			wantU: n*buffers + n,
 		},
 		{
 			name: "without antialiasing",
@@ -431,22 +458,26 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, disabled := range []bool{false, true} {
+				vector.ResetStencilCache()
 				vector.SetBatchingDisabled(disabled)
 				dst := ggfx.NewImage(200, 200)
-				tc.draw(dst)
-				before := vector.DrawCallCount()
-				// Using the destination renders the paths.
-				dst.At(0, 0)
-				got := vector.DrawCallCount() - before
+				var got [3]int
+				for k := range got {
+					tc.draw(dst)
+					before := vector.DrawCallCount()
+					// Using the destination renders the paths.
+					dst.At(0, 0)
+					got[k] = vector.DrawCallCount() - before
+				}
 				dst.Deallocate()
 				vector.SetBatchingDisabled(false)
 
-				want := tc.want
+				want := [3]int{tc.want, tc.want, 1}
 				if disabled {
-					want = tc.wantU
+					want = [3]int{tc.wantU, tc.wantU, n}
 				}
 				if got != want {
-					t.Errorf("batching disabled=%t: got %d draw calls, want %d", disabled, got, want)
+					t.Errorf("batching disabled=%t: got %v draw calls, filling three times, want %v", disabled, got, want)
 				}
 			}
 		})

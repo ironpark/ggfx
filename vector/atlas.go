@@ -16,7 +16,6 @@ package vector
 
 import (
 	"image"
-	"math"
 	"slices"
 	"sync/atomic"
 
@@ -31,12 +30,10 @@ type atlasRegion struct {
 }
 
 type atlas struct {
-	pathRenderingBounds []image.Rectangle
-	// contained reports whether a path lies in its rendering bounds, which is when the path is
-	// not clipped by the destination or its bounds.
-	contained                   []bool
+	// atlasRegions are in the order they are laid out in, so the regions of an atlas image are
+	// consecutive.
 	atlasRegions                []atlasRegion
-	pathIndexToAtlasRegionIndex map[int]int
+	pathIndexToAtlasRegionIndex []int
 	atlasSizes                  []image.Point
 
 	// atlasImages are the atlas images the current paths are on: images[:len(atlasImages)].
@@ -80,62 +77,65 @@ func (p *sizePeak) peak() image.Point {
 	return image.Pt(p.x.Max(), p.y.Max())
 }
 
+// roundUpAtlasSize returns the smallest power of 1.5 not less than size, rounded up, and 16 at least.
 func roundUpAtlasSize(size int) int {
 	if size < 16 {
 		return 16
 	}
-	return int(math.Ceil(math.Pow(1.5, math.Ceil(math.Log(float64(size))/math.Log(1.5)))))
+	// 1.5^k is 3^k/2^k. 3^k fits in 64 bits up to k = 40, which is for sizes up to about 10^7.
+	n, d := uint64(1), uint64(1)
+	for n < uint64(size)*d {
+		n *= 3
+		d *= 2
+	}
+	return int((n + d - 1) / d)
 }
 
 func roundUp16(x int) int {
 	return (x + 15) &^ 15
 }
 
-// setPaths lays out paths in the atlas at time now, in frames.
-func (a *atlas) setPaths(now int64, dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) {
-	// Reset the members.
-	a.pathRenderingBounds = slices.Delete(a.pathRenderingBounds, 0, len(a.pathRenderingBounds))
-	a.atlasRegions = slices.Delete(a.atlasRegions, 0, len(a.atlasRegions))
-	clear(a.pathIndexToAtlasRegionIndex)
-	a.atlasSizes = slices.Delete(a.atlasSizes, 0, len(a.atlasSizes))
-
-	if len(paths) == 0 {
-		return
-	}
-
-	a.pathRenderingBounds = slices.Grow(a.pathRenderingBounds, len(paths))[:len(paths)]
-	a.contained = slices.Grow(a.contained[:0], len(paths))[:len(paths)]
+// setRenderingBounds sets rbs to the rendering bounds of paths, and contained to whether each path
+// lies in them, which is when the path is not clipped by the destination or its bounds.
+func setRenderingBounds(rbs []image.Rectangle, contained []bool, dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle) ([]image.Rectangle, []bool) {
+	rbs = slices.Grow(rbs[:0], len(paths))[:len(paths)]
+	contained = slices.Grow(contained[:0], len(paths))[:len(paths)]
 	for i, p := range paths {
 		pb := p.Bounds()
 		b := pb.Intersect(bounds[i]).Intersect(dstBounds)
-		a.contained[i] = !b.Empty() && b == pb
+		contained[i] = !b.Empty() && b == pb
 		// Round up the size to 16px in order to encourage reusing sub image cache.
-		a.pathRenderingBounds[i] = image.Rectangle{
+		rbs[i] = image.Rectangle{
 			Min: b.Min,
 			Max: b.Min.Add(image.Pt(roundUp16(b.Dx()), roundUp16(b.Dy()))),
 		}
+	}
+	return rbs, contained
+}
+
+// layout lays out the paths whose rendering bounds are rbs, but the ones whose slot is not
+// transient, which get no region. slots may be nil, for all paths on the atlas.
+func (a *atlas) layout(now int64, dstBounds image.Rectangle, rbs []image.Rectangle, antialias bool, slots []stencilSlot) {
+	// Reset the members.
+	a.atlasRegions = slices.Delete(a.atlasRegions, 0, len(a.atlasRegions))
+	a.pathIndexToAtlasRegionIndex = a.pathIndexToAtlasRegionIndex[:0]
+	a.atlasSizes = slices.Delete(a.atlasSizes, 0, len(a.atlasSizes))
+
+	n := len(rbs)
+	size := func(i int) image.Point {
+		if slots != nil && !slots[i].transient {
+			return image.Point{}
+		}
+		return rbs[i].Size()
+	}
+	var found bool
+	for i := range n {
 		a.atlasRegions = append(a.atlasRegions, atlasRegion{
 			pathIndex: i,
 		})
-	}
-
-	slices.SortFunc(a.atlasRegions, func(ra, rb atlasRegion) int {
-		ba := a.pathRenderingBounds[ra.pathIndex]
-		bb := a.pathRenderingBounds[rb.pathIndex]
-		if ba.Dy() != bb.Dy() {
-			return bb.Dy() - ba.Dy()
+		if s := size(i); s.X > 0 && s.Y > 0 {
+			found = true
 		}
-		if ba.Dx() != bb.Dx() {
-			return ba.Dx() - bb.Dx()
-		}
-		return ra.pathIndex - rb.pathIndex
-	})
-
-	if a.pathIndexToAtlasRegionIndex == nil {
-		a.pathIndexToAtlasRegionIndex = make(map[int]int, len(a.atlasRegions))
-	}
-	for i, r := range a.atlasRegions {
-		a.pathIndexToAtlasRegionIndex[r.pathIndex] = i
 	}
 
 	w, h := dstBounds.Dx(), dstBounds.Dy()
@@ -145,6 +145,29 @@ func (a *atlas) setPaths(now int64, dstBounds image.Rectangle, paths []*Path, bo
 	}
 	// Use 2^n - 1, as a region in internal/atlas has 1px padding.
 	maxImageSize := max(4093, w, h)
+
+	if !found {
+		// No image is needed, but the images kept still age.
+		a.ensureImages(now, 0, maxImageSize)
+		return
+	}
+
+	slices.SortFunc(a.atlasRegions, func(ra, rb atlasRegion) int {
+		ba := size(ra.pathIndex)
+		bb := size(rb.pathIndex)
+		if ba.Y != bb.Y {
+			return bb.Y - ba.Y
+		}
+		if ba.X != bb.X {
+			return ba.X - bb.X
+		}
+		return ra.pathIndex - rb.pathIndex
+	})
+
+	a.pathIndexToAtlasRegionIndex = slices.Grow(a.pathIndexToAtlasRegionIndex[:0], n)[:n]
+	for i, r := range a.atlasRegions {
+		a.pathIndexToAtlasRegionIndex[r.pathIndex] = i
+	}
 
 	// Pack the regions into an atlas with a very simple algorithm:
 	// Order the regions by height and then place them in a row.
@@ -156,9 +179,8 @@ func (a *atlas) setPaths(now int64, dstBounds image.Rectangle, paths []*Path, bo
 		var currentRowHeight int
 		var currentPosition image.Point
 		for i := range a.atlasRegions {
-			pb := a.pathRenderingBounds[a.atlasRegions[i].pathIndex]
 			// TODO: What if s already exceeds maxImageSize (#3357)?
-			s := pb.Size()
+			s := size(a.atlasRegions[i].pathIndex)
 			// An additional image for antialiasing must be on the same atlas,
 			// so extend the width and use it as a sub image.
 			if antialias {
@@ -244,7 +266,7 @@ func (a *atlas) ensureImages(now int64, count int, maxImageSize int) {
 				// image kept large after a large fill would otherwise be cleared whole for
 				// every small one.
 				sub := img.RecyclableSubImage(image.Rectangle{Max: s})
-				sub.Clear()
+				clearStencilImage(sub)
 				sub.Recycle()
 				continue
 			}
@@ -289,52 +311,15 @@ func (a *atlas) dispose() {
 	a.bytes.Store(0)
 }
 
-// stencilBufferImageAt returns the stencil buffer of path i as a sub-image of its atlas image, or
-// nil if the path has no region. antialiasIndex selects one of the two halves for antialiasing.
-func (a *atlas) stencilBufferImageAt(i int, antialias bool, antialiasIndex int) *ggfx.Image {
-	img, b, ok := a.stencilBufferRegionAt(i, antialias, antialiasIndex)
-	if !ok {
-		return nil
-	}
-	return img.SubImage(b).(*ggfx.Image)
-}
-
-// stencilBufferRegionAt returns the atlas image of path i and the stencil buffer's bounds on it.
+// regionAt returns the atlas image of path i and its region on it, which holds its stencil buffers.
 // ok is false if the path has no region.
-func (a *atlas) stencilBufferRegionAt(i int, antialias bool, antialiasIndex int) (img *ggfx.Image, bounds image.Rectangle, ok bool) {
-	idx, ok := a.pathIndexToAtlasRegionIndex[i]
-	if !ok {
+func (a *atlas) regionAt(i int) (img *ggfx.Image, region image.Rectangle, ok bool) {
+	if i >= len(a.pathIndexToAtlasRegionIndex) {
 		return nil, image.Rectangle{}, false
 	}
-	ar := a.atlasRegions[idx]
+	ar := a.atlasRegions[a.pathIndexToAtlasRegionIndex[i]]
 	if ar.imageBounds.Empty() {
 		return nil, image.Rectangle{}, false
 	}
-
-	b := ar.imageBounds
-	if antialias {
-		switch antialiasIndex {
-		case 0:
-			b.Max.X = b.Min.X + b.Dx()/2
-		case 1:
-			b.Min.X += b.Dx() / 2
-		default:
-			panic("not reached")
-		}
-	}
-	return a.atlasImages[ar.imageIndex], b, true
-}
-
-// atlasImageIndexAt returns the index of the atlas image of path i.
-func (a *atlas) atlasImageIndexAt(i int) int {
-	return a.atlasRegions[a.pathIndexToAtlasRegionIndex[i]].imageIndex
-}
-
-// isContained reports whether path i lies in its rendering bounds.
-func (a *atlas) isContained(i int) bool {
-	return a.contained[i]
-}
-
-func (a *atlas) pathRenderingPositionAt(i int) image.Point {
-	return a.pathRenderingBounds[i].Min
+	return a.atlasImages[ar.imageIndex], ar.imageBounds, true
 }

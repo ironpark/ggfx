@@ -367,6 +367,9 @@ func doAppendParalleledQuad(path *Path, p0, p1, p2 point, dist float32, level in
 	doAppendParalleledQuad(path, p012, p12, p2, dist, level+1)
 }
 
+// jointTolerance is the distance in pixels a skipped joint may move the outline by.
+const jointTolerance = 1.0 / 1024
+
 func addJoint(strokePath *Path, subPath *subPath, opIndex int, reverse bool, options *StrokeOptions) {
 	var p point
 	var dir0, dir1 vec2
@@ -394,7 +397,11 @@ func addJoint(strokePath *Path, subPath *subPath, opIndex int, reverse bool, opt
 		dir1 = subPath.endDir(nextOpIdx).inv().norm()
 	}
 
-	if dir0 == dir1 {
+	// The segments of a flattened curve meet at almost the same direction, which float32 rarely
+	// makes exactly the same. Skipping the joint starts the next segment at the end of this one
+	// instead of the joint's end, Width/2 * |dir1 - dir0| away, which is left out while it is far
+	// below what a pixel's samples can tell.
+	if d := (vec2{x: dir1.x - dir0.x, y: dir1.y - dir0.y}); (d.x*d.x+d.y*d.y)*options.Width*options.Width/4 < jointTolerance*jointTolerance {
 		return
 	}
 

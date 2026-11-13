@@ -16,6 +16,7 @@ package vector
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/ironpark/ggfx"
 )
@@ -23,101 +24,62 @@ import (
 // The implementation is based on the following article:
 // https://medium.com/@evanwallace/easy-scalable-text-rendering-on-the-gpu-c3f4d782c5ac
 
-// These values are protected by cacheM.
+// lazyShader is a shader compiled at its first use. After that, getting it takes no lock, as
+// fillPaths gets its shaders at every flush.
+type lazyShader struct {
+	src    string
+	shader atomic.Pointer[ggfx.Shader]
+	m      sync.Mutex
+}
+
+func (l *lazyShader) get() (*ggfx.Shader, error) {
+	if s := l.shader.Load(); s != nil {
+		return s, nil
+	}
+
+	l.m.Lock()
+	defer l.m.Unlock()
+
+	if s := l.shader.Load(); s != nil {
+		return s, nil
+	}
+	s, err := ggfx.NewShader([]byte(l.src))
+	if err != nil {
+		return nil, err
+	}
+	l.shader.Store(s)
+	return s, nil
+}
 
 var (
-	stencilBufferFillShader      *ggfx.Shader
-	stencilBufferBezierShader    *ggfx.Shader
-	stencilBufferNonZeroShader   *ggfx.Shader
-	stencilBufferNonZeroAAShader *ggfx.Shader
-	stencilBufferEvenOddShader   *ggfx.Shader
-	stencilBufferEvenOddAAShader *ggfx.Shader
-
-	stencilBufferM sync.Mutex
+	stencilBufferFillShader      = lazyShader{src: stencilBufferFillShaderSrc}
+	stencilBufferBezierShader    = lazyShader{src: stencilBufferBezierShaderSrc}
+	stencilBufferNonZeroShader   = lazyShader{src: stencilBufferNonZeroShaderSrc}
+	stencilBufferNonZeroAAShader = lazyShader{src: stencilBufferNonZeroAAShaderSrc}
+	stencilBufferEvenOddShader   = lazyShader{src: stencilBufferEvenOddShaderSrc}
+	stencilBufferEvenOddAAShader = lazyShader{src: stencilBufferEvenOddAAShaderSrc}
 )
 
 func ensureStencilBufferShaders() (*ggfx.Shader, error) {
-	stencilBufferM.Lock()
-	defer stencilBufferM.Unlock()
-
-	if stencilBufferFillShader != nil {
-		return stencilBufferFillShader, nil
-	}
-	s, err := ggfx.NewShader([]byte(stencilBufferFillShaderSrc))
-	if err != nil {
-		return nil, err
-	}
-	stencilBufferFillShader = s
-	return stencilBufferFillShader, err
+	return stencilBufferFillShader.get()
 }
 
 func ensureStencilBufferBezierShader() (*ggfx.Shader, error) {
-	stencilBufferM.Lock()
-	defer stencilBufferM.Unlock()
-
-	if stencilBufferBezierShader != nil {
-		return stencilBufferBezierShader, nil
-	}
-	s, err := ggfx.NewShader([]byte(stencilBufferBezierShaderSrc))
-	if err != nil {
-		return nil, err
-	}
-	stencilBufferBezierShader = s
-	return stencilBufferBezierShader, nil
+	return stencilBufferBezierShader.get()
 }
 
 func ensureStencilBufferNonZeroShader(antialias bool) (*ggfx.Shader, error) {
-	stencilBufferM.Lock()
-	defer stencilBufferM.Unlock()
-
 	if antialias {
-		if stencilBufferNonZeroAAShader != nil {
-			return stencilBufferNonZeroAAShader, nil
-		}
-		s, err := ggfx.NewShader([]byte(stencilBufferNonZeroAAShaderSrc))
-		if err != nil {
-			return nil, err
-		}
-		stencilBufferNonZeroAAShader = s
-		return stencilBufferNonZeroAAShader, nil
+		return stencilBufferNonZeroAAShader.get()
 	}
-
-	if stencilBufferNonZeroShader != nil {
-		return stencilBufferNonZeroShader, nil
-	}
-	s, err := ggfx.NewShader([]byte(stencilBufferNonZeroShaderSrc))
-	if err != nil {
-		return nil, err
-	}
-	stencilBufferNonZeroShader = s
-	return stencilBufferNonZeroShader, nil
+	return stencilBufferNonZeroShader.get()
 }
 
 func ensureStencilBufferEvenOddShader(antialias bool) (*ggfx.Shader, error) {
-	stencilBufferM.Lock()
-	defer stencilBufferM.Unlock()
-
 	if antialias {
-		if stencilBufferEvenOddAAShader != nil {
-			return stencilBufferEvenOddAAShader, nil
-		}
-		s, err := ggfx.NewShader([]byte(stencilBufferEvenOddAAShaderSrc))
-		if err != nil {
-			return nil, err
-		}
-		stencilBufferEvenOddAAShader = s
-		return stencilBufferEvenOddAAShader, nil
+		return stencilBufferEvenOddAAShader.get()
 	}
-
-	if stencilBufferEvenOddShader != nil {
-		return stencilBufferEvenOddShader, nil
-	}
-	s, err := ggfx.NewShader([]byte(stencilBufferEvenOddShaderSrc))
-	if err != nil {
-		return nil, err
-	}
-	stencilBufferEvenOddShader = s
-	return stencilBufferEvenOddShader, nil
+	return stencilBufferEvenOddShader.get()
 }
 
 const stencilBufferFillShaderSrc = `
@@ -144,9 +106,26 @@ fn fragment(v: Vertex) -> vec4f {
 }
 `
 
-const stencilBufferNonZeroShaderSrc = `
+// stencilAtSrc is the cover shaders' read of a stencil buffer: custom.z is the index of the
+// source image the buffer is on, as a draw covers paths whose buffers are on different images.
+const stencilAtSrc = `
+fn stencil_at(v: Vertex, pos: vec2f) -> vec4f {
+	if (v.custom.z < 0.5) {
+		return src0_unsafe_at(pos);
+	}
+	if (v.custom.z < 1.5) {
+		return src1_unsafe_at(pos);
+	}
+	if (v.custom.z < 2.5) {
+		return src2_unsafe_at(pos);
+	}
+	return src3_unsafe_at(pos);
+}
+`
+
+const stencilBufferNonZeroShaderSrc = stencilAtSrc + `
 fn fragment(v: Vertex) -> vec4f {
-	let c = src0_unsafe_at(v.src_pos);
+	let c = stencil_at(v, v.src_pos);
 	let r = i32(floor(c.r * 255.0 + 0.5));
 	let w = abs((r >> 4u) - (r & 15));
 	let value = min(f32(w), 1.0);
@@ -154,15 +133,15 @@ fn fragment(v: Vertex) -> vec4f {
 }
 `
 
-const stencilBufferNonZeroAAShaderSrc = `
+const stencilBufferNonZeroAAShaderSrc = stencilAtSrc + `
 fn round4(x: vec4f) -> vec4f {
 	return floor(x + 0.5);
 }
 
 fn fragment(v: Vertex) -> vec4f {
-	let c0 = src0_unsafe_at(v.src_pos);
+	let c0 = stencil_at(v, v.src_pos);
 	// custom.xy is the offset to the second sample.
-	let c1 = src0_unsafe_at(v.src_pos + v.custom.xy);
+	let c1 = stencil_at(v, v.src_pos + v.custom.xy);
 	let ci0 = vec4i(round4(c0 * 255.0));
 	let ci1 = vec4i(round4(c1 * 255.0));
 	let w0 = abs((ci0 >> vec4u(4u)) - (ci0 & vec4i(15)));
@@ -173,9 +152,9 @@ fn fragment(v: Vertex) -> vec4f {
 }
 `
 
-const stencilBufferEvenOddShaderSrc = `
+const stencilBufferEvenOddShaderSrc = stencilAtSrc + `
 fn fragment(v: Vertex) -> vec4f {
-	let c = src0_unsafe_at(v.src_pos);
+	let c = stencil_at(v, v.src_pos);
 	let r = i32(floor(c.r * 255.0 + 0.5));
 	let w = abs((r >> 4u) - (r & 15));
 	let value = f32(w % 2);
@@ -183,15 +162,15 @@ fn fragment(v: Vertex) -> vec4f {
 }
 `
 
-const stencilBufferEvenOddAAShaderSrc = `
+const stencilBufferEvenOddAAShaderSrc = stencilAtSrc + `
 fn round4(x: vec4f) -> vec4f {
 	return floor(x + 0.5);
 }
 
 fn fragment(v: Vertex) -> vec4f {
-	let c0 = src0_unsafe_at(v.src_pos);
+	let c0 = stencil_at(v, v.src_pos);
 	// custom.xy is the offset to the second sample.
-	let c1 = src0_unsafe_at(v.src_pos + v.custom.xy);
+	let c1 = stencil_at(v, v.src_pos + v.custom.xy);
 	let ci0 = vec4i(round4(c0 * 255.0));
 	let ci1 = vec4i(round4(c1 * 255.0));
 	let w0 = abs((ci0 >> vec4u(4u)) - (ci0 & vec4i(15)));

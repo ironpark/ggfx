@@ -336,13 +336,7 @@ func StrokePath(dst *ggfx.Image, path *Path, strokeOptions *StrokeOptions, drawP
 	if strokeOptions == nil {
 		strokeOptions = &StrokeOptions{}
 	}
-	stroke := thePathPool.Get()
-	defer func() {
-		stroke.Reset()
-		thePathPool.Put(stroke)
-	}()
 	op := &AddStrokeOptions{}
 	op.StrokeOptions = *strokeOptions
-	stroke.AddStroke(path, op)
-	FillPath(dst, stroke, nil, drawPathOptions)
+	fillPath(dst, path, op, nil, drawPathOptions)
 }

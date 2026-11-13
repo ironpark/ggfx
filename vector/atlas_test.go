@@ -17,6 +17,7 @@ package vector_test
 import (
 	"image"
 	"image/color"
+	"math"
 	"testing"
 
 	"github.com/ironpark/ggfx"
@@ -209,4 +210,18 @@ func setRects(a *vector.StencilAtlas, dst image.Rectangle, rects ...image.Rectan
 func setRectsNoAA(a *vector.StencilAtlas, dst image.Rectangle, rects ...image.Rectangle) {
 	paths, bounds := rectPaths(rects...)
 	a.SetPaths(dst, paths, bounds, false)
+}
+
+// TestRoundUpAtlasSize checks the sizes against the powers of 1.5 they are computed as with
+// floating point, which is exact for sizes this small.
+func TestRoundUpAtlasSize(t *testing.T) {
+	for size := range 1 << 17 {
+		want := 16
+		if size >= 16 {
+			want = int(math.Ceil(math.Pow(1.5, math.Ceil(math.Log(float64(size))/math.Log(1.5)))))
+		}
+		if got := vector.RoundUpAtlasSize(size); got != want {
+			t.Fatalf("RoundUpAtlasSize(%d): got %d, want %d", size, got, want)
+		}
+	}
 }
