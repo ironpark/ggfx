@@ -175,7 +175,7 @@ func (b *backend) tryAlloc(width, height int) (*packing.Node, bool) {
 	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, float32(sw), float32(sh), 0, 0, float32(sw), float32(sh), 1, 1, 1, 1)
 	is := graphics.QuadIndices()
 	dr := image.Rect(0, 0, sw, sh)
-	newImg.DrawTriangles(srcs, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{dr}, NearestFilterShader.ensureShader(), nil)
+	newImg.DrawTriangles(srcs, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{dr}, NearestFilterShader().ensureShader(), nil)
 	src.Dispose()
 	b.backendImage = newImg
 	b.width = pageW
@@ -195,7 +195,7 @@ func clearImage(dst *graphicscommand.Image, region image.Rectangle) {
 	vs := make([]float32, 4*graphics.VertexFloatCount)
 	graphics.QuadVerticesFromDstAndSrc(vs, float32(region.Min.X), float32(region.Min.Y), float32(region.Max.X), float32(region.Max.Y), 0, 0, 0, 0, 0, 0, 0, 0)
 	is := graphics.QuadIndices()
-	dst.DrawTriangles([graphics.ShaderSrcImageCount]*graphicscommand.Image{}, vs, is, graphicsdriver.BlendClear, region, [graphics.ShaderSrcImageCount]image.Rectangle{}, clearShader.ensureShader(), nil)
+	dst.DrawTriangles([graphics.ShaderSrcImageCount]*graphicscommand.Image{}, vs, is, graphicsdriver.BlendClear, region, [graphics.ShaderSrcImageCount]image.Rectangle{}, clearShader().ensureShader(), nil)
 }
 
 var (
@@ -381,7 +381,7 @@ func (i *Image) ensureIsolatedFromSource(backends []*backend) {
 	dr := image.Rect(0, 0, i.width, i.height)
 	sr := image.Rect(0, 0, i.width, i.height)
 
-	newI.drawTriangles([graphics.ShaderSrcImageCount]*Image{i}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader, nil)
+	newI.drawTriangles([graphics.ShaderSrcImageCount]*Image{i}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader(), nil)
 	newI.moveTo(i)
 }
 
@@ -412,7 +412,7 @@ func (i *Image) putOnSourceBackend() {
 	is := graphics.QuadIndices()
 	dr := image.Rect(0, 0, i.width, i.height)
 	sr := image.Rect(0, 0, i.width, i.height)
-	newI.drawTriangles([graphics.ShaderSrcImageCount]*Image{i}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader, nil)
+	newI.drawTriangles([graphics.ShaderSrcImageCount]*Image{i}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader(), nil)
 
 	newI.moveTo(i)
 	i.usedAsSourceCount = 0

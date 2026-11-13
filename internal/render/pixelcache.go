@@ -301,7 +301,7 @@ func (c *pixelCache) writeBackPixelsIfNeeded(img *atlas.Image) {
 	dr := image.Rect(0, 0, c.width, c.height)
 	sr := image.Rect(0, 0, whiteImage.width, whiteImage.height)
 	blend := graphicsdriver.BlendCopy
-	img.DrawTriangles(srcs, vs, is, blend, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader, nil)
+	img.DrawTriangles(srcs, vs, is, blend, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader(), nil)
 
 	clear(c.dots)
 }

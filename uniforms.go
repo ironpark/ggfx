@@ -14,11 +14,11 @@
 
 package ggfx
 
-import "github.com/ironpark/ggfx/internal/render"
+import "github.com/ironpark/ggfx/internal/shader"
 
 // UniformScalar is a Go type that a [Uniforms] setter accepts for one scalar element:
 // int, int32, uint32, float32 or float64.
-type UniformScalar = render.UniformScalar
+type UniformScalar = shader.UniformScalar
 
 // Uniforms is the uniform block of one shader, laid out as the shader reads it.
 //
@@ -49,25 +49,25 @@ func (s *Shader) NewUniforms() *Uniforms {
 	}
 	return &Uniforms{
 		shader: s,
-		block:  make([]uint32, s.shader.UniformDwordCount()),
+		block:  make([]uint32, s.shader.Program().UniformDwordCount),
 	}
 }
 
 // Set sets the single-element uniform name to v.
 func (u *Uniforms) Set[T UniformScalar](name string, v T) {
-	u.shader.shader.PutUniform(u.block, name, v)
+	u.shader.shader.Program().PutUniform(u.block, name, v)
 }
 
 // SetSlice sets the uniform name to v, flattened in WGSL order:
 // vector components, matrix columns then rows, array elements.
 // len(v) must be the uniform's element count.
 func (u *Uniforms) SetSlice[T UniformScalar](name string, v []T) {
-	u.shader.shader.PutUniformSlice(u.block, name, v)
+	u.shader.shader.Program().PutUniformSlice(u.block, name, v)
 }
 
 // SetBool sets the single-element uniform name to 1 if v is true, or 0 otherwise.
 func (u *Uniforms) SetBool(name string, v bool) {
-	u.shader.shader.PutUniformBool(u.block, name, v)
+	u.shader.shader.Program().PutUniformBool(u.block, name, v)
 }
 
 // Reset sets every uniform to zero.

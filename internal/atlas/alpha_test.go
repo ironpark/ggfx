@@ -156,7 +156,7 @@ func TestA8SampledAsWhite(t *testing.T) {
 
 		vs := quadVertices(w, h, 0, 0, 1)
 		r := image.Rect(0, 0, w, h)
-		dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader, nil)
+		dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader(), nil)
 
 		want := make([]byte, 4*w*h)
 		graphics.ExpandAlpha(want, pix)
@@ -184,7 +184,7 @@ func TestA8DrawInto(t *testing.T) {
 
 		vs := quadVertices(w, h, 0, 0, 1)
 		r := image.Rect(0, 0, w, h)
-		dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader, nil)
+		dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader(), nil)
 		wantBackendFormat(t, dst, native)
 		if got, want := readPixels(t, dst, 1, r), []byte{0, 0x40, 0xff, 0x10}; !bytes.Equal(got, want) {
 			t.Errorf("got %v, want %v", got, want)
@@ -217,7 +217,7 @@ func TestA8MovesBetweenBackends(t *testing.T) {
 		// Used as a destination, img leaves the source page, which other is a source on.
 		vs := quadVertices(1, 1, 0, 0, 1)
 		r := image.Rect(0, 0, w, h)
-		img.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{other}, vs, graphics.QuadIndices(), graphicsdriver.BlendSourceOver, r, [graphics.ShaderSrcImageCount]image.Rectangle{image.Rect(0, 0, 1, 1)}, atlas.NearestFilterShader, nil)
+		img.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{other}, vs, graphics.QuadIndices(), graphicsdriver.BlendSourceOver, r, [graphics.ShaderSrcImageCount]image.Rectangle{image.Rect(0, 0, 1, 1)}, atlas.NearestFilterShader(), nil)
 		if img.IsOnSourceBackendForTesting() {
 			t.Fatal("the image is on a source page after a draw into it")
 		}
@@ -229,7 +229,7 @@ func TestA8MovesBetweenBackends(t *testing.T) {
 		// Used as a source often enough, img is put on a source page again.
 		for range atlas.BaseCountToPutOnSourceBackend * 2 {
 			vs := quadVertices(w, h, 0, 0, 1)
-			dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{img}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader, nil)
+			dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{img}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader(), nil)
 			atlas.PutImagesOnSourceBackendForTesting()
 			if img.IsOnSourceBackendForTesting() {
 				break

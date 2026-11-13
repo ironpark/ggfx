@@ -233,8 +233,7 @@ macOS OpenGL draws in a CGL context the harness makes. ggwd's tests run in a win
 
 ## The renderer core
 
-`internal/render` holds what draws, apart from what shows it: `Image`, `Shader` and the uniform
-packing, the white image fills draw from, the error state, reads of pixels that wait for a frame,
+`internal/render` holds what draws, apart from what shows it: `Image`, the white image fills draw from, the error state, reads of pixels that wait for a frame,
 driver creation and the tick. It was the drawing half of `internal/ui`. The tick counts flushes,
 and the image GC expires against it; it is not exported, so a window system keeps a clock of its
 own for what it caches, as ggwd does for the current monitor and `exp/textinput`'s state queue,
@@ -247,6 +246,15 @@ particulars are one value, `CurrentDriver()`, and whether a present was occluded
 `Flush`. The render thread starts at `Init`; pacing frames is the window system's. ggfx's own tests run inside one frame with no window
 (`internal/testing.MainInFrame`); on macOS, OpenGL draws in a CGL context the harness makes. See
 `docs/renderer-split.md` for how the split went.
+
+A shader has three layers: `ggfx.Shader`, the public handle that
+`Dispose` empties; `atlas.Shader`, which owns the compiled program and the GPU shader's lifetime
+(made at the first draw, disposed in the queue's order, dropped and remade when the GPU resources
+are lost); and `graphicscommand.Shader`, the queue's handle to the driver's shader, which reads
+from the program whether draws can merge across regions. `render.Shader` only forwarded, so it
+went; the uniform packing it held is the program's (`shader.Program.AppendUniforms` and the
+`PutUniform` setters). The atlas's built-in shaders compile at their first use rather than in
+package init.
 
 A Metal surface is made for an NSView rather than an NSWindow, and the driver asks nothing of the
 view's window: the window system tells the surface whether the window is in a live resize or

@@ -88,7 +88,7 @@ func BackendCountForTesting() int {
 }
 
 func ClearShaderForTesting() *Shader {
-	return clearShader
+	return clearShader()
 }
 
 func ShaderCountWithInternalShaderForTesting() int {

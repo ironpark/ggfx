@@ -70,11 +70,11 @@ func TestImageDrawTwice(t *testing.T) {
 	is := graphics.QuadIndices()
 	dr := image.Rect(0, 0, w, h)
 	sr := image.Rect(0, 0, w, h)
-	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src0}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader, nil)
+	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src0}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader(), nil)
 
 	// Vertices must be recreated (#1755)
 	vs = quadVertices(w, h, 0, 0, 1)
-	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src1}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader, nil)
+	dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src1}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader(), nil)
 
 	pix := make([]byte, 4*w*h)
 	ok, err := dst.ReadPixels(render.GraphicsDriver(), pix, image.Rect(0, 0, w, h))

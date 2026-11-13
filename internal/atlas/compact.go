@@ -189,7 +189,7 @@ func (b *backend) compact() {
 	srcs := [graphics.ShaderSrcImageCount]*graphicscommand.Image{b.backendImage}
 	dr := image.Rect(0, 0, newW, newH)
 	sr := image.Rect(0, 0, b.width, b.height)
-	newImg.DrawTriangles(srcs, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader.ensureShader(), nil)
+	newImg.DrawTriangles(srcs, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader().ensureShader(), nil)
 
 	b.backendImage.Dispose()
 	b.backendImage = newImg

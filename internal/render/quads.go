@@ -35,7 +35,7 @@ var quadScratches = sync.Pool{New: func() any { return new(quadScratch) }}
 // DrawQuads draws quads, quad k of four vertices in vertices from srcs[k] within srcRegions[k],
 // as one DrawTriangles a quad would with canSkipMipmap, in order: the vertices are in the
 // sources' own coordinates. A source may be listed more than once, and none may be i.
-func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions []image.Rectangle, shader *Shader) {
+func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions []image.Rectangle, shader *atlas.Shader) {
 	if len(srcs) == 0 {
 		return
 	}
@@ -74,7 +74,7 @@ func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 		imgs = append(imgs, src.img)
 	}
 	i.cache.writeBackPixelsIfNeeded(i.img)
-	i.img.DrawQuads(imgs, vertices, blend, dstRegion, srcRegions, shader.shader)
+	i.img.DrawQuads(imgs, vertices, blend, dstRegion, srcRegions, shader)
 	clear(imgs)
 	s.imgs = imgs[:0]
 

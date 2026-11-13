@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package render is the renderer: the graphics driver, the images and shaders drawn with it, and
+// Package render is the renderer: the graphics driver, the images drawn with it, and
 // the frames they are drawn in. It knows nothing of windows. The atlas and the command queue
 // under it are process-wide, and so is its state.
 package render

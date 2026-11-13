@@ -64,7 +64,7 @@ func TestA8Dots(t *testing.T) {
 	vs := make([]float32, 4*graphics.VertexFloatCount)
 	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, w, h, 0, 0, w, h, 1, 1, 1, 1)
 	r := image.Rect(0, 0, w, h)
-	dst.DrawTriangles([graphics.ShaderSrcImageCount]*render.Image{img}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, render.NearestFilterShader, nil, true)
+	dst.DrawTriangles([graphics.ShaderSrcImageCount]*render.Image{img}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, r, [graphics.ShaderSrcImageCount]image.Rectangle{r}, atlas.NearestFilterShader(), nil, true)
 
 	want := make([]byte, w*h)
 	for p, a := range dots {

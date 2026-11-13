@@ -20,8 +20,6 @@ import (
 	"sync"
 	"weak"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
@@ -78,6 +76,9 @@ func (s *shadersWithInternalShader) deallocateInternalShaders() {
 
 var theShadersWithInternalShader shadersWithInternalShader
 
+// Shader is a compiled program and the lifetime of its GPU shader: the command queue's shader is made
+// at the first draw, disposed with the queue's order kept outside a frame, and dropped when the
+// GPU resources are lost, to be made again at the next draw. The uniform layout is the program's.
 type Shader struct {
 	ir      *shader.Program
 	shader  *graphicscommand.Shader
@@ -91,6 +92,11 @@ func NewShader(ir *shader.Program, name string) *Shader {
 		ir:   ir,
 		name: name,
 	}
+}
+
+// Program returns the compiled program, whose uniform layout the draws' uniforms follow.
+func (s *Shader) Program() *shader.Program {
+	return s.ir
 }
 
 // shaderCleanupArg is an argument for a Shader's cleanup function.
@@ -145,43 +151,23 @@ func (s *Shader) deallocate() {
 	theShadersWithInternalShader.remove(s)
 }
 
+// The built-in shaders are compiled at their first use, so that importing atlas costs nothing.
 var (
-	NearestFilterShader *Shader
-	LinearFilterShader  *Shader
-	clearShader         *Shader
+	NearestFilterShader = sync.OnceValue(func() *Shader {
+		return newBuiltinShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe), "nearest")
+	})
+	LinearFilterShader = sync.OnceValue(func() *Shader {
+		return newBuiltinShader(builtinshader.ShaderSource(builtinshader.FilterLinear, builtinshader.AddressUnsafe), "linear")
+	})
+	clearShader = sync.OnceValue(func() *Shader {
+		return newBuiltinShader([]byte(builtinshader.ClearShaderSource), "clear")
+	})
 )
 
-func init() {
-	var wg errgroup.Group
-	var nearestIR, linearIR, clearIR *shader.Program
-	wg.Go(func() error {
-		ir, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
-		if err != nil {
-			return fmt.Errorf("atlas: compiling the nearest shader failed: %w", err)
-		}
-		nearestIR = ir
-		return nil
-	})
-	wg.Go(func() error {
-		ir, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterLinear, builtinshader.AddressUnsafe))
-		if err != nil {
-			return fmt.Errorf("atlas: compiling the linear shader failed: %w", err)
-		}
-		linearIR = ir
-		return nil
-	})
-	wg.Go(func() error {
-		ir, err := graphics.CompileShader([]byte(builtinshader.ClearShaderSource))
-		if err != nil {
-			return fmt.Errorf("atlas: compiling the clear shader failed: %w", err)
-		}
-		clearIR = ir
-		return nil
-	})
-	if err := wg.Wait(); err != nil {
-		panic(err)
+func newBuiltinShader(src []byte, name string) *Shader {
+	ir, err := graphics.CompileShader(src)
+	if err != nil {
+		panic(fmt.Errorf("atlas: compiling the %s shader failed: %w", name, err))
 	}
-	NearestFilterShader = NewShader(nearestIR, "nearest")
-	LinearFilterShader = NewShader(linearIR, "linear")
-	clearShader = NewShader(clearIR, "clear")
+	return NewShader(ir, name)
 }

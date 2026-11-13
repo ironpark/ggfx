@@ -19,16 +19,16 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/render"
 )
 
 // Shader represents a compiled shader program.
 //
 // For the details about shaders, see docs/shaders.md.
 type Shader struct {
-	shader *render.Shader
+	shader *atlas.Shader
 }
 
 func NewShader(src []byte) (*Shader, error) {
@@ -41,7 +41,7 @@ func newShader(src []byte, name string) (*Shader, error) {
 		return nil, err
 	}
 	return &Shader{
-		shader: render.NewShader(program, name),
+		shader: atlas.NewShader(program, name),
 	}, nil
 }
 
@@ -71,7 +71,7 @@ func (s *Shader) Deallocate() {
 }
 
 func (s *Shader) appendUniforms(dst []uint32, uniforms map[string]any) []uint32 {
-	return s.shader.AppendUniforms(dst, uniforms)
+	return s.shader.Program().AppendUniforms(dst, uniforms)
 }
 
 var (
@@ -100,9 +100,9 @@ func builtinShader(filter builtinshader.Filter, address builtinshader.Address) *
 	if address == builtinshader.AddressUnsafe && (filter == builtinshader.FilterNearest || filter == builtinshader.FilterLinear) {
 		switch filter {
 		case builtinshader.FilterNearest:
-			shader = &Shader{shader: render.NearestFilterShader}
+			shader = &Shader{shader: atlas.NearestFilterShader()}
 		case builtinshader.FilterLinear:
-			shader = &Shader{shader: render.LinearFilterShader}
+			shader = &Shader{shader: atlas.LinearFilterShader()}
 		}
 	} else {
 		var name string

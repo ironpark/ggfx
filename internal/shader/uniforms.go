@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package render
+package shader
 
 import (
 	"fmt"
@@ -20,50 +20,23 @@ import (
 	"reflect"
 
 	"github.com/gogpu/naga/ir"
-
-	"github.com/ironpark/ggfx/internal/atlas"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
-var (
-	NearestFilterShader = &Shader{shader: atlas.NearestFilterShader}
-	LinearFilterShader  = &Shader{shader: atlas.LinearFilterShader}
-)
-
-type Shader struct {
-	shader   *atlas.Shader
-	uniforms []shader.Uniform
-	// uniformDwordCount is the size of the user's uniform block in dwords.
-	uniformDwordCount int
-}
-
-func NewShader(program *shader.Program, name string) *Shader {
-	return &Shader{
-		shader:            atlas.NewShader(program, name),
-		uniforms:          program.Uniforms,
-		uniformDwordCount: program.UniformDwordCount,
-	}
-}
-
-func (s *Shader) Deallocate() {
-	s.shader.Deallocate()
-}
-
-// AppendUniforms appends the user's uniform block, laid out as the shader expects it, to dst.
-// A name in uniforms that the shader does not declare is ignored (#2710). A value whose element
+// AppendUniforms appends the user's uniform block, laid out as the program expects it, to dst.
+// A name in uniforms that the program does not declare is ignored (#2710). A value whose element
 // count does not match its uniform panics.
-func (s *Shader) AppendUniforms(dst []uint32, uniforms map[string]any) []uint32 {
+func (p *Program) AppendUniforms(dst []uint32, uniforms map[string]any) []uint32 {
 	origLen := len(dst)
-	if cap(dst)-len(dst) >= s.uniformDwordCount {
-		dst = dst[:len(dst)+s.uniformDwordCount]
+	if cap(dst)-len(dst) >= p.UniformDwordCount {
+		dst = dst[:len(dst)+p.UniformDwordCount]
 		clear(dst[origLen:])
 	} else {
-		dst = append(dst, make([]uint32, s.uniformDwordCount)...)
+		dst = append(dst, make([]uint32, p.UniformDwordCount)...)
 	}
 	block := dst[origLen:]
 
-	for i := range s.uniforms {
-		u := &s.uniforms[i]
+	for i := range p.Uniforms {
+		u := &p.Uniforms[i]
 		uv, ok := uniforms[u.Name]
 		if !ok {
 			continue
@@ -84,11 +57,6 @@ func (s *Shader) AppendUniforms(dst []uint32, uniforms map[string]any) []uint32 
 	return dst
 }
 
-// UniformDwordCount returns the size of the user's uniform block in dwords.
-func (s *Shader) UniformDwordCount() int {
-	return s.uniformDwordCount
-}
-
 // UniformScalar is a Go type that the PutUniform methods accept for one scalar element.
 type UniformScalar interface {
 	int | int32 | uint32 | float32 | float64
@@ -96,51 +64,73 @@ type UniformScalar interface {
 
 // PutUniform writes v, a single scalar, to the uniform name in block, laid out as AppendUniforms
 // lays it out. An unknown name or a uniform of more than one element panics.
-func (s *Shader) PutUniform[T UniformScalar](block []uint32, name string, v T) {
-	u := s.uniform(name)
-	checkUniformScalar(u)
+func (p *Program) PutUniform[T UniformScalar](block []uint32, name string, v T) {
+	u := p.uniform(name)
+	if len(u.Slots) != 1 {
+		panicUniformScalar(u)
+	}
 	block[u.Slots[0]] = uniformBits(u.Name, u.Kinds[0], v)
 }
 
 // PutUniformSlice writes v to the uniform name in block, flattened as AppendUniforms flattens a
 // slice. An unknown name or an element count mismatch panics.
-func (s *Shader) PutUniformSlice[T UniformScalar](block []uint32, name string, v []T) {
-	u := s.uniform(name)
-	checkUniformLen(u, len(v))
+func (p *Program) PutUniformSlice[T UniformScalar](block []uint32, name string, v []T) {
+	u := p.uniform(name)
+	if len(v) != len(u.Slots) {
+		panicUniformLen(u, len(v))
+	}
 	for j, e := range v {
 		block[u.Slots[j]] = uniformBits(u.Name, u.Kinds[j], e)
 	}
 }
 
 // PutUniformBool writes v, as 0 or 1, to the single-element uniform name in block.
-func (s *Shader) PutUniformBool(block []uint32, name string, v bool) {
-	u := s.uniform(name)
+func (p *Program) PutUniformBool(block []uint32, name string, v bool) {
+	u := p.uniform(name)
 	checkUniformScalar(u)
 	block[u.Slots[0]] = uniformFromBool(u.Kinds[0], v)
 }
 
-// uniform returns the uniform name. Unlike AppendUniforms, which ignores a name the shader does
-// not declare, it panics: a setter is bound to one shader, so an unknown name is a mistake.
-// A shader has a handful of uniforms, so a scan is as fast as a map.
-func (s *Shader) uniform(name string) *shader.Uniform {
-	for i := range s.uniforms {
-		if s.uniforms[i].Name == name {
-			return &s.uniforms[i]
+// uniform returns the uniform name. Unlike AppendUniforms, which ignores a name the program does
+// not declare, it panics: a setter is bound to one program, so an unknown name is a mistake.
+// A program has a handful of uniforms, so a scan is as fast as a map.
+func (p *Program) uniform(name string) *Uniform {
+	for i := range p.Uniforms {
+		if p.Uniforms[i].Name == name {
+			return &p.Uniforms[i]
 		}
 	}
-	panic(fmt.Sprintf("render: the shader has no uniform %q", name))
+	panic(fmt.Sprintf("shader: the shader has no uniform %q", name))
 }
 
-func checkUniformScalar(u *shader.Uniform) {
+// The generic setters are compiled in the caller's package, which does not inline this package's
+// unexported functions into them, so they test inline and panic through the panic functions. The
+// check functions keep their panics inline: calling out costs the map path its inlining.
+
+const (
+	errUniformScalar = "shader: unexpected uniform value for %s: a scalar was given for %d elements"
+	errUniformLen    = "shader: unexpected uniform value length for %s: got %d, want %d"
+	errUniformFloat  = "shader: unexpected uniform value type for %s: a float was given for an integer uniform"
+)
+
+func checkUniformScalar(u *Uniform) {
 	if len(u.Slots) != 1 {
-		panic(fmt.Sprintf("render: unexpected uniform value for %s: a scalar was given for %d elements", u.Name, len(u.Slots)))
+		panic(fmt.Sprintf(errUniformScalar, u.Name, len(u.Slots)))
 	}
 }
 
-func checkUniformLen(u *shader.Uniform, n int) {
+func panicUniformScalar(u *Uniform) {
+	panic(fmt.Sprintf(errUniformScalar, u.Name, len(u.Slots)))
+}
+
+func checkUniformLen(u *Uniform, n int) {
 	if n != len(u.Slots) {
-		panic(fmt.Sprintf("render: unexpected uniform value length for %s: got %d, want %d", u.Name, n, len(u.Slots)))
+		panic(fmt.Sprintf(errUniformLen, u.Name, n, len(u.Slots)))
 	}
+}
+
+func panicUniformLen(u *Uniform, n int) {
+	panic(fmt.Sprintf(errUniformLen, u.Name, n, len(u.Slots)))
 }
 
 func uniformBits[T UniformScalar](name string, kind ir.ScalarKind, v T) uint32 {
@@ -152,11 +142,17 @@ func uniformBits[T UniformScalar](name string, kind ir.ScalarKind, v T) uint32 {
 	case uint32:
 		return uniformFromInteger(kind, uint64(v))
 	case float32:
-		return uniformFromFloat(name, kind, float64(v))
+		if kind != ir.ScalarFloat {
+			panicUniformFloat(name)
+		}
+		return math.Float32bits(v)
 	case float64:
-		return uniformFromFloat(name, kind, v)
+		if kind != ir.ScalarFloat {
+			panicUniformFloat(name)
+		}
+		return math.Float32bits(float32(v))
 	}
-	panic("render: not reached")
+	panic("shader: not reached")
 }
 
 func uniformScalar(name string, kind ir.ScalarKind, v reflect.Value) uint32 {
@@ -170,7 +166,7 @@ func uniformScalar(name string, kind ir.ScalarKind, v reflect.Value) uint32 {
 	case reflect.Float32, reflect.Float64:
 		return uniformFromFloat(name, kind, v.Float())
 	default:
-		panic(fmt.Sprintf("render: unexpected uniform value type for %s: %s", name, v.Kind().String()))
+		panic(fmt.Sprintf("shader: unexpected uniform value type for %s: %s", name, v.Kind().String()))
 	}
 }
 
@@ -194,7 +190,11 @@ func uniformFromInteger[T int64 | uint64 | uint32](kind ir.ScalarKind, v T) uint
 
 func uniformFromFloat(name string, kind ir.ScalarKind, v float64) uint32 {
 	if kind != ir.ScalarFloat {
-		panic(fmt.Sprintf("render: unexpected uniform value type for %s: a float was given for an integer uniform", name))
+		panic(fmt.Sprintf(errUniformFloat, name))
 	}
 	return math.Float32bits(float32(v))
+}
+
+func panicUniformFloat(name string) {
+	panic(fmt.Sprintf(errUniformFloat, name))
 }

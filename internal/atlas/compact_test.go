@@ -135,7 +135,7 @@ func TestCompactPage(t *testing.T) {
 			defer dst.Deallocate()
 			vs := quadVertices(w, h, 0, 0, 1)
 			dr := image.Rect(0, 0, w, h)
-			dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{imgs[kept[1]]}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{dr}, atlas.NearestFilterShader, nil)
+			dst.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{imgs[kept[1]]}, vs, graphics.QuadIndices(), graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{dr}, atlas.NearestFilterShader(), nil)
 			checkCompactTestImage(t, dst, format, kept[1], w, h)
 
 			imgs[kept[2]].Deallocate()

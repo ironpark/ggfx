@@ -147,7 +147,7 @@ func (i *Image) level(level int) *atlas.Image {
 	graphics.QuadVerticesFromSrcAndMatrix(vs[:], 0, 0, float32(srcW), float32(srcH), 0.5, 0, 0, 0.5, 0, 0, 1, 1, 1, 1)
 	dstRegion := image.Rect(0, 0, dstW, dstH)
 	srcRegion := image.Rect(0, 0, srcW, srcH)
-	s.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs[:], graphics.QuadIndices(), graphicsdriver.BlendCopy, dstRegion, [graphics.ShaderSrcImageCount]image.Rectangle{srcRegion}, atlas.LinearFilterShader, nil)
+	s.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs[:], graphics.QuadIndices(), graphicsdriver.BlendCopy, dstRegion, [graphics.ShaderSrcImageCount]image.Rectangle{srcRegion}, atlas.LinearFilterShader(), nil)
 	i.setLevel(level, s)
 	return s
 }

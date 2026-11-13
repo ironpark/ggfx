@@ -295,7 +295,7 @@ func (i *Image) Deallocate() {
 
 // DrawTriangles draws triangles from srcs. It changes vertices in place: copying them is the
 // caller's.
-func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *Shader, uniforms []uint32, canSkipMipmap bool) {
+func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *atlas.Shader, uniforms []uint32, canSkipMipmap bool) {
 	var l imagesLocker
 	l.lock(i, srcs)
 	defer l.unlock()
@@ -304,7 +304,7 @@ func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 }
 
 // drawTriangles must be called with the mutexes of the image and the source images locked.
-func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *Shader, uniforms []uint32, canSkipMipmap bool) {
+func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *atlas.Shader, uniforms []uint32, canSkipMipmap bool) {
 	if i.modifyCallback != nil {
 		i.modifyCallback()
 	}
@@ -348,7 +348,7 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 	}
 
 	i.cache.writeBackPixelsIfNeeded(i.img)
-	i.img.DrawTriangles(imgs, vertices, indices, blend, dstRegion, srcRegions, shader.shader, uniforms)
+	i.img.DrawTriangles(imgs, vertices, indices, blend, dstRegion, srcRegions, shader, uniforms)
 
 	// After rendering, the pixel cache and the levels are no longer valid.
 	i.cache.reset()
@@ -440,5 +440,5 @@ func (i *Image) Fill(r, g, b, a float32, region image.Rectangle) {
 	}
 	sr := image.Rect(0, 0, whiteImage.width, whiteImage.height)
 	// i.lastBlend is updated in drawTriangles.
-	i.drawTriangles(srcs, i.tmpVerticesForFill, is, blend, region, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, NearestFilterShader, nil, true)
+	i.drawTriangles(srcs, i.tmpVerticesForFill, is, blend, region, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader(), nil, true)
 }
