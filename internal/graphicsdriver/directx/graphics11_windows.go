@@ -66,9 +66,10 @@ type graphics11 struct {
 	vertexStages map[int]*vertexStage11
 
 	// internalConstantBuffer is the constant buffer for the internal uniform block, which every
-	// shader declares the same. internalUniforms is what it holds, or empty when unknown.
+	// shader declares the same. internalVersion is the version of the block it holds, or 0 when
+	// unknown.
 	internalConstantBuffer *_ID3D11Buffer
-	internalUniforms       []uint32
+	internalVersion        uint64
 
 	// state is the pipeline state the last draw left bound.
 	state drawState11
@@ -516,7 +517,7 @@ func (g *graphics11) FlipsY() bool {
 	return true
 }
 
-func (g *graphics11) DrawTriangles(dstImage graphicsdriver.Image, srcImages [graphics.ShaderSrcImageCount]graphicsdriver.Image, shaderImpl graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+func (g *graphics11) DrawTriangles(dstImage graphicsdriver.Image, srcImages [graphics.ShaderSrcImageCount]graphicsdriver.Image, shaderImpl graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32, versions graphicsdriver.UniformVersions) error {
 	dst := dstImage.(*image11)
 	if dst.surface != nil {
 		dst.surface.drawn = true
@@ -630,11 +631,11 @@ func (g *graphics11) DrawTriangles(dstImage graphicsdriver.Image, srcImages [gra
 
 	// The internal uniform block comes first, then the user's block. Both are already laid out as
 	// the shader expects, the projection flipped for Direct3D's render targets (see FlipsY).
-	if err := g.uploadConstantBuffer(g.internalConstantBuffer, uniforms[:graphics.PreservedUniformDwordCount], &g.internalUniforms); err != nil {
+	if err := g.uploadConstantBuffer(g.internalConstantBuffer, uniforms[:graphics.PreservedUniformDwordCount], versions.Internal, &g.internalVersion); err != nil {
 		return err
 	}
 	if userCB != nil {
-		if err := g.uploadConstantBuffer(userCB, uniforms[graphics.PreservedUniformDwordCount:], &shader.userUniforms); err != nil {
+		if err := g.uploadConstantBuffer(userCB, uniforms[graphics.PreservedUniformDwordCount:], versions.User, &shader.userVersion); err != nil {
 			return err
 		}
 	}

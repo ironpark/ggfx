@@ -1201,7 +1201,7 @@ func (g *graphics12) FlipsY() bool {
 	return true
 }
 
-func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shaderImpl graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shaderImpl graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32, versions graphicsdriver.UniformVersions) error {
 	if shaderImpl == nil {
 		return fmt.Errorf("directx: shader is nil")
 	}
@@ -1292,7 +1292,9 @@ func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics
 		g.drawListState.indexBuffer = ibv
 	}
 
-	// The projection is already flipped for Direct3D's render targets (see FlipsY).
+	// The projection is already flipped for Direct3D's render targets (see FlipsY). versions go
+	// unused: each draw writes its blocks to the frame's ring for its own descriptor table, which
+	// a ring range of an earlier draw would have to outlive resetFrame and growth to stand in for.
 	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, &g.drawListState, g.frameIndex, dst.renderTargetFormat(), srcImages, shader, dstRegions, uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:], blend, indexOffset); err != nil {
 		return err
 	}

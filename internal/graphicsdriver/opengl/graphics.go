@@ -317,7 +317,7 @@ func (g *Graphics) SetVertices(vertices []float32, indices []uint32) error {
 	return nil
 }
 
-func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32, versions graphicsdriver.UniformVersions) error {
 	if shader == nil {
 		return fmt.Errorf("opengl: shader is nil")
 	}
@@ -344,7 +344,7 @@ func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.Shader
 		imgs[i].native = src.(*Image).texture
 	}
 
-	if err := g.useProgram(shader.(*Shader), uniforms, imgs); err != nil {
+	if err := g.useProgram(shader.(*Shader), uniforms, versions, imgs); err != nil {
 		return err
 	}
 

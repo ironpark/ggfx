@@ -102,7 +102,7 @@ func (*drawDriver) FlipsY() bool {
 	return false
 }
 
-func (*drawDriver) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+func (*drawDriver) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32, versions graphicsdriver.UniformVersions) error {
 	return nil
 }
 
@@ -191,7 +191,7 @@ func (g *projectionDriver) FlipsY() bool {
 	return g.flipsY
 }
 
-func (g *projectionDriver) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+func (g *projectionDriver) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32, versions graphicsdriver.UniformVersions) error {
 	g.projection = slices.Clone(uniforms[graphics.ProjectionMatrixUniformDwordIndex : graphics.ProjectionMatrixUniformDwordIndex+16])
 	return nil
 }
@@ -244,5 +244,86 @@ func TestProjectionFlipsY(t *testing.T) {
 		if got := clipY(h); got != bottom {
 			t.Errorf("%s: the bottom row's clip-space Y = %v, want %v", tc.name, got, bottom)
 		}
+	}
+}
+
+// versionDriver is a drawDriver that keeps the uniform blocks and their versions of every draw.
+type versionDriver struct {
+	drawDriver
+	draws []versionedDraw
+}
+
+type versionedDraw struct {
+	versions       graphicsdriver.UniformVersions
+	internal, user []uint32
+}
+
+func (g *versionDriver) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32, versions graphicsdriver.UniformVersions) error {
+	g.draws = append(g.draws, versionedDraw{
+		versions: versions,
+		internal: slices.Clone(uniforms[:graphics.PreservedUniformDwordCount]),
+		user:     slices.Clone(uniforms[graphics.PreservedUniformDwordCount:]),
+	})
+	return nil
+}
+
+// Blocks of one version are equal as the driver gets them, flipped or not, over flushes, and a
+// draw that does not merge keeps the versions of the draw before when its blocks are equal.
+func TestUniformVersions(t *testing.T) {
+	const w, h = 16, 16
+	shader := nearestFilterShader.FakeForTesting()
+	offscreen := graphicscommand.NewFakeImageForTesting(w, h)
+	screen := graphicscommand.NewFakeScreenImageForTesting(w, h, true)
+	var q graphicscommand.CommandQueueForTesting
+	var driver versionDriver
+	draw := func(dst *graphicscommand.Image, blend graphicsdriver.Blend, user ...uint32) {
+		q.EnqueueDrawTrianglesCommand(dst, [graphics.ShaderSrcImageCount]*graphicscommand.Image{}, quadVertices(w, h), graphics.QuadIndices(), blend, image.Rect(0, 0, w, h), [graphics.ShaderSrcImageCount]image.Rectangle{}, shader, user)
+	}
+	for range 2 {
+		draw(offscreen, graphicsdriver.BlendSourceOver, 1, 2)
+		draw(offscreen, graphicsdriver.BlendCopy, 1, 2)       // the same blocks
+		draw(screen, graphicsdriver.BlendCopy, 1, 2)          // flipped
+		draw(screen, graphicsdriver.BlendSourceOver, 3, 4)    // flipped again, another user block
+		draw(offscreen, graphicsdriver.BlendSourceOver, 3, 4) // not flipped
+		if err := q.FlushForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d := driver.draws
+	if len(d) != 10 {
+		t.Fatalf("draws: %d, want 10", len(d))
+	}
+	for i := range d {
+		for j := range i {
+			if d[i].versions.Internal == d[j].versions.Internal && !slices.Equal(d[i].internal, d[j].internal) {
+				t.Errorf("draws %d and %d: internal version %d for different blocks", j, i, d[i].versions.Internal)
+			}
+			if d[i].versions.User == d[j].versions.User && !slices.Equal(d[i].user, d[j].user) {
+				t.Errorf("draws %d and %d: user version %d for different blocks", j, i, d[i].versions.User)
+			}
+		}
+		if d[i].versions.Internal == 0 || d[i].versions.User == 0 {
+			t.Errorf("draw %d: versions %+v, want nonzero", i, d[i].versions)
+		}
+	}
+	for _, i := range []int{1, 6} {
+		if d[i].versions != d[i-1].versions {
+			t.Errorf("draw %d: versions %+v, want those of the draw before, %+v", i, d[i].versions, d[i-1].versions)
+		}
+	}
+	for _, i := range []int{2, 7} {
+		if d[i].versions.User != d[i-1].versions.User {
+			t.Errorf("draw %d: user version %d, want that of the draw before, %d", i, d[i].versions.User, d[i-1].versions.User)
+		}
+	}
+	for _, i := range []int{3, 8} {
+		if d[i].versions.Internal != d[i-1].versions.Internal {
+			t.Errorf("draw %d: internal version %d, want that of the draw before, %d", i, d[i].versions.Internal, d[i-1].versions.Internal)
+		}
+	}
+	// A new flush does not take the versions of the last.
+	if d[5].versions.Internal <= d[4].versions.Internal || d[5].versions.User <= d[4].versions.User {
+		t.Errorf("first draw of the second flush: versions %+v, want newer than %+v", d[5].versions, d[4].versions)
 	}
 }

@@ -15,7 +15,6 @@
 package directx
 
 import (
-	"slices"
 	"unsafe"
 )
 
@@ -39,9 +38,9 @@ type shader11 struct {
 	// has none. The internal block's buffer is shared (see graphics11.internalConstantBuffer).
 	userConstantBuffer *_ID3D11Buffer
 
-	// userUniforms is what userConstantBuffer holds, or empty when unknown, so that a draw with the
-	// same values skips the upload.
-	userUniforms []uint32
+	// userVersion is the version of the block userConstantBuffer holds, or 0 when unknown, so that
+	// a draw with the same block skips the upload.
+	userVersion uint64
 }
 
 func (s *shader11) Dispose() {
@@ -103,21 +102,21 @@ func (g *graphics11) newConstantBuffer(size uint32) (*_ID3D11Buffer, error) {
 	}, nil)
 }
 
-// uploadConstantBuffer writes data to cb unless last, what cb holds, equals it. A buffer keeps its
-// contents between draws, so an unchanged block needs no Map(WRITE_DISCARD). No block is empty, so
-// an empty last means that what cb holds is unknown.
-func (g *graphics11) uploadConstantBuffer(cb *_ID3D11Buffer, data []uint32, last *[]uint32) error {
-	if len(*last) > 0 && slices.Equal(*last, data) {
+// uploadConstantBuffer writes data, whose version is version, to cb unless held, the version of
+// what cb holds, is version. A buffer keeps its contents between draws, so an unchanged block needs
+// no Map(WRITE_DISCARD). A held of 0 means that what cb holds is unknown.
+func (g *graphics11) uploadConstantBuffer(cb *_ID3D11Buffer, data []uint32, version uint64, held *uint64) error {
+	if *held != 0 && *held == version {
 		return nil
 	}
 	var mapped _D3D11_MAPPED_SUBRESOURCE
 	if err := g.deviceContext.Map(unsafe.Pointer(cb), 0, _D3D11_MAP_WRITE_DISCARD, 0, &mapped); err != nil {
-		*last = (*last)[:0]
+		*held = 0
 		return err
 	}
 	copy(unsafe.Slice((*uint32)(mapped.pData), len(data)), data)
 	g.deviceContext.Unmap(unsafe.Pointer(cb), 0)
-	*last = append((*last)[:0], data...)
+	*held = version
 	return nil
 }
 

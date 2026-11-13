@@ -44,10 +44,6 @@ type Graphics struct {
 	// runOnMainThread runs a function on the main thread synchronously. It is set at most once.
 	runOnMainThread func(f func())
 
-	// lastUserUniforms is the user's uniform block last set on rce, empty when none is. It lives
-	// outside rceState to keep its buffer across encoders.
-	lastUserUniforms []uint32
-
 	colorSpace color.ColorSpace
 
 	cq  mtl.CommandQueue
@@ -687,7 +683,6 @@ func (g *Graphics) flushRenderCommandEncoderIfNeeded() {
 	g.rce.EndEncoding()
 	g.rce = mtl.RenderCommandEncoder{}
 	g.rceState = rceState{}
-	g.lastUserUniforms = g.lastUserUniforms[:0]
 	g.lastDst = nil
 }
 
@@ -702,15 +697,16 @@ type rceState struct {
 	scissor        image.Rectangle
 	scissorSet     bool
 
-	// The uniform blocks last set, which a draw does not send again. The vertex function reads
-	// only the projection of the internal block.
-	vertexInternalSet   bool
-	projection          [16]uint32
-	fragmentInternalSet bool
-	fragmentInternal    [graphics.PreservedUniformDwordCount]uint32
+	// The uniform blocks last set, which a draw does not send again: the projection, all the
+	// vertex function reads of the internal block, and the versions of the fragment function's
+	// blocks, 0 when none is set.
+	vertexInternalSet       bool
+	projection              [16]uint32
+	fragmentInternalVersion uint64
+	userVersion             uint64
 }
 
-func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs [graphics.ShaderSrcImageCount]*Image, indexOffset int, shader *Shader, uniforms []uint32, blend graphicsdriver.Blend) error {
+func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs [graphics.ShaderSrcImageCount]*Image, indexOffset int, shader *Shader, uniforms []uint32, versions graphicsdriver.UniformVersions, blend graphicsdriver.Blend) error {
 	// A screen read as a source takes its texture before an encoder begins: acquiring it can
 	// encode a copy of the last frame (see startFrom). Without a drawable there is nothing to read.
 	var srcTextures [graphics.ShaderSrcImageCount]mtl.Texture
@@ -789,7 +785,8 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	// naga declares a buffer argument only for a block the function reads: the vertex function
 	// takes the internal block alone, and the fragment function the internal block only when
 	// FragmentReadsInternalUniforms. A block bound to an encoder stays bound across pipelines, so
-	// one equal to the last sent is not sent again.
+	// one equal to the last sent is not sent again: the vertex function's when its projection is,
+	// which its version would not tell, and the fragment function's when its version is.
 	internal := (*[graphics.PreservedUniformDwordCount]uint32)(uniforms)
 	const p = graphics.ProjectionMatrixUniformDwordIndex
 	const internalSize = unsafe.Sizeof(*internal)
@@ -798,14 +795,13 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		st.vertexInternalSet = true
 		st.projection = projection
 	}
-	if shader.program.FragmentReadsInternalUniforms && (!st.fragmentInternalSet || st.fragmentInternal != *internal) {
+	if shader.program.FragmentReadsInternalUniforms && st.fragmentInternalVersion != versions.Internal {
 		g.rce.SetFragmentBytes(unsafe.Pointer(internal), internalSize, internalUniformBufferIndex)
-		st.fragmentInternalSet = true
-		st.fragmentInternal = *internal
+		st.fragmentInternalVersion = versions.Internal
 	}
-	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 && !slices.Equal(g.lastUserUniforms, user) {
+	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 && st.userVersion != versions.User {
 		g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
-		g.lastUserUniforms = append(g.lastUserUniforms[:0], user...)
+		st.userVersion = versions.User
 	}
 
 	for i, t := range srcTextures {
@@ -843,7 +839,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	return nil
 }
 
-func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32) error {
+func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image, shader graphicsdriver.Shader, dstRegions []graphicsdriver.DstRegion, indexOffset int, blend graphicsdriver.Blend, uniforms []uint32, versions graphicsdriver.UniformVersions) error {
 	if shader == nil {
 		return fmt.Errorf("metal: shader is nil")
 	}
@@ -855,7 +851,7 @@ func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.Shader
 		}
 	}
 
-	return g.draw(dst.(*Image), dstRegions, srcImages, indexOffset, shader.(*Shader), uniforms, blend)
+	return g.draw(dst.(*Image), dstRegions, srcImages, indexOffset, shader.(*Shader), uniforms, versions, blend)
 }
 
 // FlipsY reports true: a texture's rows go down from clip-space Y = 1.

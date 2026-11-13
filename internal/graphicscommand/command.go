@@ -83,6 +83,11 @@ type drawTrianglesCommand struct {
 	shader      *Shader
 	uniforms    []uint32
 	firstCaller string
+
+	// sameInternalAsPrev and sameUserAsPrev report whether the uniform blocks equal those of the
+	// draw command enqueued before, before either was flipped (see commandQueue.uniformVersions).
+	sameInternalAsPrev bool
+	sameUserAsPrev     bool
 }
 
 func (c *drawTrianglesCommand) String() string {
@@ -157,6 +162,13 @@ func (c *drawTrianglesCommand) String() string {
 
 // Exec executes the drawTrianglesCommand.
 func (c *drawTrianglesCommand) Exec(commandQueue *commandQueue, graphicsDriver graphicsdriver.Graphics, indexOffset int) error {
+	flipsY := graphicsDriver.FlipsY()
+	if c.dst.screen {
+		flipsY = c.dst.screenFlipsY
+	}
+	// Every draw command takes its versions, drawn or not, as the next compares with it.
+	versions := commandQueue.uniformVersions(c, flipsY)
+
 	// TODO: Is it ok not to bind any framebuffer here?
 	if len(c.dstRegions) == 0 {
 		return nil
@@ -172,17 +184,14 @@ func (c *drawTrianglesCommand) Exec(commandQueue *commandQueue, graphicsDriver g
 	// The projection was enqueued with dst's top row at clip-space Y = -1, as merging needs it the
 	// same for every draw to dst. Flip it here, where the driver is at hand, for a render target
 	// whose rows go down from Y = 1. The terms are set, not negated, so a second run cannot undo it.
-	flipsY := graphicsDriver.FlipsY()
-	if c.dst.screen {
-		flipsY = c.dst.screenFlipsY
-	}
+	// Flipped and unflipped blocks that were equal at enqueueing get different versions above.
 	if flipsY {
 		p := c.uniforms[graphics.ProjectionMatrixUniformDwordIndex:]
 		p[5] |= 1 << 31 // -2/dh: an IEEE float is negated by its sign bit alone.
 		p[13] = math.Float32bits(1)
 	}
 
-	return graphicsDriver.DrawTriangles(c.dst.image, imgs, c.shader.shader, c.dstRegions, indexOffset, c.blend, c.uniforms)
+	return graphicsDriver.DrawTriangles(c.dst.image, imgs, c.shader.shader, c.dstRegions, indexOffset, c.blend, c.uniforms, versions)
 }
 
 func (c *drawTrianglesCommand) NeedsSync() bool {

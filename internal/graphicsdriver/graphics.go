@@ -77,7 +77,17 @@ type Graphics interface {
 
 	// DrawTriangles draws srcs onto dst with the given parameters. dst, srcs and shader are the
 	// driver's own, made by this Graphics or its surfaces; a nil source is an unused slot.
-	DrawTriangles(dst Image, srcs [graphics.ShaderSrcImageCount]Image, shader Shader, dstRegions []DstRegion, indexOffset int, blend Blend, uniforms []uint32) error
+	// versions identify the contents of uniforms' two blocks.
+	DrawTriangles(dst Image, srcs [graphics.ShaderSrcImageCount]Image, shader Shader, dstRegions []DstRegion, indexOffset int, blend Blend, uniforms []uint32, versions UniformVersions) error
+}
+
+// UniformVersions are the versions of a draw's internal and user uniform blocks. Two blocks of
+// one kind with the same version have the same contents, as the driver is given them, so a driver
+// that keeps the version of what it last uploaded need not compare the contents. A version is
+// never 0, which a driver can keep for none, and is never reused in the process.
+type UniformVersions struct {
+	Internal uint64
+	User     uint64
 }
 
 // NSView is an NSView pointer. The view a Metal surface is made for renders that surface and

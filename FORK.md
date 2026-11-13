@@ -184,7 +184,10 @@ again here if it applies. What follows from that so far:
   walking them. The nodes it finds are the ones it found before.
 - The command queue tells that a draw merges with the last from what its
   uniforms are made of — the regions, as far as the shader reads them, and
-  the user's block — before it makes them (`sameUniformsAsLast`).
+  the user's block — before it makes them (`sameRegionsAsLast`). What it
+  learns of each block gives the block a version
+  (`graphicsdriver.UniformVersions`), which Metal, OpenGL and Direct3D 11
+  keep in place of a copy of the last block they uploaded.
 - The image dumper's remains went: `atlas.DumpScreenshot`, `atlas.DumpImages`,
   `graphicscommand.Image.Dump` and `internal/png`, the copy of `image/png`
   only they used. Nothing had called them since the dumper's entry points

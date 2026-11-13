@@ -71,9 +71,18 @@ type commandQueue struct {
 	tmpNumVertexFloats int
 
 	// lastDstRegion and lastSrcRegions are the regions of the draw enqueued last, which the last
-	// command holds when it is a draw (see sameUniformsAsLast).
+	// command holds when it is a draw (see sameRegionsAsLast).
 	lastDstRegion  image.Rectangle
 	lastSrcRegions [graphics.ShaderSrcImageCount]image.Rectangle
+
+	// lastDraw is the draw command enqueued last, whose uniform blocks a new draw command's are
+	// compared with, for merging and for their versions.
+	lastDraw *drawTrianglesCommand
+
+	// execVersions and execFlipsY are those of the draw command run last in the flush in progress;
+	// zero versions before the first.
+	execVersions graphicsdriver.UniformVersions
+	execFlipsY   bool
 
 	drawTrianglesCommandPool drawTrianglesCommandPool
 	writePixelsCommandPool   writePixelsCommandPool
@@ -134,8 +143,13 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 		}
 	}
 
+	// Whether the user's block is the last draw command's tells both whether the draw merges and,
+	// if it does not, whether its block keeps that command's version.
+	prev := q.lastDraw
+	sameUser := prev != nil && slices.Equal(prev.uniforms[graphics.PreservedUniformDwordCount:], uniforms)
+
 	// Most draws that merge are told so by what the uniforms are made from, without making them.
-	if last != nil && q.sameUniformsAsLast(last, shader, dstRegion, srcRegions, uniforms) {
+	if last != nil && sameUser && q.sameRegionsAsLast(shader, dstRegion, srcRegions) {
 		q.mergeIntoLast(last, len(vertices), len(indices), dstRegion)
 		return
 	}
@@ -150,7 +164,8 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 	// their regions can be merged.
 	shader.ir.FilterInternalUniforms(uniforms[:graphics.PreservedUniformDwordCount])
 
-	if last != nil && slices.Equal(last.uniforms, uniforms) {
+	sameInternal := prev != nil && slices.Equal(prev.uniforms[:graphics.PreservedUniformDwordCount], uniforms[:graphics.PreservedUniformDwordCount])
+	if last != nil && sameUser && sameInternal {
 		q.mergeIntoLast(last, len(vertices), len(indices), dstRegion)
 		// The merged command keeps the last command's uniforms, which are equal.
 		q.uint32sBuffer.free(uniforms)
@@ -168,6 +183,8 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 	})
 	c.shader = shader
 	c.uniforms = uniforms
+	c.sameInternalAsPrev = sameInternal
+	c.sameUserAsPrev = sameUser
 	c.firstCaller = ""
 	if debug.IsDebug {
 		file, line, typ := debug.FirstCaller()
@@ -179,14 +196,14 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 		}
 	}
 	q.commands = append(q.commands, c)
+	q.lastDraw = c
 }
 
-// sameUniformsAsLast reports whether a draw with shader and the given regions and user uniforms
-// has the uniforms of last, the last command, which draws to the same destination from the same
-// sources with shader: it does when the draw enqueued last, whose uniforms are last's, had the same
-// user uniforms and the same regions, as far as shader reads them. It may report false for equal
-// uniforms.
-func (q *commandQueue) sameUniformsAsLast(last *drawTrianglesCommand, shader *Shader, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, uniforms []uint32) bool {
+// sameRegionsAsLast reports whether a draw with shader and the given regions has the internal
+// uniform block of the last command, which draws to the same destination from the same sources
+// with shader: it does when the draw enqueued last, whose block is the last command's, had the
+// same regions, as far as shader reads them. It may report false for equal blocks.
+func (q *commandQueue) sameRegionsAsLast(shader *Shader, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle) bool {
 	readsDst, readsSrc := shader.readsRegions()
 	if readsDst && q.lastDstRegion != dstRegion {
 		return false
@@ -194,7 +211,28 @@ func (q *commandQueue) sameUniformsAsLast(last *drawTrianglesCommand, shader *Sh
 	if readsSrc && q.lastSrcRegions != srcRegions {
 		return false
 	}
-	return slices.Equal(last.uniforms[graphics.PreservedUniformDwordCount:], uniforms)
+	return true
+}
+
+// lastUniformVersion is the last version given to a uniform block. Versions are never reused,
+// across flushes and queues, so a driver's record of one cannot stand for other contents.
+var lastUniformVersion atomic.Uint64
+
+// uniformVersions returns the versions of the blocks of c, the next draw command run in the flush
+// in progress, whose Y flip is flipsY. A block keeps the version of the draw command run before
+// it when it was equal to that command's at enqueueing and the flip, which only the internal
+// block takes, is the same.
+func (q *commandQueue) uniformVersions(c *drawTrianglesCommand, flipsY bool) graphicsdriver.UniformVersions {
+	v := q.execVersions
+	if v.Internal == 0 || !c.sameInternalAsPrev || flipsY != q.execFlipsY {
+		v.Internal = lastUniformVersion.Add(1)
+	}
+	if v.User == 0 || !c.sameUserAsPrev {
+		v.User = lastUniformVersion.Add(1)
+	}
+	q.execVersions = v
+	q.execFlipsY = flipsY
+	return v
 }
 
 // mergeIntoLast adds the vertices and indices appended last to last, the last command.
@@ -292,6 +330,10 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 	vs := q.vertices
 	logger.FrameLogf("Graphics commands:\n")
 
+	// The first draw command compares with none run (see uniformVersions).
+	q.execVersions = graphicsdriver.UniformVersions{}
+	q.execFlipsY = false
+
 	if err := graphicsDriver.Begin(); err != nil {
 		return err
 	}
@@ -317,6 +359,7 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 			q.commands[i] = nil
 		}
 		q.commands = q.commands[:0]
+		q.lastDraw = nil
 		// No command refers to the vertices or indices any more, and the driver has copied them.
 		q.vertices = shrinkToRecentUse(q.vertices, &q.verticesUse)
 		q.indices = shrinkToRecentUse(q.indices, &q.indicesUse)

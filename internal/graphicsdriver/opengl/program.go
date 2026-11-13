@@ -18,7 +18,6 @@ package opengl
 
 import (
 	"runtime"
-	"slices"
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -66,7 +65,8 @@ type openGLState struct {
 	// internalUniformBlockBinding and userUniformBlockBinding.
 	uniformBuffers            [2]buffer
 	uniformBufferSizesInBytes [2]int
-	lastUniforms              [2][]uint32
+	// uniformVersions are the versions of the blocks the buffers hold, 0 when unknown.
+	uniformVersions [2]uint64
 
 	// boundUniformBuffers are the buffers bound at the uniform blocks' binding points, and
 	// boundUniformBuffer the one bound at the generic GL_UNIFORM_BUFFER target, which
@@ -170,18 +170,17 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 }
 
 func (s *openGLState) resetLastUniforms() {
-	for i := range s.lastUniforms {
-		s.lastUniforms[i] = s.lastUniforms[i][:0]
-	}
+	s.uniformVersions = [2]uint64{}
 	s.boundUniformBuffers = [2]buffer{}
 	s.boundUniformBuffer = 0
 }
 
 // setUniforms uploads the uniform blocks: the internal block, then the user's block, both laid
-// out as the shader expects. A block that has not changed since the last draw is not uploaded, nor
-// bound again: the binding points are context state, shared by every program.
-func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
+// out as the shader expects. A block whose version its buffer holds is not uploaded, nor bound
+// again: the binding points are context state, shared by every program.
+func (s *openGLState) setUniforms(context *context, uniforms []uint32, versions graphicsdriver.UniformVersions) {
 	blocks := [2][]uint32{uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:]}
+	blockVersions := [2]uint64{versions.Internal, versions.User}
 	bindings := [2]uint32{internalUniformBlockBinding, userUniformBlockBinding}
 	for i, block := range blocks {
 		if len(block) == 0 {
@@ -197,7 +196,7 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
 			// reused, so its binding point is bound again.
 			s.uniformBuffers[i] = context.newUniformBuffer(newSize)
 			s.uniformBufferSizesInBytes[i] = newSize
-			s.lastUniforms[i] = s.lastUniforms[i][:0]
+			s.uniformVersions[i] = 0
 			s.boundUniformBuffers[i] = 0
 			s.boundUniformBuffer = s.uniformBuffers[i]
 		}
@@ -208,7 +207,7 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
 			s.boundUniformBuffers[i] = b
 			s.boundUniformBuffer = b
 		}
-		if slices.Equal(s.lastUniforms[i], block) {
+		if s.uniformVersions[i] == blockVersions[i] {
 			continue
 		}
 		if s.boundUniformBuffer != b {
@@ -217,7 +216,7 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32) {
 		}
 		bs := unsafe.Slice((*byte)(unsafe.Pointer(&block[0])), size)
 		context.ctx.BufferSubData(gl.UNIFORM_BUFFER, 0, bs)
-		s.lastUniforms[i] = append(s.lastUniforms[i][:0], block...)
+		s.uniformVersions[i] = blockVersions[i]
 	}
 }
 
@@ -236,7 +235,7 @@ func (g *Graphics) deleteProgram(p program) {
 }
 
 // useProgram uses the program (programTexture).
-func (g *Graphics) useProgram(s *Shader, uniforms []uint32, textures [graphics.ShaderSrcImageCount]textureVariable) error {
+func (g *Graphics) useProgram(s *Shader, uniforms []uint32, versions graphicsdriver.UniformVersions, textures [graphics.ShaderSrcImageCount]textureVariable) error {
 	if err := s.link(); err != nil {
 		return err
 	}
@@ -251,7 +250,7 @@ func (g *Graphics) useProgram(s *Shader, uniforms []uint32, textures [graphics.S
 		g.context.lastTexture = 0 // Make sure next bindTexture call actually does something.
 	}
 
-	g.state.setUniforms(&g.context, uniforms)
+	g.state.setUniforms(&g.context, uniforms, versions)
 
 	var idx int
 loop:
