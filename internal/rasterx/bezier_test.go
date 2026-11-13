@@ -6,7 +6,6 @@ import (
 	"math"
 	"math/rand"
 	"testing"
-	"time"
 
 	. "github.com/ironpark/ggfx/internal/rasterx"
 	//"golang.org/x/image/math/fixed"
@@ -125,7 +124,7 @@ func BenchmarkBezierCube(b *testing.B) {
 }
 
 func TestBezierCube(t *testing.T) {
-	rnd := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
+	rnd := rand.New(rand.NewSource(1))
 	tests := 50
 	var coords []float32
 	for i := 0; i < tests*8; i++ {
@@ -166,7 +165,7 @@ func TestBezierCube(t *testing.T) {
 }
 
 func TestBezierQuad(t *testing.T) {
-	rnd := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
+	rnd := rand.New(rand.NewSource(2))
 	tests := 50
 	var coords []float32
 	for i := 0; i < tests*8; i++ {

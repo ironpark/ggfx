@@ -16,7 +16,7 @@ type PathStyle struct {
 	LineWidth, DashOffset, MiterLimit float64
 	Dash                              []float64
 	UseNonZeroWinding                 bool
-	fillerColor, linerColor           any // either color.Color or rasterx.Gradient
+	fillerColor, linerColor           paint
 	LineGap                           rasterx.GapFunc
 	LeadLineCap                       rasterx.CapFunc // This is used if different than LineCap
 	LineCap                           rasterx.CapFunc
@@ -30,6 +30,15 @@ type PathStyle struct {
 	markers [3]string
 }
 
+// paint is a fill or a stroke as a style names it: a color, a gradient,
+// or, with neither, none.
+type paint struct {
+	color color.Color
+	grad  *rasterx.Gradient
+}
+
+func (p paint) none() bool { return p.color == nil && p.grad == nil }
+
 // styleAttribute describes draw options, such as {"fill":"black"; "stroke":"white"}.
 type styleAttribute = map[string]string
 
@@ -37,6 +46,6 @@ type styleAttribute = map[string]string
 // full opacity, no stroke, ButtCap line end and Bevel line connect.
 var defaultStyle = PathStyle{
 	FillOpacity: 1.0, LineOpacity: 1.0, LineWidth: 2.0, MiterLimit: 4.0,
-	UseNonZeroWinding: true, fillerColor: color.NRGBA{0x00, 0x00, 0x00, 0xff},
+	UseNonZeroWinding: true, fillerColor: paint{color: color.NRGBA{0x00, 0x00, 0x00, 0xff}},
 	LineCap: rasterx.ButtCap, LineJoin: rasterx.Bevel, mAdder: rasterx.MatrixAdder{M: rasterx.Identity},
 }

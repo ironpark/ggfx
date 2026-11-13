@@ -43,9 +43,10 @@ included.
 - `<clipPath>` and `<mask>`, and the `clip-path` and `mask` properties. A
   clip's or mask's content is kept where it is defined, compiled where a
   style names it in the naming element's user space, and drawn once per
-  drawing into an alpha image the size of the target: a clip's shapes by
-  their coverage, a mask's by their light. Each shape under it has its
-  paint scaled at each pixel by that alpha, through a `rasterx.ColorFunc`.
+  drawing into an alpha image over the part of the target they cover: a
+  clip's shapes by their coverage, a mask's by their light. Each shape
+  under it has its paint scaled at each pixel by that alpha, through a
+  `rasterx.ColorFunc`.
   A group is so clipped shape by shape, which is exact for a clip and, for
   a mask, differs only where the group's shapes overlap where the mask is
   partly light, as group opacity already does here. `clipPathUnits` and
@@ -68,6 +69,18 @@ included.
   helpers used only inside the package are unexported.
 - The original license headers are replaced with SPDX-style headers
   crediting the original authors.
+- Drawing changes nothing in the document, so a document can be drawn
+  from goroutines at once: `SvgPath.DrawTransformed` transforms through a
+  `rasterx.MatrixAdder` of its own instead of setting the path's,
+  `SvgIcon.DrawTransformed` takes the transform `Draw` reads from
+  `Transform`, a gradient's bounding box is set on a copy, and a
+  gradient's stops are sorted when a style first names it, all its stops
+  read, instead of at each drawing. They are sorted with `sort.Slice`, as
+  the drawing sorted them, so stops of one offset are drawn in the order
+  they were: the document's for up to 12 stops, which `sort.Slice` sorts
+  by insertion, and the order its first sort left them in past that.
+- A fill or stroke is a `paint`, a color or a gradient, in place of `any`
+  holding either, and is drawn with a `rasterx.Paint`.
 
 ## Missing features for OpenType SVG
 

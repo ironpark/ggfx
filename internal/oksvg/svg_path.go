@@ -6,7 +6,6 @@ package oksvg
 
 import (
 	"image"
-	"image/color"
 
 	"golang.org/x/image/math/fixed"
 
@@ -25,40 +24,24 @@ func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t raste
 }
 
 // drawThrough draws the path as DrawTransformed does, its paint let
-// through mask where it is not nil; see clip.go.
+// through mask where it is not nil; see clip.go. It leaves svgp as it is,
+// so that a document can be drawn from goroutines at once.
 func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D, mask *image.Alpha) {
-	m := svgp.mAdder.M
-	svgp.mAdder.M = t.Mult(m)
-	// Restore the untransformed matrix, and let go of r, which holds the
-	// destination image.
-	defer func() { svgp.mAdder.M, svgp.mAdder.Adder = m, nil }()
-	if svgp.fillerColor != nil {
+	adder := rasterx.MatrixAdder{M: t.Mult(svgp.mAdder.M)}
+	if !svgp.fillerColor.none() {
 		r.Clear()
 		rf := &r.Filler
 		rf.SetWinding(svgp.UseNonZeroWinding)
-		svgp.mAdder.Adder = rf // This allows transformations to be applied
-		svgp.Path.AddTo(&svgp.mAdder)
-
-		switch fillerColor := svgp.fillerColor.(type) {
-		case color.Color:
-			rf.SetColor(through(rasterx.ApplyOpacity(fillerColor, svgp.FillOpacity*opacity), mask))
-		case rasterx.Gradient:
-			if fillerColor.Units == rasterx.ObjectBoundingBox {
-				fRect := rf.Scanner.GetPathExtent()
-				mnx, mny := float64(fRect.Min.X)/64, float64(fRect.Min.Y)/64
-				mxx, mxy := float64(fRect.Max.X)/64, float64(fRect.Max.Y)/64
-				fillerColor.Bounds.X, fillerColor.Bounds.Y = mnx, mny
-				fillerColor.Bounds.W, fillerColor.Bounds.H = mxx-mnx, mxy-mny
-			}
-			rf.SetColor(through(fillerColor.GetColorFunctionUS(svgp.FillOpacity*opacity, svgp.mAdder.M), mask))
-		}
+		adder.Adder = rf // This allows transformations to be applied
+		svgp.Path.AddTo(&adder)
+		rf.SetPaint(through(svgp.fillerColor.paint(rf.Scanner, svgp.FillOpacity*opacity, adder.M), mask))
 		rf.Draw()
 		// default is true
 		rf.SetWinding(true)
 	}
-	if svgp.linerColor != nil {
+	if !svgp.linerColor.none() {
 		r.Clear()
-		svgp.mAdder.Adder = r
+		adder.Adder = r
 		lineGap := svgp.LineGap
 		if lineGap == nil {
 			lineGap = defaultStyle.LineGap
@@ -74,20 +57,26 @@ func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.M
 		r.SetStroke(fixed.Int26_6(svgp.LineWidth*64),
 			fixed.Int26_6(svgp.MiterLimit*64), leadLineCap, lineCap,
 			lineGap, svgp.LineJoin, svgp.Dash, svgp.DashOffset)
-		svgp.Path.AddTo(&svgp.mAdder)
-		switch linerColor := svgp.linerColor.(type) {
-		case color.Color:
-			r.SetColor(through(rasterx.ApplyOpacity(linerColor, svgp.LineOpacity*opacity), mask))
-		case rasterx.Gradient:
-			if linerColor.Units == rasterx.ObjectBoundingBox {
-				fRect := r.Scanner.GetPathExtent()
-				mnx, mny := float64(fRect.Min.X)/64, float64(fRect.Min.Y)/64
-				mxx, mxy := float64(fRect.Max.X)/64, float64(fRect.Max.Y)/64
-				linerColor.Bounds.X, linerColor.Bounds.Y = mnx, mny
-				linerColor.Bounds.W, linerColor.Bounds.H = mxx-mnx, mxy-mny
-			}
-			r.SetColor(through(linerColor.GetColorFunctionUS(svgp.LineOpacity*opacity, svgp.mAdder.M), mask))
-		}
+		svgp.Path.AddTo(&adder)
+		r.SetPaint(through(svgp.linerColor.paint(r.Scanner, svgp.LineOpacity*opacity, adder.M), mask))
 		r.Draw()
 	}
+}
+
+// paint is p as s draws it, at opacity, for the path s holds, which m
+// placed: a gradient in the path's bounding box, or in the user space m
+// maps.
+func (p paint) paint(s rasterx.Scanner, opacity float64, m rasterx.Matrix2D) rasterx.Paint {
+	if p.grad == nil {
+		return rasterx.ColorPaint(rasterx.ApplyOpacity(p.color, opacity))
+	}
+	g := *p.grad
+	if g.Units == rasterx.ObjectBoundingBox {
+		fRect := s.GetPathExtent()
+		mnx, mny := float64(fRect.Min.X)/64, float64(fRect.Min.Y)/64
+		mxx, mxy := float64(fRect.Max.X)/64, float64(fRect.Max.Y)/64
+		g.Bounds.X, g.Bounds.Y = mnx, mny
+		g.Bounds.W, g.Bounds.H = mxx-mnx, mxy-mny
+	}
+	return g.GetColorFunctionUS(opacity, m)
 }

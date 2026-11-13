@@ -13,8 +13,8 @@ import (
 )
 
 type (
-	// ColorFunc maps a color to x y coordinates
-	ColorFunc func(x, y int) color.Color
+	// ColorFunc maps x y coordinates to a color, alpha-premultiplied.
+	ColorFunc func(x, y int) color.RGBA64
 	// Scanner interface for path generating types
 	Scanner interface {
 		Start(a fixed.Point26_6)
@@ -22,7 +22,7 @@ type (
 		Draw()
 		GetPathExtent() fixed.Rectangle26_6
 		SetBounds(w, h int)
-		SetColor(color interface{})
+		SetPaint(p Paint)
 		SetWinding(useNonZeroWinding bool)
 		Clear()
 

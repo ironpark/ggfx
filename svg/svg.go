@@ -23,7 +23,6 @@ import (
 // Document is a parsed SVG document. Its methods can be called from any
 // goroutine.
 type Document struct {
-	mu   sync.Mutex // drawing transforms the paths in place
 	icon *oksvg.SvgIcon
 }
 
@@ -48,13 +47,26 @@ func (d *Document) ViewBox() (x, y, width, height float64) {
 // dst's pixels.
 func (d *Document) Draw(dst *image.RGBA, geoM ggfx.GeoM) {
 	b := dst.Bounds()
-	scanner := rasterx.NewScannerGV(b.Dx(), b.Dy(), dst, b)
-	painter := rasterx.NewDasher(b.Dx(), b.Dy(), scanner)
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.icon.Transform = rasterx.Matrix2D{
+	p := painters.Get().(*painter)
+	p.scanner.Dest, p.scanner.Targ = dst, b
+	p.dasher.SetBounds(b.Dx(), b.Dy())
+	d.icon.DrawTransformed(p.dasher, 1, rasterx.Matrix2D{
 		A: geoM.Element(0, 0), C: geoM.Element(0, 1), E: geoM.Element(0, 2),
 		B: geoM.Element(1, 0), D: geoM.Element(1, 1), F: geoM.Element(1, 2),
-	}
-	d.icon.Draw(painter, 1)
+	})
+	// Let go of dst before the painter is kept.
+	p.scanner.Dest, p.scanner.Touched = nil, image.Rectangle{}
+	painters.Put(p)
 }
+
+// A painter is a rasterizer and its buffers, kept between drawings, which
+// change nothing in a document and so need no lock.
+type painter struct {
+	scanner *rasterx.ScannerGV
+	dasher  *rasterx.Dasher
+}
+
+var painters = sync.Pool{New: func() any {
+	s := rasterx.NewScannerGV(0, 0, nil, image.Rectangle{})
+	return &painter{scanner: s, dasher: rasterx.NewDasher(0, 0, s)}
+}}

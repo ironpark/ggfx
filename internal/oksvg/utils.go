@@ -132,21 +132,20 @@ func readFraction(v string) (f float64, err error) {
 
 // getColor is a helper function to get the background color
 // if ReadGradUrl needs it.
-func getColor(clr any) color.Color {
-	switch c := clr.(type) {
-	case rasterx.Gradient: // This is a bit lazy but oh well
-		for _, s := range c.Stops {
+func getColor(clr paint) color.Color {
+	if clr.grad != nil { // This is a bit lazy but oh well
+		for _, s := range clr.grad.Stops {
 			if s.StopColor != nil {
 				return s.StopColor
 			}
 		}
-	case color.NRGBA:
+	} else if c, ok := clr.color.(color.NRGBA); ok {
 		return c
 	}
 	return colornames.Black
 }
 
-func localizeGradIfStopClrNil(g *rasterx.Gradient, defaultColor any) (grad rasterx.Gradient) {
+func localizeGradIfStopClrNil(g *rasterx.Gradient, defaultColor paint) (grad rasterx.Gradient) {
 	grad = *g
 	for _, s := range grad.Stops {
 		if s.StopColor == nil { // This means we need copy the gradient's Stop slice

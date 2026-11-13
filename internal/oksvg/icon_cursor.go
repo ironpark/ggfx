@@ -9,6 +9,7 @@ import (
 	"errors"
 	"image/color"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/ironpark/ggfx/internal/rasterx"
@@ -25,24 +26,45 @@ type iconCursor struct {
 	useExpansions               int
 	capture                     *captured // the clip, mask or marker being read
 	captureDepth                int
+	sorted                      map[*rasterx.Gradient]bool // gradients whose stops are sorted
 }
 
 // ReadGradURL reads an SVG format gradient url
 // Since the context of the gradient can affect the colors
 // the current fill or line color is passed in and used in
 // the case of a nil stopClor value
-func (c *iconCursor) ReadGradURL(v string, defaultColor any) (grad rasterx.Gradient, ok bool) {
+func (c *iconCursor) ReadGradURL(v string, defaultColor paint) (grad *rasterx.Gradient, ok bool) {
 	if strings.HasPrefix(v, "url(") && strings.HasSuffix(v, ")") {
 		urlStr := strings.TrimSpace(v[4 : len(v)-1])
 		if strings.HasPrefix(urlStr, "#") {
 			var g *rasterx.Gradient
 			g, ok = c.icon.Grads[urlStr[1:]]
 			if ok {
-				grad = localizeGradIfStopClrNil(g, defaultColor)
+				c.sortStops(g)
+				l := localizeGradIfStopClrNil(g, defaultColor)
+				grad = &l
 			}
 		}
 	}
 	return
+}
+
+// sortStops puts g's stops in order of their offsets when a style first
+// names it, its stops all read, rather than at each drawing, which changed
+// the document as it drew. It sorts as the drawing did, with sort.Slice:
+// stable up to 12 stops, an insertion sort; past that, stops of one offset
+// are left in whatever order the first drawing's sort left them.
+func (c *iconCursor) sortStops(g *rasterx.Gradient) {
+	if c.sorted[g] {
+		return
+	}
+	if c.sorted == nil {
+		c.sorted = map[*rasterx.Gradient]bool{}
+	}
+	c.sorted[g] = true
+	sort.Slice(g.Stops, func(i, j int) bool {
+		return g.Stops[i].Offset < g.Stops[j].Offset
+	})
 }
 
 // ReadGradAttr reads an SVG gradient attribute
@@ -202,16 +224,16 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 	case "fill":
 		gradient, ok := c.ReadGradURL(v, curStyle.fillerColor)
 		if ok {
-			curStyle.fillerColor = gradient
+			curStyle.fillerColor = paint{grad: gradient}
 			break
 		}
-		var err error
-		curStyle.fillerColor, err = ParseSVGColor(v)
+		col, err := ParseSVGColor(v)
+		curStyle.fillerColor = paint{color: col}
 		return err
 	case "stroke":
 		gradient, ok := c.ReadGradURL(v, curStyle.linerColor)
 		if ok {
-			curStyle.linerColor = gradient
+			curStyle.linerColor = paint{grad: gradient}
 			break
 		}
 		col, errc := ParseSVGColor(v)
@@ -219,9 +241,9 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 			return errc
 		}
 		if col != nil {
-			curStyle.linerColor = col.(color.NRGBA)
+			curStyle.linerColor = paint{color: col.(color.NRGBA)}
 		} else {
-			curStyle.linerColor = nil
+			curStyle.linerColor = paint{}
 		}
 	case "stroke-linegap":
 		switch v {

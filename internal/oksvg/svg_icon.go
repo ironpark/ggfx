@@ -25,22 +25,28 @@ type SvgIcon struct {
 // Draw the compiled SVG icon into the GraphicContext.
 // All elements should be contained by the Bounds rectangle of the SvgIcon.
 func (s *SvgIcon) Draw(r *rasterx.Dasher, opacity float64) {
+	s.DrawTransformed(r, opacity, s.Transform)
+}
+
+// DrawTransformed draws the icon as Draw does, under t in place of its
+// Transform. It changes nothing in s.
+func (s *SvgIcon) DrawTransformed(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D) {
 	// Each clip or mask is drawn once a drawing, for every shape under it.
 	var masks map[*clipUse]*image.Alpha
 	for i := range s.SVGPaths {
 		svgp := &s.SVGPaths[i]
 		if svgp.clip == nil {
-			svgp.DrawTransformed(r, opacity, s.Transform)
+			svgp.DrawTransformed(r, opacity, t)
 			continue
 		}
 		mask, ok := masks[svgp.clip]
 		if !ok {
-			mask = svgp.clip.maskImage(r, s.Transform)
+			mask = svgp.clip.maskImage(r, t)
 			if masks == nil {
 				masks = map[*clipUse]*image.Alpha{}
 			}
 			masks[svgp.clip] = mask
 		}
-		svgp.drawThrough(r, opacity, s.Transform, mask)
+		svgp.drawThrough(r, opacity, t, mask)
 	}
 }

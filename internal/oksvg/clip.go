@@ -38,8 +38,8 @@ func (c *iconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
 		// A clip is its shapes' geometry: what they cover, whatever their
 		// paint.
 		for i := range paths {
-			paths[i].fillerColor = color.NRGBA{0xff, 0xff, 0xff, 0xff}
-			paths[i].linerColor = nil
+			paths[i].fillerColor = paint{color: color.NRGBA{0xff, 0xff, 0xff, 0xff}}
+			paths[i].linerColor = paint{}
 			paths[i].FillOpacity = 1
 			paths[i].clip = nil
 		}
@@ -48,21 +48,28 @@ func (c *iconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
 	return nil
 }
 
-// maskImage is u drawn under t into an image the size of r's target: how
-// much each pixel lets through.
+// maskImage is u drawn under t over r's target: how much each pixel lets
+// through, in an image over just the part of the target u's shapes cover,
+// the rest letting nothing through.
 func (u *clipUse) maskImage(r *rasterx.Dasher, t rasterx.Matrix2D) *image.Alpha {
 	gv, ok := r.Scanner.(*rasterx.ScannerGV)
 	if !ok {
 		return nil
 	}
 	b := gv.Dest.Bounds()
-	drawn := image.NewRGBA(b)
-	scanner := rasterx.NewScannerGV(b.Dx(), b.Dy(), drawn, b)
+	// Find what the shapes cover, then draw them over just that.
+	scanner := rasterx.NewScannerGV(b.Dx(), b.Dy(), nil, b)
 	dasher := rasterx.NewDasher(b.Dx(), b.Dy(), scanner)
 	for i := range u.paths {
 		u.paths[i].DrawTransformed(dasher, 1, t)
 	}
-	mask := image.NewAlpha(b)
+	area := scanner.Touched
+	drawn := image.NewRGBA(area)
+	scanner.Dest = drawn
+	for i := range u.paths {
+		u.paths[i].DrawTransformed(dasher, 1, t)
+	}
+	mask := image.NewAlpha(area)
 	for i := 0; i < len(mask.Pix); i++ {
 		p := drawn.Pix[4*i : 4*i+4 : 4*i+4]
 		if u.def.mask {
@@ -75,21 +82,26 @@ func (u *clipUse) maskImage(r *rasterx.Dasher, t rasterx.Matrix2D) *image.Alpha 
 	return mask
 }
 
-// through is paint, a color or a rasterx.ColorFunc, let through mask.
-func through(paint any, mask *image.Alpha) any {
+// through is paint let through mask.
+func through(paint rasterx.Paint, mask *image.Alpha) rasterx.Paint {
 	if mask == nil {
 		return paint
 	}
-	at := func(c color.Color, x, y int) color.Color {
-		a := uint32(mask.AlphaAt(x, y).A)
-		r, g, b, ca := c.RGBA()
+	at := func(c color.RGBA64, a uint32) color.RGBA64 {
+		r, g, b, ca := uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
 		return color.RGBA64{uint16(r * a / 255), uint16(g * a / 255), uint16(b * a / 255), uint16(ca * a / 255)}
 	}
-	switch p := paint.(type) {
-	case color.Color:
-		return rasterx.ColorFunc(func(x, y int) color.Color { return at(p, x, y) })
-	case rasterx.ColorFunc:
-		return rasterx.ColorFunc(func(x, y int) color.Color { return at(p(x, y), x, y) })
+	if f := paint.Func; f != nil {
+		return rasterx.FuncPaint(func(x, y int) color.RGBA64 {
+			a := uint32(mask.AlphaAt(x, y).A)
+			if a == 0 {
+				return color.RGBA64{}
+			}
+			return at(f(x, y), a)
+		})
 	}
-	return paint
+	c := paint.Color
+	return rasterx.FuncPaint(func(x, y int) color.RGBA64 {
+		return at(c, uint32(mask.AlphaAt(x, y).A))
+	})
 }

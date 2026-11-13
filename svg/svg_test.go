@@ -4,8 +4,10 @@
 package svg_test
 
 import (
+	"bytes"
 	"image"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ironpark/ggfx"
@@ -114,4 +116,35 @@ func TestMarkersAreDrawnAtAPathsEnds(t *testing.T) {
 	if c := dst.RGBAAt(86, 44); c.R == 0xff {
 		t.Errorf("beside the arrow, outside it: %v", c)
 	}
+}
+
+// Drawing changes nothing in a document, so goroutines can draw it at
+// once, each drawing what it would alone.
+func TestDrawFromGoroutinesAtOnce(t *testing.T) {
+	d, err := svg.Parse(strings.NewReader(iconSVG))
+	if err != nil {
+		t.Fatal(err)
+	}
+	drawAt := func(size int) *image.RGBA {
+		dst := image.NewRGBA(image.Rect(0, 0, size, size))
+		var g ggfx.GeoM
+		g.Scale(float64(size)/100, float64(size)/100)
+		d.Draw(dst, g)
+		return dst
+	}
+	sizes := []int{24, 100, 256, 600}
+	want := map[int][]byte{}
+	for _, size := range sizes {
+		want[size] = drawAt(size).Pix
+	}
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() {
+			size := sizes[i%len(sizes)]
+			if got := drawAt(size).Pix; !bytes.Equal(got, want[size]) {
+				t.Errorf("drawn at %d from a goroutine: differs", size)
+			}
+		})
+	}
+	wg.Wait()
 }
