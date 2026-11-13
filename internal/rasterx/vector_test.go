@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"math/rand"
 	"testing"
 
@@ -15,37 +16,22 @@ import (
 	"golang.org/x/image/vector"
 )
 
-// Drawing a premultiplied color through a mask under faint, as vector's
-// Draw does, leaves every byte of an RGBA pixel as it is. The result
-// depends on the source only through k, sa*ma/0xffff, and through s*ma,
-// which it grows with, so the extremes of s*ma for each k cover all
-// sources.
-func TestFaintMaskChangesNothing(t *testing.T) {
-	for v := uint32(0); v < 0x100; v++ {
-		d := v * 0x101
-		for ma := uint32(1); ma < faint; ma++ {
-			for k := uint32(0); k <= ma; k++ {
-				// sa < (k+1)*0xffff/ma, and s <= sa.
-				maxSM := min(0xffff*ma, (k+1)*0xffff-1)
-				for _, sm := range []uint32{0, maxSM} {
-					out := uint8(uint16((d*(0xffff-k)+sm)/0xffff) >> 8)
-					if uint32(out) != v {
-						t.Fatalf("byte %#x, mask %#x, k %d, s*ma %d: drew %#x", v, ma, k, sm, out)
-					}
-				}
-			}
-		}
-	}
-}
+// maxVectorDiff is how far, in any byte, the scanner may draw from
+// vector's Rasterizer. It sums each row on its own; vector all its mask
+// at once, each row's rounding error carried into the rows under it,
+// which in fixed point, after many rows, can show.
+const maxVectorDiff = 3
 
-// The scanner draws what vector's Rasterizer, sized to the target, draws.
+// The scanner draws what vector's Rasterizer, sized to the target, draws,
+// within maxVectorDiff; and a part of the target, clipped, exactly as it
+// draws the whole, by either rule.
 func TestScannerDrawsAsVector(t *testing.T) {
 	rnd := rand.New(rand.NewSource(1))
 	sizes := []image.Point{{1, 1}, {3, 5}, {64, 48}, {512, 160}, {120, 512}, {513, 40}, {37, 513}, {700, 90}}
-	windowed, fallbacks := 0, 0
+	worst := 0
 	for _, size := range sizes {
 		for n := 0; n < 24; n++ {
-			pts := randomPath(rnd, size, n%8)
+			pts := closed(randomPath(rnd, size, n%8))
 			paints := []Paint{
 				ColorPaint(color.NRGBA{uint8(rnd.Intn(256)), uint8(rnd.Intn(256)), uint8(rnd.Intn(256)), uint8(rnd.Intn(256))}),
 				FuncPaint(func(x, y int) color.RGBA64 {
@@ -58,7 +44,19 @@ func TestScannerDrawsAsVector(t *testing.T) {
 				bg := randomImage(rnd, size)
 				want, got := cloneRGBA(bg), cloneRGBA(bg)
 
-				z := vector.NewRasterizer(size.X, size.Y)
+				// vector's mask is one buffer, a row's coverage past its
+				// end the next row's: it is drawn wide enough to hold the
+				// path, if that keeps it in the target's fixed or
+				// floating point.
+				vw := size.X
+				for _, p := range pts {
+					vw = max(vw, int(p.x)+3)
+				}
+				leaks := vw > floatingPointMathThreshold && size.X <= floatingPointMathThreshold && size.Y <= floatingPointMathThreshold
+				if leaks {
+					vw = size.X
+				}
+				z := vector.NewRasterizer(vw, size.Y)
 				for _, p := range pts {
 					if p.move {
 						z.MoveTo(p.x, p.y)
@@ -70,7 +68,10 @@ func TestScannerDrawsAsVector(t *testing.T) {
 				if paint.Func != nil {
 					src = funcImage(paint.Func)
 				}
-				z.Draw(want, want.Bounds(), src, image.Point{})
+				wide := image.NewRGBA(image.Rect(0, 0, vw, size.Y))
+				draw.Draw(wide, bg.Rect, bg, image.Point{}, draw.Src)
+				z.Draw(wide, wide.Bounds(), src, image.Point{})
+				draw.Draw(want, want.Rect, wide, image.Point{}, draw.Src)
 
 				s := NewScannerGV(size.X, size.Y, got, got.Bounds())
 				s.Clear()
@@ -83,37 +84,76 @@ func TestScannerDrawsAsVector(t *testing.T) {
 						s.Line(fp)
 					}
 				}
-				if len(pts) > 0 {
-					if s.rasterize(s.window()) {
-						windowed++
-					} else {
-						fallbacks++
-					}
-				}
 				s.Draw()
-				if !bytes.Equal(got.Pix, want.Pix) {
-					t.Errorf("%s: drew differently from vector", name)
+				if d := maxByteDiff(got.Pix, want.Pix); leaks {
+					// vector draws what leaks wrong.
+				} else if d > maxVectorDiff {
+					t.Errorf("%s: drew up to %d from vector", name, d)
+				} else {
+					worst = max(worst, d)
 				}
 
-				// vector has no even-odd rule: the scanner's, in a window,
-				// draws what it draws over all the mask.
 				if len(pts) == 0 {
 					continue
 				}
-				s.SetWinding(false)
-				eo, all := cloneRGBA(bg), cloneRGBA(bg)
-				s.Dest = eo
-				s.Draw()
-				s.Dest = all
-				s.rasterize(image.Rectangle{Max: size})
-				s.drawRGBA(all, image.Rectangle{Max: size})
-				if !bytes.Equal(eo.Pix, all.Pix) {
-					t.Errorf("%s: drew by the even-odd rule differently in a window", name)
+				for _, nonZero := range []bool{true, false} {
+					s.SetWinding(nonZero)
+					all := cloneRGBA(bg)
+					s.Dest = all
+					s.Draw()
+					// Not empty, which would be no clip.
+					x0, y0 := rnd.Intn(size.X), rnd.Intn(size.Y)
+					clip := image.Rect(x0, y0, x0+1+rnd.Intn(size.X-x0), y0+1+rnd.Intn(size.Y-y0))
+					part := cloneRGBA(bg)
+					s.Dest = part
+					s.SetClip(clip)
+					s.Draw()
+					s.SetClip(image.ZR)
+					for y := 0; y < size.Y; y++ {
+						for x := 0; x < size.X; x++ {
+							w := bg.RGBAAt(x, y)
+							if (image.Point{x, y}).In(clip) {
+								w = all.RGBAAt(x, y)
+							}
+							if g := part.RGBAAt(x, y); g != w {
+								t.Fatalf("%s, non-zero %v: drew %v at (%d, %d) clipped to %v; want %v", name, nonZero, g, x, y, clip, w)
+							}
+						}
+					}
 				}
 			}
 		}
 	}
-	t.Logf("%d drawn in their windows, %d all over", windowed, fallbacks)
+	t.Logf("drew at most %d from vector", worst)
+}
+
+// closed is pts with each subpath closed: the scanner draws a path whose
+// lines enclose, as a Filler's and a Stroker's do.
+func closed(pts []pathPoint) []pathPoint {
+	var out []pathPoint
+	var startX, startY, penX, penY float32 // from the origin until a move
+	for _, p := range pts {
+		if p.move {
+			if penX != startX || penY != startY {
+				out = append(out, pathPoint{startX, startY, false})
+			}
+			startX, startY = p.x, p.y
+		}
+		out = append(out, p)
+		penX, penY = p.x, p.y
+	}
+	if penX != startX || penY != startY {
+		out = append(out, pathPoint{startX, startY, false})
+	}
+	return out
+}
+
+func maxByteDiff(a, b []uint8) int {
+	d := 0
+	for i := range a {
+		d = max(d, int(a[i])-int(b[i]), int(b[i])-int(a[i]))
+	}
+	return d
 }
 
 type funcImage ColorFunc
@@ -218,7 +258,7 @@ func randomPath(rnd *rand.Rand, size image.Point, kind int) []pathPoint {
 // one fills it. Each side of a hole, or of a shared edge, is as the
 // non-zero rule draws it.
 func TestEvenOdd(t *testing.T) {
-	for _, size := range []image.Point{{40, 40}, {600, 40}} { // fixed and floating point
+	for _, size := range []image.Point{{40, 40}, {600, 40}} {
 		draw := func(evenOdd bool, rects ...[4]float64) *image.RGBA {
 			img := image.NewRGBA(image.Rectangle{Max: size})
 			f := NewFiller(size.X, size.Y, NewScannerGV(size.X, size.Y, img, img.Bounds()))

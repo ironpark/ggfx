@@ -90,16 +90,16 @@ included.
   corner. The original looked it up at the target image's coordinates,
   and so, into an image whose bounds did not start at 0, drew a shape
   through the wrong part of it.
-- The end of a gradient inside a `<clipPath>`, `<mask>` or `<marker>` is
-  kept with the element's content. Without it, the gradient expanded from
-  there took all that followed in the document as its own: a later
-  `<defs>` was drawn where it stood and its ids not defined.
-- An `objectBoundingBox` gradient on a stroke takes the fill geometry's
-  bounding box, as SVG defines it, not the stroke's outline's; one on a
-  shape whose box has no width or height, as a line's, is not drawn, as
-  SVG says, instead of filling with its first stop. The box is still
-  taken in device space, after the shape's transform, so under a rotation
-  or skew it is the transformed shape's box, not its user space one.
+- A gradient inside a `<clipPath>`, `<mask>` or `<marker>` is read where
+  it is, as one in `<defs>`, not kept with the element's content: its id
+  is the document's, whether the element is used later or never.
+- An `objectBoundingBox` gradient is drawn in the shape's bounding box in
+  its user space, from its geometry (`rasterx.Path.Bounds`), as SVG
+  defines it, not in the box of the transformed, flattened outline in
+  device space, which under a rotation or skew is another box. A stroke
+  takes the fill geometry's box, not its outline's; a shape whose box has
+  no width or height, as a line's, is not drawn, as SVG says, instead of
+  filling with its first stop.
 - Color names are converted by their 8-bit components, not by the low
   byte of their 16-bit ones (the same for opaque colors).
 - An icon is drawn with a `Painter`, in place of a `rasterx.Dasher`: the
@@ -107,8 +107,7 @@ included.
   by, and a second scanner, dasher and image that clips and masks are
   drawn with, all kept between paths and drawings instead of made for
   each. A clip's or mask's extent is found from its shapes' windows
-  without rasterizing them, and its shapes drawn again over all they
-  cover only where one of them is drawn over the whole target.
+  without rasterizing them, then its shapes drawn over just that.
 
 ## Missing features for OpenType SVG
 

@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package goldentest pins drawings by a hash of their pixels, per GOARCH,
-// in a file of lines "name GOARCH sha256[:12]". The hashes differ by
-// GOARCH: arm64 fuses multiplies and adds that amd64 and wasm do not, and
-// x/image/vector's floating-point accumulator, which the rasterizer
-// follows, sums in a different order on amd64.
+// Package goldentest pins drawings by a hash of their pixels in a file of
+// lines "name sha256[:12]". The CPU rasterizers draw the same on every
+// architecture, so a drawing has one hash.
 //
 // It imports nothing of the host or a GPU, so that the CPU rasterizers'
 // tests can use it.
@@ -33,7 +31,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -41,7 +38,7 @@ import (
 )
 
 var (
-	update = flag.Bool("golden.update", false, "rewrite this GOARCH's goldens in testdata/golden.txt")
+	update = flag.Bool("golden.update", false, "rewrite the goldens in testdata/golden.txt")
 	dump   = flag.String("golden.dump", "", "write each mismatching drawing as a PNG into this directory")
 )
 
@@ -52,8 +49,7 @@ type File struct {
 
 	mu      sync.Mutex
 	read    bool
-	hashes  map[string]map[string]string // by name, then GOARCH
-	archs   map[string]bool              // the GOARCHes the file has goldens for
+	hashes  map[string]string // by name
 	changed bool
 }
 
@@ -72,12 +68,10 @@ func (f *File) Main(m *testing.M) {
 }
 
 // Check compares img with the golden drawing called name, or with
-// -golden.update records it. A GOARCH the file has no goldens for skips
-// t; one it has, but not for name, fails it.
+// -golden.update records it.
 func (f *File) Check(t testing.TB, name string, img *image.RGBA) {
 	t.Helper()
 	got := Hash(img)
-	arch := runtime.GOARCH
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.read {
@@ -86,19 +80,14 @@ func (f *File) Check(t testing.TB, name string, img *image.RGBA) {
 		}
 	}
 	if *update {
-		if f.hashes[name] == nil {
-			f.hashes[name] = map[string]string{}
-		}
-		f.hashes[name][arch] = got
+		f.hashes[name] = got
 		f.changed = true
 		return
 	}
-	want, ok := f.hashes[name][arch]
+	want, ok := f.hashes[name]
 	switch {
-	case !ok && !f.archs[arch]:
-		t.Skipf("%s: no goldens for GOARCH=%s; add them with -golden.update", name, arch)
 	case !ok:
-		t.Errorf("%s: no golden for GOARCH=%s; add it with -golden.update", name, arch)
+		t.Errorf("%s: no golden; add it with -golden.update", name)
 	case got != want:
 		t.Errorf("%s: drew %s; want %s", name, got, want)
 		if *dump != "" {
@@ -118,7 +107,7 @@ func Hash(img *image.RGBA) string {
 }
 
 func (f *File) load() error {
-	f.hashes, f.archs, f.read = map[string]map[string]string{}, map[string]bool{}, true
+	f.hashes, f.read = map[string]string{}, true
 	r, err := os.Open(f.Path)
 	if os.IsNotExist(err) {
 		return nil
@@ -130,14 +119,10 @@ func (f *File) load() error {
 	s := bufio.NewScanner(r)
 	for s.Scan() {
 		fs := strings.Fields(s.Text())
-		if len(fs) != 3 || strings.HasPrefix(fs[0], "#") {
+		if len(fs) != 2 || strings.HasPrefix(fs[0], "#") {
 			continue
 		}
-		if f.hashes[fs[0]] == nil {
-			f.hashes[fs[0]] = map[string]string{}
-		}
-		f.hashes[fs[0]][fs[1]] = fs[2]
-		f.archs[fs[1]] = true
+		f.hashes[fs[0]] = fs[1]
 	}
 	return s.Err()
 }
@@ -146,9 +131,7 @@ func (f *File) write() error {
 	var b strings.Builder
 	b.WriteString(f.Header + "\n")
 	for _, name := range slices.Sorted(maps.Keys(f.hashes)) {
-		for _, arch := range slices.Sorted(maps.Keys(f.hashes[name])) {
-			fmt.Fprintf(&b, "%s %s %s\n", name, arch, f.hashes[name][arch])
-		}
+		fmt.Fprintf(&b, "%s %s\n", name, f.hashes[name])
 	}
 	return os.WriteFile(f.Path, []byte(b.String()), 0o644)
 }

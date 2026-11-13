@@ -113,7 +113,7 @@ func vertices(p rasterx.Path) []vertex {
 	var cur, start [2]float64
 	var lastOut float64
 	pt := func(i int) [2]float64 { return [2]float64{float64(p[i]) / 64, float64(p[i+1]) / 64} }
-	dir := func(a, b [2]float64) float64 { return math.Atan2(b[1]-a[1], b[0]-a[0]) }
+	dir := func(a, b [2]float64) float64 { return rasterx.Atan2(b[1]-a[1], b[0]-a[0]) }
 	// seg is a segment from cur to to, leaving toward in and arriving from
 	// out: a line's are its ends.
 	seg := func(in, out, to [2]float64) {
@@ -127,7 +127,7 @@ func vertices(p rasterx.Path) []vertex {
 		if n := len(vs); n > 0 && vs[n-1].x == cur[0] && vs[n-1].y == cur[1] {
 			if n > 1 {
 				d := math.Mod(din-lastOut+3*math.Pi, 2*math.Pi) - math.Pi
-				vs[n-1].angle = lastOut + d/2
+				vs[n-1].angle = lastOut + float64(d/2) // not fused, as on arm64
 			} else {
 				vs[n-1].angle = din
 			}

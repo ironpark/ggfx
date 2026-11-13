@@ -22,8 +22,13 @@ type captured struct {
 }
 
 // capturing reports whether se is kept rather than drawn: inside a
-// clipPath, a mask or a marker being read, or one beginning.
+// clipPath, a mask or a marker being read, or one beginning. A gradient
+// there, and its stops, are not: they are read where they are, as in
+// defs, their ids the document's.
 func (c *iconCursor) capturing(se xml.StartElement) bool {
+	if c.capture != nil && (c.inGrad || isGradient(se.Name.Local)) {
+		return false
+	}
 	if c.capture != nil {
 		c.captureDepth++
 		c.capture.defs = append(c.capture.defs, definition{Tag: se.Name.Local, Attrs: se.Attr})
@@ -56,7 +61,7 @@ func (c *iconCursor) capturing(se xml.StartElement) bool {
 // endCapture reports whether se ends an element kept by capturing, or the
 // element it began.
 func (c *iconCursor) endCapture(se xml.EndElement) bool {
-	if c.capture == nil {
+	if c.capture == nil || c.inGrad {
 		return false
 	}
 	if c.captureDepth == 0 {
@@ -64,16 +69,13 @@ func (c *iconCursor) endCapture(se xml.EndElement) bool {
 		return true
 	}
 	c.captureDepth--
-	switch se.Name.Local {
-	case "g":
+	if se.Name.Local == "g" {
 		c.capture.defs = append(c.capture.defs, definition{Tag: "endg"})
-	case "linearGradient", "radialGradient":
-		// Without its end, a gradient expanded from here would take in
-		// all that follows as its own.
-		c.capture.defs = append(c.capture.defs, definition{Tag: "endGradient"})
 	}
 	return true
 }
+
+func isGradient(tag string) bool { return tag == "linearGradient" || tag == "radialGradient" }
 
 // urlID is the id a url(#id) names, "" for none.
 func urlID(v string) string {

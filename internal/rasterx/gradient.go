@@ -38,8 +38,10 @@ type (
 	// Gradient holds a description of an SVG 2.0 gradient. Its Stops are
 	// in order of their offsets.
 	Gradient struct {
-		Points   [5]float64
-		Stops    []GradStop
+		Points [5]float64
+		Stops  []GradStop
+		// Bounds is the box, in the user space GetColorFunctionUS is
+		// given, an ObjectBoundingBox gradient is drawn in.
 		Bounds   struct{ X, Y, W, H float64 }
 		Matrix   Matrix2D
 		Spread   SpreadMethod
@@ -234,10 +236,10 @@ func (st *gradStops) blend(t float64, s1, s2 *stop, flip bool) color.RGBA64 {
 	}
 	tp := (t - s1off) / (s2.offset - s1off)
 	return ColorPaint(applyOpacity(
-		uint8((float64(s1.r)*(1-tp)+float64(s2.r)*tp)/256),
-		uint8((float64(s1.g)*(1-tp)+float64(s2.g)*tp)/256),
-		uint8((float64(s1.b)*(1-tp)+float64(s2.b)*tp)/256),
-		(s1.blend*(1-tp)+s2.blend*tp)*st.opacity)).Color
+		uint8((float64(float64(s1.r)*(1-tp))+float64(float64(s2.r)*tp))/256),
+		uint8((float64(float64(s1.g)*(1-tp))+float64(float64(s2.g)*tp))/256),
+		uint8((float64(float64(s1.b)*(1-tp))+float64(float64(s2.b)*tp))/256),
+		(float64(s1.blend*(1-tp))+float64(s2.blend*tp))*st.opacity)).Color
 }
 
 // GetColorFunction returns the color function
@@ -245,7 +247,13 @@ func (g *Gradient) GetColorFunction(opacity float64) Paint {
 	return g.GetColorFunctionUS(opacity, Identity)
 }
 
-// GetColorFunctionUS returns the color function using the User Space objMatrix
+// GetColorFunctionUS returns the color function using the User Space
+// objMatrix. An ObjectBoundingBox gradient is drawn in Bounds, a box in
+// that user space: as SVG has it, it is a UserSpaceOnUse gradient under
+// objMatrix times the box's matrix. Its geometry is in the gradient's own
+// space, into which each pixel is mapped back; a UserSpaceOnUse one's is
+// mapped forward into the pixels', its radii as vectors, which is right
+// only where the matrices neither rotate nor skew.
 func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint {
 	switch len(g.Stops) {
 	case 0:
@@ -254,33 +262,24 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 		return ColorPaint(ApplyOpacity(g.Stops[0].StopColor, opacity)) // Illegal, I think, should really should not happen.
 	}
 	st := g.colors(opacity)
-	obb := g.Units == ObjectBoundingBox
-
-	w, h := float64(g.Bounds.W), float64(g.Bounds.H)
-	oriX, oriY := float64(g.Bounds.X), float64(g.Bounds.Y)
-	gradT := Identity.Translate(oriX, oriY).Scale(w, h).
-		Mult(g.Matrix).Scale(1/w, 1/h).Translate(-oriX, -oriY).Invert()
+	// toGrad maps a pixel's center to where the geometry is.
+	toGrad := Identity
+	p := g.Points
+	if g.Units == ObjectBoundingBox {
+		box := Identity.Translate(g.Bounds.X, g.Bounds.Y).Scale(g.Bounds.W, g.Bounds.H)
+		toGrad = objMatrix.Mult(box).Mult(g.Matrix).Invert()
+	} else {
+		p[0], p[1] = objMatrix.Transform(g.Matrix.Transform(p[0], p[1]))
+		p[2], p[3] = objMatrix.Transform(g.Matrix.Transform(p[2], p[3]))
+	}
 
 	if g.IsRadial {
-		cx, cy, fx, fy, rx, ry := g.Points[0], g.Points[1], g.Points[2], g.Points[3], g.Points[4], g.Points[4]
-		if obb {
-			cx = g.Bounds.X + g.Bounds.W*cx
-			cy = g.Bounds.Y + g.Bounds.H*cy
-			fx = g.Bounds.X + g.Bounds.W*fx
-			fy = g.Bounds.Y + g.Bounds.H*fy
-			rx *= g.Bounds.W
-			ry *= g.Bounds.H
-		} else {
-			cx, cy = g.Matrix.Transform(cx, cy)
-			fx, fy = g.Matrix.Transform(fx, fy)
-			rx, ry = g.Matrix.TransformVector(rx, ry)
-			cx, cy = objMatrix.Transform(cx, cy)
-			fx, fy = objMatrix.Transform(fx, fy)
-			rx, ry = objMatrix.TransformVector(rx, ry)
+		cx, cy, fx, fy, rx, ry := p[0], p[1], p[2], p[3], p[4], p[4]
+		if g.Units != ObjectBoundingBox {
+			rx, ry = objMatrix.TransformVector(g.Matrix.TransformVector(rx, ry))
 		}
-
 		if cx == fx && cy == fy {
-			return st.centered(gradT, obb, cx, cy, rx, ry)
+			return st.centered(toGrad, cx, cy, rx, ry)
 		}
 		fx /= rx
 		fy /= ry
@@ -290,7 +289,7 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 		dfx := fx - cx
 		dfy := fy - cy
 
-		if dfx*dfx+dfy*dfy > 1 { // Focus outside of circle; use intersection
+		if float64(dfx*dfx)+float64(dfy*dfy) > 1 { // Focus outside of circle; use intersection
 			// point of line from center to focus and circle as per SVG specs.
 			nfx, nfy, intersects := RayCircleIntersectionF(fx, fy, cx, cy, cx, cy, 1.0-epsilonF)
 			fx, fy = nfx, nfy
@@ -298,106 +297,61 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 				return ColorPaint(color.RGBA{255, 255, 0, 255}) // should not happen
 			}
 		}
-		return st.focal(gradT, obb, fx, fy, cx, cy, rx, ry)
+		return st.focal(toGrad, fx, fy, cx, cy, rx, ry)
 	}
-	p1x, p1y, p2x, p2y := g.Points[0], g.Points[1], g.Points[2], g.Points[3]
-	if obb {
-		p1x = g.Bounds.X + g.Bounds.W*p1x
-		p1y = g.Bounds.Y + g.Bounds.H*p1y
-		p2x = g.Bounds.X + g.Bounds.W*p2x
-		p2y = g.Bounds.Y + g.Bounds.H*p2y
-	} else {
-		p1x, p1y = g.Matrix.Transform(p1x, p1y)
-		p2x, p2y = g.Matrix.Transform(p2x, p2y)
-		p1x, p1y = objMatrix.Transform(p1x, p1y)
-		p2x, p2y = objMatrix.Transform(p2x, p2y)
-	}
-	return st.linear(gradT, obb, p1x, p1y, p2x, p2y)
+	return st.linear(toGrad, p[0], p[1], p[2], p[3])
 }
 
 // The paints below take their geometry as parameters, which their
 // closures capture by value: a variable assigned after it is captured
-// would be moved to the heap.
+// would be moved to the heap. Each maps a pixel's center by toGrad to
+// where its geometry is; for Identity, exactly to itself.
 
 // centered is the paint of a radial gradient whose focus is its center:
 // t is just distance from center scaled by the bounds aspect ratio times
 // r.
-func (st gradStops) centered(gradT Matrix2D, obb bool, cx, cy, rx, ry float64) Paint {
-	if obb {
-		return FuncPaint(func(xi, yi int) color.RGBA64 {
-			x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
-			dx := float64(x) - cx
-			dy := float64(y) - cy
-			return st.color(math.Sqrt(dx*dx/(rx*rx) + (dy*dy)/(ry*ry)))
-		})
-	}
+func (st gradStops) centered(toGrad Matrix2D, cx, cy, rx, ry float64) Paint {
 	return FuncPaint(func(xi, yi int) color.RGBA64 {
-		x := float64(xi) + 0.5
-		y := float64(yi) + 0.5
+		x, y := toGrad.Transform(float64(xi)+0.5, float64(yi)+0.5)
 		dx := x - cx
 		dy := y - cy
-		return st.color(math.Sqrt(dx*dx/(rx*rx) + (dy*dy)/(ry*ry)))
+		return st.color(math.Sqrt(float64(dx*dx/(rx*rx)) + float64((dy*dy)/(ry*ry))))
 	})
 }
 
 // focal is the paint of a radial gradient whose focus, (fx, fy), is not
-// its center, (cx, cy), both divided by the radii.
-func (st gradStops) focal(gradT Matrix2D, obb bool, fx, fy, cx, cy, rx, ry float64) Paint {
-	if obb {
-		return FuncPaint(func(xi, yi int) color.RGBA64 {
-			x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
-			ex := x / rx
-			ey := y / ry
-
-			t1x, t1y, intersects := RayCircleIntersectionF(ex, ey, fx, fy, cx, cy, 1.0)
-			if intersects == false { //In this case, use the last stop color
-				return st.last
-			}
-			tdx, tdy := t1x-fx, t1y-fy
-			dx, dy := ex-fx, ey-fy
-			if tdx*tdx+tdy*tdy < epsilonF {
-				return st.last
-			}
-			return st.color(math.Sqrt(dx*dx+dy*dy) / math.Sqrt(tdx*tdx+tdy*tdy))
-		})
-	}
+// its center, (cx, cy), both divided by the radii, the circle then of
+// radius 1. A point e is at t = |e-f| / |p-f| along the ray from the
+// focus f through it to the circle at p = f + (e-f)/t: with g = f-c and
+// d = e-f, |g + d/t| = 1, whose root past the focus, the focus inside, is
+// t = (g·d + √((g·d)² + |d|²(1-|g|²))) / (1-|g|²).
+func (st gradStops) focal(toGrad Matrix2D, fx, fy, cx, cy, rx, ry float64) Paint {
+	gx, gy := fx-cx, fy-cy
+	den := 1 - (float64(gx*gx) + float64(gy*gy))
 	return FuncPaint(func(xi, yi int) color.RGBA64 {
-		x := float64(xi) + 0.5
-		y := float64(yi) + 0.5
-		ex := x / rx
-		ey := y / ry
-
-		t1x, t1y, intersects := RayCircleIntersectionF(ex, ey, fx, fy, cx, cy, 1.0)
-		if intersects == false { //In this case, use the last stop color
+		x, y := toGrad.Transform(float64(xi)+0.5, float64(yi)+0.5)
+		dx, dy := x/rx-fx, y/ry-fy
+		gd := float64(gx*dx) + float64(gy*dy)
+		dd := float64(dx*dx) + float64(dy*dy)
+		t := (gd + math.Sqrt(float64(gd*gd)+float64(dd*den))) / den
+		if dd < float64(epsilonF*t)*t {
+			// p is all but on the focus: the circle's edge, where the
+			// focus is on it.
 			return st.last
 		}
-		tdx, tdy := t1x-fx, t1y-fy
-		dx, dy := ex-fx, ey-fy
-		if tdx*tdx+tdy*tdy < epsilonF {
-			return st.last
-		}
-		return st.color(math.Sqrt(dx*dx+dy*dy) / math.Sqrt(tdx*tdx+tdy*tdy))
+		return st.color(t)
 	})
 }
 
 // linear is the paint of a linear gradient from (p1x, p1y) to (p2x, p2y).
-func (st gradStops) linear(gradT Matrix2D, obb bool, p1x, p1y, p2x, p2y float64) Paint {
+func (st gradStops) linear(toGrad Matrix2D, p1x, p1y, p2x, p2y float64) Paint {
 	dx := p2x - p1x
 	dy := p2y - p1y
-	d := (dx*dx + dy*dy) // self inner prod
-	if obb {
-		return FuncPaint(func(xi, yi int) color.RGBA64 {
-			x, y := gradT.Transform(float64(xi)+0.5, float64(yi)+0.5)
-			dfx := x - p1x
-			dfy := y - p1y
-			return st.color((dx*dfx + dy*dfy) / d)
-		})
-	}
+	d := float64(dx*dx) + float64(dy*dy) // self inner prod
 	return FuncPaint(func(xi, yi int) color.RGBA64 {
-		x := float64(xi) + 0.5
-		y := float64(yi) + 0.5
+		x, y := toGrad.Transform(float64(xi)+0.5, float64(yi)+0.5)
 		dfx := x - p1x
 		dfy := y - p1y
-		return st.color((dx*dfx + dy*dfy) / d)
+		return st.color((float64(dx*dfx) + float64(dy*dfy)) / d)
 	})
 }

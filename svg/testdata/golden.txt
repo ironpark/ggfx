@@ -1,649 +1,225 @@
-# case GOARCH sha256[:12] of the pixels; go test ./svg -run TestGolden -golden.update
-caps/h513 amd64 967398a63d15dcf6510679ea
-caps/h513 arm64 967398a63d15dcf6510679ea
-caps/h513 wasm 967398a63d15dcf6510679ea
-caps/min amd64 1ad87b43a522e4229725c1b5
-caps/min arm64 1ad87b43a522e4229725c1b5
-caps/min wasm 1ad87b43a522e4229725c1b5
-caps/rot amd64 5f5ca2307a76e17f63d182d2
-caps/rot arm64 5f5ca2307a76e17f63d182d2
-caps/rot wasm 5f5ca2307a76e17f63d182d2
-caps/s24 amd64 130f36e6aac2df327598bbd3
-caps/s24 arm64 130f36e6aac2df327598bbd3
-caps/s24 wasm 130f36e6aac2df327598bbd3
-caps/s512 amd64 72a170b7d3d50680a47ed2d3
-caps/s512 arm64 72a170b7d3d50680a47ed2d3
-caps/s512 wasm 72a170b7d3d50680a47ed2d3
-caps/s64 amd64 d54470fd116ee4699a0f6458
-caps/s64 arm64 d54470fd116ee4699a0f6458
-caps/s64 wasm d54470fd116ee4699a0f6458
-caps/s700 amd64 2acbc19fbd2f203fb22da8fd
-caps/s700 arm64 5b1d254ef62a510ff97b223a
-caps/s700 wasm 5b1d254ef62a510ff97b223a
-caps/w513 amd64 5874b1ef7eb897cd2368a676
-caps/w513 arm64 5874b1ef7eb897cd2368a676
-caps/w513 wasm 5874b1ef7eb897cd2368a676
-classes/h513 amd64 5c20f11dba52d1dfaf1ca772
-classes/h513 arm64 1d0be9f184b788281f051440
-classes/h513 wasm 1d0be9f184b788281f051440
-classes/min amd64 56d47f5fd87b7b8264ae1a3a
-classes/min arm64 56d47f5fd87b7b8264ae1a3a
-classes/min wasm 56d47f5fd87b7b8264ae1a3a
-classes/rot amd64 b45ac2828552e1c6a40f0d5e
-classes/rot arm64 c04d3a3227b30866c38ca45d
-classes/rot wasm b45ac2828552e1c6a40f0d5e
-classes/s24 amd64 ecfed52c0573c06e408dc7f8
-classes/s24 arm64 ecfed52c0573c06e408dc7f8
-classes/s24 wasm ecfed52c0573c06e408dc7f8
-classes/s512 amd64 8e8ac4358238d7c988fa4299
-classes/s512 arm64 59559e822b8235d08b86bbc3
-classes/s512 wasm 8e8ac4358238d7c988fa4299
-classes/s64 amd64 5e9bbc62db314b02d20af985
-classes/s64 arm64 5e9bbc62db314b02d20af985
-classes/s64 wasm 5e9bbc62db314b02d20af985
-classes/s700 amd64 2c463a2717b6126d52e28e13
-classes/s700 arm64 e37d5b1bfc1e47dd083fd340
-classes/s700 wasm 2c463a2717b6126d52e28e13
-classes/w513 amd64 697eac0244587bd1915bc54d
-classes/w513 arm64 697eac0244587bd1915bc54d
-classes/w513 wasm 697eac0244587bd1915bc54d
-clip/h513 amd64 76a44a0b6dafd258526bad15
-clip/h513 arm64 76a44a0b6dafd258526bad15
-clip/h513 wasm 76a44a0b6dafd258526bad15
-clip/min amd64 32f254d43bbe3add6cf5a23b
-clip/min arm64 32f254d43bbe3add6cf5a23b
-clip/min wasm 32f254d43bbe3add6cf5a23b
-clip/rot amd64 30605d6591476b165737ff7e
-clip/rot arm64 30605d6591476b165737ff7e
-clip/rot wasm 30605d6591476b165737ff7e
-clip/s24 amd64 ab852ec26f866cca9171f29c
-clip/s24 arm64 3bda1627784001664ee6e39c
-clip/s24 wasm ab852ec26f866cca9171f29c
-clip/s512 amd64 a19e71e5180519c3c991ae2e
-clip/s512 arm64 975eb6715953031d34ff3bc3
-clip/s512 wasm a19e71e5180519c3c991ae2e
-clip/s64 amd64 87850b89a03d15d899964bd9
-clip/s64 arm64 87850b89a03d15d899964bd9
-clip/s64 wasm 87850b89a03d15d899964bd9
-clip/s700 amd64 821e924af93ad3cff8f5f615
-clip/s700 arm64 3230467638fb759aea00de18
-clip/s700 wasm b2beff412abd9556cdfd5daa
-clip/w513 amd64 d9901464d82b9507260a3222
-clip/w513 arm64 dfdb9d7d770ceaa8f140fbb5
-clip/w513 wasm dfdb9d7d770ceaa8f140fbb5
-cliprule/h513 amd64 31722c0f7959c626a8ba208d
-cliprule/h513 arm64 31722c0f7959c626a8ba208d
-cliprule/h513 wasm 31722c0f7959c626a8ba208d
-cliprule/min amd64 16a5a7832791962802a2dc83
-cliprule/min arm64 16a5a7832791962802a2dc83
-cliprule/min wasm 16a5a7832791962802a2dc83
-cliprule/rot amd64 70a837ee2f5d07b22c3e8861
-cliprule/rot arm64 70a837ee2f5d07b22c3e8861
-cliprule/rot wasm 70a837ee2f5d07b22c3e8861
-cliprule/s24 amd64 2b4498479fb222b80879fb4c
-cliprule/s24 arm64 2b4498479fb222b80879fb4c
-cliprule/s24 wasm 2b4498479fb222b80879fb4c
-cliprule/s512 amd64 16b6bdfc0875d85f0c6ed5e6
-cliprule/s512 arm64 16b6bdfc0875d85f0c6ed5e6
-cliprule/s512 wasm 16b6bdfc0875d85f0c6ed5e6
-cliprule/s64 amd64 19ed23489792baa9bc4e376e
-cliprule/s64 arm64 19ed23489792baa9bc4e376e
-cliprule/s64 wasm 19ed23489792baa9bc4e376e
-cliprule/s700 amd64 f6ae031eb1383ca8225aaf9c
-cliprule/s700 arm64 f6ae031eb1383ca8225aaf9c
-cliprule/s700 wasm f6ae031eb1383ca8225aaf9c
-cliprule/w513 amd64 3e46f1d280b778c1bcbf98a6
-cliprule/w513 arm64 3e46f1d280b778c1bcbf98a6
-cliprule/w513 wasm 3e46f1d280b778c1bcbf98a6
-curves/h513 amd64 66a902255b5b168da98e4dbb
-curves/h513 arm64 02acf1aa84e221d36f6a534c
-curves/h513 wasm 66a902255b5b168da98e4dbb
-curves/min amd64 ea2db707abea87850a32bc9c
-curves/min arm64 b6ee32e13c9312c1c993e255
-curves/min wasm ea2db707abea87850a32bc9c
-curves/rot amd64 c95b4e8f86f16da251545f36
-curves/rot arm64 47d8d097eb3a76d7f32bc609
-curves/rot wasm c95b4e8f86f16da251545f36
-curves/s24 amd64 5948a01fa5af3ae1abcc08d7
-curves/s24 arm64 344446ea50715a8c635442cd
-curves/s24 wasm 5948a01fa5af3ae1abcc08d7
-curves/s512 amd64 2a379c2b742b2569099b1671
-curves/s512 arm64 9fd9759a602599546838c065
-curves/s512 wasm 2a379c2b742b2569099b1671
-curves/s64 amd64 ec1fbbd2b0c12b773318f732
-curves/s64 arm64 be0ff14c1228411bbd4e3fe0
-curves/s64 wasm ec1fbbd2b0c12b773318f732
-curves/s700 amd64 4d28cb825d05d9c3280d6f9a
-curves/s700 arm64 acf83b4cc6ffedb781065a5d
-curves/s700 wasm 86c48b41eef3fd36875bfb95
-curves/w513 amd64 bf330b18daa9d036a0291a7e
-curves/w513 arm64 2faac82ee49830463266db4a
-curves/w513 wasm 8c693aee8d0da13c903b10a4
-dashes/h513 amd64 f4b4912fc423d4feb2543431
-dashes/h513 arm64 b22c7580db399ed7c956f896
-dashes/h513 wasm b22c7580db399ed7c956f896
-dashes/min amd64 08c8a0e2fe03569e55d0483a
-dashes/min arm64 08c8a0e2fe03569e55d0483a
-dashes/min wasm 08c8a0e2fe03569e55d0483a
-dashes/rot amd64 59449a3f1f24da0d69927780
-dashes/rot arm64 59449a3f1f24da0d69927780
-dashes/rot wasm 59449a3f1f24da0d69927780
-dashes/s24 amd64 34b1cb636ecb98909a24bf0d
-dashes/s24 arm64 4b00befd01c0f1196b611c4c
-dashes/s24 wasm 34b1cb636ecb98909a24bf0d
-dashes/s512 amd64 b38fe425044ec493ca6d4977
-dashes/s512 arm64 b38fe425044ec493ca6d4977
-dashes/s512 wasm b38fe425044ec493ca6d4977
-dashes/s64 amd64 72a82e9c347ef1112eded3a9
-dashes/s64 arm64 72a82e9c347ef1112eded3a9
-dashes/s64 wasm 72a82e9c347ef1112eded3a9
-dashes/s700 amd64 af635e1ab6015dff7ee42436
-dashes/s700 arm64 5b02e69c6e5038651cb6c4f4
-dashes/s700 wasm 5b02e69c6e5038651cb6c4f4
-dashes/w513 amd64 6a3243508c7c40cb08ed09d6
-dashes/w513 arm64 52eaf4ec39f0950ba8657b15
-dashes/w513 wasm 52eaf4ec39f0950ba8657b15
-evenodd/h513 amd64 9a35b792ec00fd26c66a7dd1
-evenodd/h513 arm64 7f53bd67aee077c67ef01509
-evenodd/h513 wasm 7f53bd67aee077c67ef01509
-evenodd/min amd64 8a4f08a1119be64e252a7963
-evenodd/min arm64 8a4f08a1119be64e252a7963
-evenodd/min wasm 8a4f08a1119be64e252a7963
-evenodd/rot amd64 372192bce7b87136d6b570f3
-evenodd/rot arm64 0de3815d9053c9c240ffb8be
-evenodd/rot wasm 372192bce7b87136d6b570f3
-evenodd/s24 amd64 05804e324bbca084506cbcab
-evenodd/s24 arm64 05804e324bbca084506cbcab
-evenodd/s24 wasm 05804e324bbca084506cbcab
-evenodd/s512 amd64 021a5edfe029fcee416fbc78
-evenodd/s512 arm64 c7efabba8acdc2ef40ad7f05
-evenodd/s512 wasm 021a5edfe029fcee416fbc78
-evenodd/s64 amd64 0ecd44a4543410e7c5893723
-evenodd/s64 arm64 0ecd44a4543410e7c5893723
-evenodd/s64 wasm 0ecd44a4543410e7c5893723
-evenodd/s700 amd64 4636c07ac9bf6dd02285dd54
-evenodd/s700 arm64 e5afe8d708e30499a9e25571
-evenodd/s700 wasm 2fa809fc23bf8a8068379928
-evenodd/w513 amd64 2913f7f5827e047c185cba64
-evenodd/w513 arm64 2913f7f5827e047c185cba64
-evenodd/w513 wasm 2913f7f5827e047c185cba64
-grad-in-mask/h513 amd64 e3777234a265aab9ca801f85
-grad-in-mask/h513 arm64 e3777234a265aab9ca801f85
-grad-in-mask/h513 wasm e3777234a265aab9ca801f85
-grad-in-mask/min amd64 b35d9cf015d418d91fe694b7
-grad-in-mask/min arm64 b35d9cf015d418d91fe694b7
-grad-in-mask/min wasm b35d9cf015d418d91fe694b7
-grad-in-mask/rot amd64 abebb2a2c996fb0e3faee1a3
-grad-in-mask/rot arm64 abebb2a2c996fb0e3faee1a3
-grad-in-mask/rot wasm abebb2a2c996fb0e3faee1a3
-grad-in-mask/s24 amd64 079666dd8fe2e4579757870d
-grad-in-mask/s24 arm64 079666dd8fe2e4579757870d
-grad-in-mask/s24 wasm 079666dd8fe2e4579757870d
-grad-in-mask/s512 amd64 87555cd6d477b9df23fbd34e
-grad-in-mask/s512 arm64 87555cd6d477b9df23fbd34e
-grad-in-mask/s512 wasm 87555cd6d477b9df23fbd34e
-grad-in-mask/s64 amd64 022ac4b8ab2154dadd4e0248
-grad-in-mask/s64 arm64 022ac4b8ab2154dadd4e0248
-grad-in-mask/s64 wasm 022ac4b8ab2154dadd4e0248
-grad-in-mask/s700 amd64 1d0088c865c607566247b956
-grad-in-mask/s700 arm64 1d0088c865c607566247b956
-grad-in-mask/s700 wasm 1d0088c865c607566247b956
-grad-in-mask/w513 amd64 97293e2a5482ead19c9733ee
-grad-in-mask/w513 arm64 97293e2a5482ead19c9733ee
-grad-in-mask/w513 wasm 97293e2a5482ead19c9733ee
-gradient-stroke/h513 amd64 e65a4196103730766c1f6158
-gradient-stroke/h513 arm64 c9f3edfaafa8037bc4555d8a
-gradient-stroke/h513 wasm 1cc73cbf998960aa5768523d
-gradient-stroke/min amd64 e3da5419f286d58a734871c5
-gradient-stroke/min arm64 e3da5419f286d58a734871c5
-gradient-stroke/min wasm e3da5419f286d58a734871c5
-gradient-stroke/rot amd64 2eb2370c9006d4d11596f266
-gradient-stroke/rot arm64 2eb2370c9006d4d11596f266
-gradient-stroke/rot wasm 2eb2370c9006d4d11596f266
-gradient-stroke/s24 amd64 4bad31e63fa7cc9507a4fdef
-gradient-stroke/s24 arm64 4bad31e63fa7cc9507a4fdef
-gradient-stroke/s24 wasm 4bad31e63fa7cc9507a4fdef
-gradient-stroke/s512 amd64 1c0cf781fcd6c6aa9c6c08f0
-gradient-stroke/s512 arm64 c3b22a7c192c4523ad95032f
-gradient-stroke/s512 wasm 1c0cf781fcd6c6aa9c6c08f0
-gradient-stroke/s64 amd64 bd9d920af6c620769966d3d8
-gradient-stroke/s64 arm64 bd9d920af6c620769966d3d8
-gradient-stroke/s64 wasm bd9d920af6c620769966d3d8
-gradient-stroke/s700 amd64 757f698ba53a24f0cee784bd
-gradient-stroke/s700 arm64 9a62b3219550ac36657cd6de
-gradient-stroke/s700 wasm 7f722b590da0287cc09592a8
-gradient-stroke/w513 amd64 99c3d1500e7d6a8c3c789eb7
-gradient-stroke/w513 arm64 99c3d1500e7d6a8c3c789eb7
-gradient-stroke/w513 wasm 99c3d1500e7d6a8c3c789eb7
-icon/h513 amd64 71b3c51320247c08f9781da3
-icon/h513 arm64 e7d458672d8f8ddfba2f7ffe
-icon/h513 wasm 71b3c51320247c08f9781da3
-icon/min amd64 e51f408f80fa043e9f965579
-icon/min arm64 e51f408f80fa043e9f965579
-icon/min wasm e51f408f80fa043e9f965579
-icon/rot amd64 e3b4065211348efd9300a187
-icon/rot arm64 4a8ed58d80a5636341c699b4
-icon/rot wasm e3b4065211348efd9300a187
-icon/s24 amd64 8e2ec9b467908533499be976
-icon/s24 arm64 8e2ec9b467908533499be976
-icon/s24 wasm 8e2ec9b467908533499be976
-icon/s512 amd64 2824aba265d5135588790073
-icon/s512 arm64 2824aba265d5135588790073
-icon/s512 wasm 2824aba265d5135588790073
-icon/s64 amd64 96519ff06f3e94fe0e70b424
-icon/s64 arm64 b413d4e47b9732f26ad5e2b6
-icon/s64 wasm 96519ff06f3e94fe0e70b424
-icon/s700 amd64 45b81866ff5c22064d141400
-icon/s700 arm64 0312071eb2affbd77c004e5d
-icon/s700 wasm 9f7d5593387d34c45d59a4e8
-icon/w513 amd64 6393c9e925a86572f7e77ecc
-icon/w513 arm64 9468ca2f84cbdf58f6c298de
-icon/w513 wasm 6393c9e925a86572f7e77ecc
-joins/h513 amd64 ead70eb0d0f0da71894cfed3
-joins/h513 arm64 cfbd550690234c7f6ebd9f5a
-joins/h513 wasm 40eb59b4b7f45a8004332db6
-joins/min amd64 c2b615ce1767b7d98258f993
-joins/min arm64 c2b615ce1767b7d98258f993
-joins/min wasm c2b615ce1767b7d98258f993
-joins/rot amd64 487fc6af96e1e23c1b9c3748
-joins/rot arm64 487fc6af96e1e23c1b9c3748
-joins/rot wasm 487fc6af96e1e23c1b9c3748
-joins/s24 amd64 49d47dcc3ef6a60bd90af25c
-joins/s24 arm64 49d47dcc3ef6a60bd90af25c
-joins/s24 wasm 49d47dcc3ef6a60bd90af25c
-joins/s512 amd64 79b906cf7838c8d7832eb3d3
-joins/s512 arm64 79b906cf7838c8d7832eb3d3
-joins/s512 wasm 79b906cf7838c8d7832eb3d3
-joins/s64 amd64 a8216bf0e78cab1357fe2517
-joins/s64 arm64 a8216bf0e78cab1357fe2517
-joins/s64 wasm a8216bf0e78cab1357fe2517
-joins/s700 amd64 1d836758cd3ebacb84703c84
-joins/s700 arm64 b3096065e06e5b4838e2ffec
-joins/s700 wasm b3096065e06e5b4838e2ffec
-joins/w513 amd64 dccede7da34bef73d7fa9704
-joins/w513 arm64 de022644851ebc9d7a86ef02
-joins/w513 wasm de022644851ebc9d7a86ef02
-linear-obb/h513 amd64 85c9344adf50fabcb2d974c4
-linear-obb/h513 arm64 85c9344adf50fabcb2d974c4
-linear-obb/h513 wasm 85c9344adf50fabcb2d974c4
-linear-obb/min amd64 b549f2a0a86b5e4369a5a97a
-linear-obb/min arm64 b549f2a0a86b5e4369a5a97a
-linear-obb/min wasm b549f2a0a86b5e4369a5a97a
-linear-obb/rot amd64 88d9ac96dc9ba6c0d2e8b264
-linear-obb/rot arm64 88d9ac96dc9ba6c0d2e8b264
-linear-obb/rot wasm 88d9ac96dc9ba6c0d2e8b264
-linear-obb/s24 amd64 65a706050d80ef9d2f03a358
-linear-obb/s24 arm64 65a706050d80ef9d2f03a358
-linear-obb/s24 wasm 65a706050d80ef9d2f03a358
-linear-obb/s512 amd64 9ded3dacf1d72544bc4a1e84
-linear-obb/s512 arm64 c030ad48f6035396523943a3
-linear-obb/s512 wasm 9ded3dacf1d72544bc4a1e84
-linear-obb/s64 amd64 89c9df471b784b3ae7e938ee
-linear-obb/s64 arm64 89c9df471b784b3ae7e938ee
-linear-obb/s64 wasm 89c9df471b784b3ae7e938ee
-linear-obb/s700 amd64 01101d86439a8bbea9794f7a
-linear-obb/s700 arm64 db79b7259ff76df715bcf7b7
-linear-obb/s700 wasm 0b40fb813a121ba1030983da
-linear-obb/w513 amd64 ba866b0a36d6e3e946485dcf
-linear-obb/w513 arm64 5651e9f12a25a04601b34ec9
-linear-obb/w513 wasm 5651e9f12a25a04601b34ec9
-linear-user/h513 amd64 5d7b3ab107749a6d74199854
-linear-user/h513 arm64 b3e759e54fef8039fa576a30
-linear-user/h513 wasm b3e759e54fef8039fa576a30
-linear-user/min amd64 5c9e49532ebe0db315911f57
-linear-user/min arm64 5c9e49532ebe0db315911f57
-linear-user/min wasm 5c9e49532ebe0db315911f57
-linear-user/rot amd64 ad8c9b630bdd31e64413f9c5
-linear-user/rot arm64 ad8c9b630bdd31e64413f9c5
-linear-user/rot wasm ad8c9b630bdd31e64413f9c5
-linear-user/s24 amd64 98f42ca95620be24fe29459b
-linear-user/s24 arm64 98f42ca95620be24fe29459b
-linear-user/s24 wasm 98f42ca95620be24fe29459b
-linear-user/s512 amd64 49618c164f34da9f62b516b4
-linear-user/s512 arm64 674d8cd5e8579265c761a29f
-linear-user/s512 wasm 49618c164f34da9f62b516b4
-linear-user/s64 amd64 682bd69c5e21a5173e213a53
-linear-user/s64 arm64 682bd69c5e21a5173e213a53
-linear-user/s64 wasm 682bd69c5e21a5173e213a53
-linear-user/s700 amd64 b934803d91867f8b6c75638b
-linear-user/s700 arm64 f77af0c51e5cf17647451176
-linear-user/s700 wasm b934803d91867f8b6c75638b
-linear-user/w513 amd64 f693dc3cfa96c76e16bb31dc
-linear-user/w513 arm64 f693dc3cfa96c76e16bb31dc
-linear-user/w513 wasm f693dc3cfa96c76e16bb31dc
-linegap/h513 amd64 7e4bb958e938d3d637f6678a
-linegap/h513 arm64 7e4bb958e938d3d637f6678a
-linegap/h513 wasm 7e4bb958e938d3d637f6678a
-linegap/min amd64 c30e3cba1f50ed3017c744d1
-linegap/min arm64 c30e3cba1f50ed3017c744d1
-linegap/min wasm c30e3cba1f50ed3017c744d1
-linegap/rot amd64 21b7c6c2d6689b36c4d100bc
-linegap/rot arm64 21b7c6c2d6689b36c4d100bc
-linegap/rot wasm 21b7c6c2d6689b36c4d100bc
-linegap/s24 amd64 defb020a6c82790d22669cd6
-linegap/s24 arm64 defb020a6c82790d22669cd6
-linegap/s24 wasm defb020a6c82790d22669cd6
-linegap/s512 amd64 7309e3ee1698d1c1f8301d12
-linegap/s512 arm64 7309e3ee1698d1c1f8301d12
-linegap/s512 wasm 7309e3ee1698d1c1f8301d12
-linegap/s64 amd64 748c9aa0b5830c55059ccc38
-linegap/s64 arm64 748c9aa0b5830c55059ccc38
-linegap/s64 wasm 748c9aa0b5830c55059ccc38
-linegap/s700 amd64 c17ea8455daaad60af4299e0
-linegap/s700 arm64 d8ebeb274ae27b8f4099aa29
-linegap/s700 wasm d8ebeb274ae27b8f4099aa29
-linegap/w513 amd64 4d06103f5959ff59d0607a8b
-linegap/w513 arm64 4d06103f5959ff59d0607a8b
-linegap/w513 wasm 4d06103f5959ff59d0607a8b
-many-stops/h513 amd64 fe9ce37280b1e3abe849b154
-many-stops/h513 arm64 fe9ce37280b1e3abe849b154
-many-stops/h513 wasm fe9ce37280b1e3abe849b154
-many-stops/min amd64 1f626fdaf6f195ffdaedc010
-many-stops/min arm64 1f626fdaf6f195ffdaedc010
-many-stops/min wasm 1f626fdaf6f195ffdaedc010
-many-stops/rot amd64 51d262f0355376550031f05b
-many-stops/rot arm64 51d262f0355376550031f05b
-many-stops/rot wasm 51d262f0355376550031f05b
-many-stops/s24 amd64 be16547d5bd6ea7e84aa4dd0
-many-stops/s24 arm64 be16547d5bd6ea7e84aa4dd0
-many-stops/s24 wasm be16547d5bd6ea7e84aa4dd0
-many-stops/s512 amd64 9b4e62cbaf3017800560a5bb
-many-stops/s512 arm64 9b4e62cbaf3017800560a5bb
-many-stops/s512 wasm 9b4e62cbaf3017800560a5bb
-many-stops/s64 amd64 ac2d66d46e23030bce654535
-many-stops/s64 arm64 ac2d66d46e23030bce654535
-many-stops/s64 wasm ac2d66d46e23030bce654535
-many-stops/s700 amd64 075fbb344baab6fca789f18e
-many-stops/s700 arm64 075fbb344baab6fca789f18e
-many-stops/s700 wasm 075fbb344baab6fca789f18e
-many-stops/w513 amd64 7d50b8d9e2c8a1720a0167e8
-many-stops/w513 arm64 7d50b8d9e2c8a1720a0167e8
-many-stops/w513 wasm 7d50b8d9e2c8a1720a0167e8
-markers/h513 amd64 5f21184d7a49e99d96668e06
-markers/h513 arm64 47d2e31e3a6c29163ae34b9e
-markers/h513 wasm a3f6517dadc78231aaf247eb
-markers/min amd64 c1f9abe572c6ead0cca9a467
-markers/min arm64 2e24d2a9e9fda94d2e1f740b
-markers/min wasm c1f9abe572c6ead0cca9a467
-markers/rot amd64 892a6de79b00ca63abe3df3a
-markers/rot arm64 892a6de79b00ca63abe3df3a
-markers/rot wasm 892a6de79b00ca63abe3df3a
-markers/s24 amd64 f07323e8d0c81e15dbf10771
-markers/s24 arm64 f07323e8d0c81e15dbf10771
-markers/s24 wasm f07323e8d0c81e15dbf10771
-markers/s512 amd64 83ac94debd7200f1d1fe0912
-markers/s512 arm64 7fb80eb3546d66c10f2c25cf
-markers/s512 wasm 83ac94debd7200f1d1fe0912
-markers/s64 amd64 8d018e79de71146152412c0a
-markers/s64 arm64 8d018e79de71146152412c0a
-markers/s64 wasm 8d018e79de71146152412c0a
-markers/s700 amd64 1a1c6c2c270f4765636bcb9a
-markers/s700 arm64 a530dc927de45ba5763d0eea
-markers/s700 wasm 6933ff27e7da4aaff8c65e49
-markers/w513 amd64 c326d028f2d81814d443f043
-markers/w513 arm64 c326d028f2d81814d443f043
-markers/w513 wasm c326d028f2d81814d443f043
-mask/h513 amd64 a3c0a63d83a49a518bba24db
-mask/h513 arm64 1ebb7fcef9c0ca564c66832d
-mask/h513 wasm a3c0a63d83a49a518bba24db
-mask/min amd64 7ef05a8e9b6e8201e271bf94
-mask/min arm64 7ef05a8e9b6e8201e271bf94
-mask/min wasm 7ef05a8e9b6e8201e271bf94
-mask/rot amd64 91287c86381839689fe8b848
-mask/rot arm64 4f3300fcf12a8ce95b6e1a83
-mask/rot wasm 91287c86381839689fe8b848
-mask/s24 amd64 dbf2a18a4cab60cad630cf27
-mask/s24 arm64 dbf2a18a4cab60cad630cf27
-mask/s24 wasm dbf2a18a4cab60cad630cf27
-mask/s512 amd64 d24fa6e5b5a57cd3294b7d7f
-mask/s512 arm64 d24fa6e5b5a57cd3294b7d7f
-mask/s512 wasm d24fa6e5b5a57cd3294b7d7f
-mask/s64 amd64 39bab7693453432c0cdcca44
-mask/s64 arm64 39bab7693453432c0cdcca44
-mask/s64 wasm 39bab7693453432c0cdcca44
-mask/s700 amd64 625ebc610e2d9cd9bcbe7a20
-mask/s700 arm64 b4516210ec3825d196fb468a
-mask/s700 wasm 625ebc610e2d9cd9bcbe7a20
-mask/w513 amd64 1ac79292bd9224a4c7f197b4
-mask/w513 arm64 1ac79292bd9224a4c7f197b4
-mask/w513 wasm 1ac79292bd9224a4c7f197b4
-opacity/h513 amd64 044569c683dc277e0f561bce
-opacity/h513 arm64 044569c683dc277e0f561bce
-opacity/h513 wasm 044569c683dc277e0f561bce
-opacity/min amd64 b575f6a9cdc8cec5e307aa89
-opacity/min arm64 7ce9854d8820a3d975e7e72b
-opacity/min wasm b575f6a9cdc8cec5e307aa89
-opacity/rot amd64 6b4ffa85cf021752fdf0c336
-opacity/rot arm64 6b4ffa85cf021752fdf0c336
-opacity/rot wasm 6b4ffa85cf021752fdf0c336
-opacity/s24 amd64 9a19828bb54a59b6c6612468
-opacity/s24 arm64 09f0aa49c22c797cda0181b2
-opacity/s24 wasm 9a19828bb54a59b6c6612468
-opacity/s512 amd64 5787c421b7f454181b43ed07
-opacity/s512 arm64 5787c421b7f454181b43ed07
-opacity/s512 wasm 5787c421b7f454181b43ed07
-opacity/s64 amd64 8fa6278bf0c71cea3bc67f0a
-opacity/s64 arm64 8fa6278bf0c71cea3bc67f0a
-opacity/s64 wasm 8fa6278bf0c71cea3bc67f0a
-opacity/s700 amd64 078a4bbf8d887ba318e74ee7
-opacity/s700 arm64 f7dd768bff9cdfe72401fe79
-opacity/s700 wasm 078a4bbf8d887ba318e74ee7
-opacity/w513 amd64 ad1442652a1a5c6535ff20f9
-opacity/w513 arm64 ad1442652a1a5c6535ff20f9
-opacity/w513 wasm ad1442652a1a5c6535ff20f9
-outside/h513 amd64 e013daa2d42aa2759bf8633d
-outside/h513 arm64 e013daa2d42aa2759bf8633d
-outside/h513 wasm e013daa2d42aa2759bf8633d
-outside/min amd64 83db7ac8173e285718ac8e71
-outside/min arm64 83db7ac8173e285718ac8e71
-outside/min wasm 83db7ac8173e285718ac8e71
-outside/rot amd64 47fa0c724c8a8a5ac75a4483
-outside/rot arm64 47fa0c724c8a8a5ac75a4483
-outside/rot wasm 47fa0c724c8a8a5ac75a4483
-outside/s24 amd64 acad1deb69e5a98f7ffaf300
-outside/s24 arm64 acad1deb69e5a98f7ffaf300
-outside/s24 wasm acad1deb69e5a98f7ffaf300
-outside/s512 amd64 d5f2c67174530087c19f1672
-outside/s512 arm64 d5f2c67174530087c19f1672
-outside/s512 wasm d5f2c67174530087c19f1672
-outside/s64 amd64 d1e68aea7f1f8170ca145d7d
-outside/s64 arm64 d1e68aea7f1f8170ca145d7d
-outside/s64 wasm d1e68aea7f1f8170ca145d7d
-outside/s700 amd64 d023dd8398969bf713e1f4ed
-outside/s700 arm64 d023dd8398969bf713e1f4ed
-outside/s700 wasm d023dd8398969bf713e1f4ed
-outside/w513 amd64 4789bc191eb3bef3222b078e
-outside/w513 arm64 4789bc191eb3bef3222b078e
-outside/w513 wasm 4789bc191eb3bef3222b078e
-radial-obb/h513 amd64 23be5a5e473ac5da7e053620
-radial-obb/h513 arm64 be1ffcfd7b756183e98ae297
-radial-obb/h513 wasm be1ffcfd7b756183e98ae297
-radial-obb/min amd64 170ffbffcce6c194fc9ec903
-radial-obb/min arm64 170ffbffcce6c194fc9ec903
-radial-obb/min wasm 170ffbffcce6c194fc9ec903
-radial-obb/rot amd64 05dfbc2fc44bc3c5c59408ae
-radial-obb/rot arm64 05dfbc2fc44bc3c5c59408ae
-radial-obb/rot wasm 05dfbc2fc44bc3c5c59408ae
-radial-obb/s24 amd64 b74f853e7cd1936d3b308b1e
-radial-obb/s24 arm64 b74f853e7cd1936d3b308b1e
-radial-obb/s24 wasm b74f853e7cd1936d3b308b1e
-radial-obb/s512 amd64 83c841210fca624f322751d5
-radial-obb/s512 arm64 4ff0da6ad7ff7542d83fa3bd
-radial-obb/s512 wasm 83c841210fca624f322751d5
-radial-obb/s64 amd64 0877a0377e0a9212adea0261
-radial-obb/s64 arm64 e8f3278b1be10ef467356ba3
-radial-obb/s64 wasm 0877a0377e0a9212adea0261
-radial-obb/s700 amd64 16aaa14a274a77bcb8581911
-radial-obb/s700 arm64 50ce0aa935534b1e7be82630
-radial-obb/s700 wasm dff44634d19f7fcbcf2b1049
-radial-obb/w513 amd64 a394832da2610123b15e25e0
-radial-obb/w513 arm64 e1ad0e5926af523507ce95df
-radial-obb/w513 wasm e1ad0e5926af523507ce95df
-radial-user/h513 amd64 e0b25b553ab32982be8e4eba
-radial-user/h513 arm64 e0b25b553ab32982be8e4eba
-radial-user/h513 wasm e0b25b553ab32982be8e4eba
-radial-user/min amd64 21ec32db97ba1c783515a90a
-radial-user/min arm64 21ec32db97ba1c783515a90a
-radial-user/min wasm 21ec32db97ba1c783515a90a
-radial-user/rot amd64 69fb2e0d1388cb4965b80461
-radial-user/rot arm64 69fb2e0d1388cb4965b80461
-radial-user/rot wasm 69fb2e0d1388cb4965b80461
-radial-user/s24 amd64 8206f3bb8e03edffcd08b0ef
-radial-user/s24 arm64 8206f3bb8e03edffcd08b0ef
-radial-user/s24 wasm 8206f3bb8e03edffcd08b0ef
-radial-user/s512 amd64 a9f30c079aef3233854ca65a
-radial-user/s512 arm64 a9f30c079aef3233854ca65a
-radial-user/s512 wasm a9f30c079aef3233854ca65a
-radial-user/s64 amd64 321c167841ed8b4c05b5f3e2
-radial-user/s64 arm64 321c167841ed8b4c05b5f3e2
-radial-user/s64 wasm 321c167841ed8b4c05b5f3e2
-radial-user/s700 amd64 26e8ae55dfa4a77449b0bdeb
-radial-user/s700 arm64 e126781f6bc32a3b4c105f89
-radial-user/s700 wasm 58f0d5352f387d4a976073ba
-radial-user/w513 amd64 106cac5283088b5de7d224cc
-radial-user/w513 arm64 ddf5f2aada2aa4cd98eb451b
-radial-user/w513 wasm ddf5f2aada2aa4cd98eb451b
-slivers/h513 amd64 f9afcbb2a7f60bd348f4c03f
-slivers/h513 arm64 441b944a08223109da9b078b
-slivers/h513 wasm 3a48d7d759cb1099054093d9
-slivers/min amd64 3f8cb2bebe24c05bfb29553e
-slivers/min arm64 3f8cb2bebe24c05bfb29553e
-slivers/min wasm 3f8cb2bebe24c05bfb29553e
-slivers/rot amd64 454ab6f64019956a54f20915
-slivers/rot arm64 454ab6f64019956a54f20915
-slivers/rot wasm 454ab6f64019956a54f20915
-slivers/s24 amd64 a4a9ea6834b8f1efb81e8a9d
-slivers/s24 arm64 a4a9ea6834b8f1efb81e8a9d
-slivers/s24 wasm a4a9ea6834b8f1efb81e8a9d
-slivers/s512 amd64 7d0edb008d1a6557af8abac6
-slivers/s512 arm64 7d0edb008d1a6557af8abac6
-slivers/s512 wasm 7d0edb008d1a6557af8abac6
-slivers/s64 amd64 90cdf7f89cf07234adb29119
-slivers/s64 arm64 90cdf7f89cf07234adb29119
-slivers/s64 wasm 90cdf7f89cf07234adb29119
-slivers/s700 amd64 d49b7c20d44d261a6542cc28
-slivers/s700 arm64 f4cfdf7a4e2822816eebec3e
-slivers/s700 wasm 5a14cb3a348a5e74108a1ad8
-slivers/w513 amd64 13c16213a9aa5a1d27ad2e08
-slivers/w513 arm64 61d66090b07e2fc5d547eb34
-slivers/w513 wasm 61d66090b07e2fc5d547eb34
-solid/h513 amd64 26248273dd0e5535bcf395d4
-solid/h513 arm64 7099bf042827f10fcdf62675
-solid/h513 wasm 7099bf042827f10fcdf62675
-solid/min amd64 837773005d809381e4267fa5
-solid/min arm64 eeefd222ee12a192eb9eed40
-solid/min wasm 837773005d809381e4267fa5
-solid/rot amd64 c7fda279f5bea5959a1c10a4
-solid/rot arm64 c7fda279f5bea5959a1c10a4
-solid/rot wasm c7fda279f5bea5959a1c10a4
-solid/s24 amd64 5108ef08a6adb81d9a8ff6b4
-solid/s24 arm64 5108ef08a6adb81d9a8ff6b4
-solid/s24 wasm 5108ef08a6adb81d9a8ff6b4
-solid/s512 amd64 54aa81acc7f4a24a3ede37fa
-solid/s512 arm64 e13e87e95cfb3e6c2ddb1d7d
-solid/s512 wasm 54aa81acc7f4a24a3ede37fa
-solid/s64 amd64 bade9cf9819001ebb335845b
-solid/s64 arm64 bade9cf9819001ebb335845b
-solid/s64 wasm bade9cf9819001ebb335845b
-solid/s700 amd64 b30e0a24290b91e83ec7a323
-solid/s700 arm64 fbc5c9b9ae0f7cb9d967d352
-solid/s700 wasm 4250beac408e789624536a87
-solid/w513 amd64 06f8d808e79bef9f5e4e908b
-solid/w513 arm64 5124b6e5cc51766cc1d67b1d
-solid/w513 wasm 5124b6e5cc51766cc1d67b1d
-stop-order/h513 amd64 3688cf492572c877040edd29
-stop-order/h513 arm64 3688cf492572c877040edd29
-stop-order/h513 wasm 3688cf492572c877040edd29
-stop-order/min amd64 5b02020383bfe90d4c62063b
-stop-order/min arm64 5b02020383bfe90d4c62063b
-stop-order/min wasm 5b02020383bfe90d4c62063b
-stop-order/rot amd64 cf9d6935791d5c17711bb270
-stop-order/rot arm64 cf9d6935791d5c17711bb270
-stop-order/rot wasm cf9d6935791d5c17711bb270
-stop-order/s24 amd64 494db8e4b91a84e137040f0d
-stop-order/s24 arm64 494db8e4b91a84e137040f0d
-stop-order/s24 wasm 494db8e4b91a84e137040f0d
-stop-order/s512 amd64 edb2a8cbcf1bd577142144e4
-stop-order/s512 arm64 edb2a8cbcf1bd577142144e4
-stop-order/s512 wasm edb2a8cbcf1bd577142144e4
-stop-order/s64 amd64 99099018a408d1b8825ac8e1
-stop-order/s64 arm64 99099018a408d1b8825ac8e1
-stop-order/s64 wasm 99099018a408d1b8825ac8e1
-stop-order/s700 amd64 acb20998e8b73bff16278da6
-stop-order/s700 arm64 acb20998e8b73bff16278da6
-stop-order/s700 wasm acb20998e8b73bff16278da6
-stop-order/w513 amd64 e6cec2d72babd48e03295cd7
-stop-order/w513 arm64 e6cec2d72babd48e03295cd7
-stop-order/w513 wasm e6cec2d72babd48e03295cd7
-stroke-bbox/h513 amd64 f234420b34a8e26fe741ce55
-stroke-bbox/h513 arm64 f234420b34a8e26fe741ce55
-stroke-bbox/h513 wasm f234420b34a8e26fe741ce55
-stroke-bbox/min amd64 737567f17bffa2810ab96b6b
-stroke-bbox/min arm64 737567f17bffa2810ab96b6b
-stroke-bbox/min wasm 737567f17bffa2810ab96b6b
-stroke-bbox/rot amd64 e777f41e69e7196d3ec46cde
-stroke-bbox/rot arm64 e777f41e69e7196d3ec46cde
-stroke-bbox/rot wasm e777f41e69e7196d3ec46cde
-stroke-bbox/s24 amd64 5633aa64d198bc2a0b7bbba1
-stroke-bbox/s24 arm64 5633aa64d198bc2a0b7bbba1
-stroke-bbox/s24 wasm 5633aa64d198bc2a0b7bbba1
-stroke-bbox/s512 amd64 a9be7b706d55db32b00c23f4
-stroke-bbox/s512 arm64 a9be7b706d55db32b00c23f4
-stroke-bbox/s512 wasm a9be7b706d55db32b00c23f4
-stroke-bbox/s64 amd64 54ad1f415127b62571fa0f7a
-stroke-bbox/s64 arm64 54ad1f415127b62571fa0f7a
-stroke-bbox/s64 wasm 54ad1f415127b62571fa0f7a
-stroke-bbox/s700 amd64 37a38ea4743e386b97b73e2a
-stroke-bbox/s700 arm64 35e97d6e76479c02eeb5736f
-stroke-bbox/s700 wasm 37a38ea4743e386b97b73e2a
-stroke-bbox/w513 amd64 ad98c9b69d99e960e70f0d1d
-stroke-bbox/w513 arm64 ad98c9b69d99e960e70f0d1d
-stroke-bbox/w513 wasm ad98c9b69d99e960e70f0d1d
-transforms/h513 amd64 2aaab687fd6439d8a4f06845
-transforms/h513 arm64 f301ee7f48404cb2d5af9a7c
-transforms/h513 wasm f301ee7f48404cb2d5af9a7c
-transforms/min amd64 c603eef5b3a92533eb247747
-transforms/min arm64 c603eef5b3a92533eb247747
-transforms/min wasm c603eef5b3a92533eb247747
-transforms/rot amd64 12b4cc7b0d13d45edccac73d
-transforms/rot arm64 12b4cc7b0d13d45edccac73d
-transforms/rot wasm 12b4cc7b0d13d45edccac73d
-transforms/s24 amd64 1365c0979b2041245616f726
-transforms/s24 arm64 1365c0979b2041245616f726
-transforms/s24 wasm 1365c0979b2041245616f726
-transforms/s512 amd64 c94c125a4cdce13f7d8b1d49
-transforms/s512 arm64 c94c125a4cdce13f7d8b1d49
-transforms/s512 wasm c94c125a4cdce13f7d8b1d49
-transforms/s64 amd64 c59734c83686cfc8489eb15c
-transforms/s64 arm64 c59734c83686cfc8489eb15c
-transforms/s64 wasm c59734c83686cfc8489eb15c
-transforms/s700 amd64 fc5b80e241f56e13e455f342
-transforms/s700 arm64 cf172e1f4626e82fc6af6208
-transforms/s700 wasm cf172e1f4626e82fc6af6208
-transforms/w513 amd64 68507b889287e78171f36511
-transforms/w513 arm64 dee3ecf8796d2937a11c5f1e
-transforms/w513 wasm dee3ecf8796d2937a11c5f1e
-use/h513 amd64 b2a81ea65007957e0e84dc08
-use/h513 arm64 b2a81ea65007957e0e84dc08
-use/h513 wasm b2a81ea65007957e0e84dc08
-use/min amd64 44fae7787d1266806704b786
-use/min arm64 44fae7787d1266806704b786
-use/min wasm 44fae7787d1266806704b786
-use/rot amd64 5e795ec7e0e9362e2808065f
-use/rot arm64 5e795ec7e0e9362e2808065f
-use/rot wasm 5e795ec7e0e9362e2808065f
-use/s24 amd64 7b44a332ed30bf7581a36e87
-use/s24 arm64 7b44a332ed30bf7581a36e87
-use/s24 wasm 7b44a332ed30bf7581a36e87
-use/s512 amd64 b9b9f4a4d6fa1598c914c8b7
-use/s512 arm64 b9b9f4a4d6fa1598c914c8b7
-use/s512 wasm b9b9f4a4d6fa1598c914c8b7
-use/s64 amd64 4a2b0548465f2c0416e3d261
-use/s64 arm64 4a2b0548465f2c0416e3d261
-use/s64 wasm 4a2b0548465f2c0416e3d261
-use/s700 amd64 553494cdb6edff611d34ea50
-use/s700 arm64 82f902ecee697266e5421811
-use/s700 wasm 6787e7e890a3104610a212ae
-use/w513 amd64 611817a56621d523284270ce
-use/w513 arm64 69eb099fb965cbbc973b0bcd
-use/w513 wasm 611817a56621d523284270ce
+# case sha256[:12] of the pixels; go test ./svg -run TestGolden -golden.update
+caps/h513 967398a63d15dcf6510679ea
+caps/min c3f72682298c6f581f0575ec
+caps/rot 700d5b070f83d5b82c3a58ba
+caps/s24 6cc9ec11c22416207c11336b
+caps/s512 559fbf671d30db7c9227f968
+caps/s64 ade6e33b0bcff3190e73251a
+caps/s700 7bc511989d6ef555ce4c83bf
+caps/w513 5874b1ef7eb897cd2368a676
+classes/h513 5c20f11dba52d1dfaf1ca772
+classes/min 56d47f5fd87b7b8264ae1a3a
+classes/rot 3eb012d4289a3cbd468e120c
+classes/s24 ecfed52c0573c06e408dc7f8
+classes/s512 85518248ad88a669238c66d6
+classes/s64 5e9bbc62db314b02d20af985
+classes/s700 2c463a2717b6126d52e28e13
+classes/w513 697eac0244587bd1915bc54d
+clip/h513 c582e4eb56d1d9cc552fb791
+clip/min e773f77691d50a29a81b59fd
+clip/rot 9f3412511d35bc3b3a4d3b1a
+clip/s24 44e1e7c9321e7a5592ba9b42
+clip/s512 b25e57d18f846838a3a58c5e
+clip/s64 507cfdf8b893f4856ac09d23
+clip/s700 3b0065d7170d34f5a9281f88
+clip/w513 856858e9c83f8ae3d6ad7a1a
+cliprule/h513 31722c0f7959c626a8ba208d
+cliprule/min 5ee4479b0226edd0a58d2276
+cliprule/rot 635ea14038716aa207ef30ba
+cliprule/s24 115d9448b3b898b07321081f
+cliprule/s512 0f7006b9636ad95796072f32
+cliprule/s64 98aefe7e00851c2f157fb1fb
+cliprule/s700 f6ae031eb1383ca8225aaf9c
+cliprule/w513 3e46f1d280b778c1bcbf98a6
+curves/h513 cf4ab850b4ef96481013324f
+curves/min e86f922c6026fb157374e83a
+curves/rot 83b93ffde4e6e875e442424c
+curves/s24 9bd5b2275211c938426403ea
+curves/s512 d9aa93a3cc02d28f72307049
+curves/s64 90c7201420d2b972e5cef201
+curves/s700 1f2d1605b1d663bed61dff52
+curves/w513 aa45a29cbdccbf1feed4021d
+dashes/h513 b4b25ee01945afa040efd3d9
+dashes/min 8cdcbff468ca8e2719a94eb3
+dashes/rot ed7448cc18a12617154b0b80
+dashes/s24 128c9a3b937b92f59878db0d
+dashes/s512 c3ea3d19bd64e288ad6e4b59
+dashes/s64 f20d09a45c0d51ff565e058d
+dashes/s700 00dd9ff8b491ca7bbb9fb1c3
+dashes/w513 52eaf4ec39f0950ba8657b15
+evenodd/h513 fd6feaf85eb5914b3faa54cc
+evenodd/min bea269d6d9c335c63138f0dd
+evenodd/rot 879e01a012cdffd218701c8c
+evenodd/s24 57ef478640450649fe3bff71
+evenodd/s512 dcfc1922bd35a0dbd0ceb190
+evenodd/s64 8cddc76cc4075f4e5ca351e7
+evenodd/s700 2fa809fc23bf8a8068379928
+evenodd/w513 2913f7f5827e047c185cba64
+grad-in-clip/h513 53969a789ae2acf6d44289fc
+grad-in-clip/min 014ca2a19f4188c257d09178
+grad-in-clip/rot 1d993693fadb21b4d3827908
+grad-in-clip/s24 3471ba7a19201f3af3d1e4f2
+grad-in-clip/s512 486e346f50b31d70cff692a6
+grad-in-clip/s64 c89eb6e105c25a9488de085d
+grad-in-clip/s700 32f6f56fd1c7a3e687536321
+grad-in-clip/w513 336ad4a07240b24a8c77fbe8
+grad-in-mask/h513 e3777234a265aab9ca801f85
+grad-in-mask/min b35d9cf015d418d91fe694b7
+grad-in-mask/rot c28c4e599770a6d674ec0311
+grad-in-mask/s24 079666dd8fe2e4579757870d
+grad-in-mask/s512 87555cd6d477b9df23fbd34e
+grad-in-mask/s64 022ac4b8ab2154dadd4e0248
+grad-in-mask/s700 1d0088c865c607566247b956
+grad-in-mask/w513 5816d4507d7bf3c8131d852c
+gradient-stroke/h513 b705aec17aa0b7be45553853
+gradient-stroke/min ac32ce1d5bc5bb9435dae9cc
+gradient-stroke/rot 335a63d5ca68fe9c892b0af1
+gradient-stroke/s24 56460da3ec4e4012abcae699
+gradient-stroke/s512 89ea9cd121db61da60b8bc7e
+gradient-stroke/s64 62c6d7625f9632f464b2fad8
+gradient-stroke/s700 6b9abdcf656246bebd8fbcee
+gradient-stroke/w513 e7391168ab1ea2b86788a58c
+icon/h513 76e19cec2c1b12cfbf7e5640
+icon/min fa9cdc5034066b2dbd60c039
+icon/rot 0c189ffaa3eafc7d916a39db
+icon/s24 bbe8bce08f2dbe7aae37e2d3
+icon/s512 ea35e59e4cf89cee837877b1
+icon/s64 a0ee8e40d1964ef4bb063f5f
+icon/s700 ff1dfef47084f40cd181854d
+icon/w513 ef351eea4231ec9743d3ec04
+joins/h513 7f1d884c7d3563f3ba47b415
+joins/min c626d3ce5e67c2a695926665
+joins/rot 14439c3426ac20502ec0b8c0
+joins/s24 d35bf84f86aeeed6e55c5417
+joins/s512 f80bb9e115617e8cee08c3b3
+joins/s64 90c25681485de86dbfa60fa2
+joins/s700 444602b6d1adc20339b46da3
+joins/w513 30b932297b228c742fd6fc70
+linear-obb/h513 c8ab6f984154908f1826c67a
+linear-obb/min 1edf2e4c55e04b219cb2564a
+linear-obb/rot 45ae86781dc03bfdf1bc5b92
+linear-obb/s24 4729986cc82b025d7efee832
+linear-obb/s512 3b3cb2ab2dce8f8dc8c4d87a
+linear-obb/s64 d5723e4faa774f67de5b12c1
+linear-obb/s700 d8adcd50ca5e3e4e7cdb3c52
+linear-obb/w513 e8c284c7b208ea63b0059398
+linear-user/h513 f6e37dda2150c91cd7f512a9
+linear-user/min b69e081ab676189129b0659c
+linear-user/rot 8390ffb254b98f6d19ff0d42
+linear-user/s24 98f42ca95620be24fe29459b
+linear-user/s512 6ad2ec0c9b859109258a5230
+linear-user/s64 cc8d57c236e440ddc05eef1f
+linear-user/s700 0bcdc7852467c2559893d9f0
+linear-user/w513 f693dc3cfa96c76e16bb31dc
+linegap/h513 7e4bb958e938d3d637f6678a
+linegap/min 19d36ad9fa3b5da7360e5ff3
+linegap/rot d344d329ad91f649d39c4c93
+linegap/s24 5a678a52d945169e62a15fd4
+linegap/s512 912a3c8f9b70f00d887ea433
+linegap/s64 fc2ec7eed22d09103922c84a
+linegap/s700 a1240493cf26297287ca5c03
+linegap/w513 4d06103f5959ff59d0607a8b
+many-stops/h513 fe9ce37280b1e3abe849b154
+many-stops/min 1f626fdaf6f195ffdaedc010
+many-stops/rot c699ffaca4f08b6802447b02
+many-stops/s24 b3cb190f289414a9681ae42e
+many-stops/s512 c2a679d35e140cef8a9f9edc
+many-stops/s64 b476a1fd9e3e47e9d0566fff
+many-stops/s700 075fbb344baab6fca789f18e
+many-stops/w513 6a5aa25281bf974a58e76e42
+markers/h513 a3f6517dadc78231aaf247eb
+markers/min 07401a9fb0ea021a92704cb5
+markers/rot 2c8f2de7ef053c87c8287a3d
+markers/s24 a1fa0ad7b90317dbde5cdd33
+markers/s512 4d0e29da809eb36b799a7916
+markers/s64 87d59a82518e1575bdb4e6a6
+markers/s700 fedfb573ddeac82d9251eaf9
+markers/w513 c3a132fc0ec68d85bf72d4c9
+mask/h513 d6de29563eb6e374c3afdafb
+mask/min 7ef05a8e9b6e8201e271bf94
+mask/rot efe4ca30ea2384ed6585d5de
+mask/s24 95383135a35f8d685e4c9392
+mask/s512 51769d207b8aa38015018405
+mask/s64 1e1f9e03f2f6ac94dca581be
+mask/s700 625ebc610e2d9cd9bcbe7a20
+mask/w513 56394af1eed3edc634e0d0c8
+opacity/h513 8242b44a2a17b4c72a44081f
+opacity/min b575f6a9cdc8cec5e307aa89
+opacity/rot 102ad1d700648ff726ab056b
+opacity/s24 9a19828bb54a59b6c6612468
+opacity/s512 fa03f3849b2c7e0c2c682b40
+opacity/s64 d173f0876dc8a07c5b048856
+opacity/s700 5956997aea98fab39a7a48c8
+opacity/w513 ad1442652a1a5c6535ff20f9
+outside/h513 75c94f6c1392b05d9bd6f324
+outside/min a03674f04f3abeb7db4eea4c
+outside/rot a498adf09dac127e09fdbd86
+outside/s24 dd616efdbf76dd5d7bafa9a4
+outside/s512 1050f5920d8095388cce8449
+outside/s64 104f4b455bfe2e19a418f1be
+outside/s700 203b76eebde4511d270776f7
+outside/w513 4789bc191eb3bef3222b078e
+radial-obb/h513 9ca499f1fc77c1f905200810
+radial-obb/min 2740c3a60e1725c7515efef3
+radial-obb/rot 27e5c3fd4861100e4982d2f8
+radial-obb/s24 268ff1c84a88fc99ac1019b3
+radial-obb/s512 0a67e728ab40e923ba132b3f
+radial-obb/s64 48372f46131abb74bd7bc949
+radial-obb/s700 7135fff0252c2388f2a618c4
+radial-obb/w513 99ffeeaca62aad9821134657
+radial-user/h513 aa7448375aa4ab48b24a70ab
+radial-user/min 4a6b5e0a4e93a677d93447c7
+radial-user/rot 693cb26dd0983251e49ab9c5
+radial-user/s24 f7c2503cbe184d00d0babfb1
+radial-user/s512 ac16f24e31256729f9812f82
+radial-user/s64 0d86bf5786e8450560d5d460
+radial-user/s700 8cbde7de6f312bc69d667d62
+radial-user/w513 106cac5283088b5de7d224cc
+slivers/h513 d97f8e4041300afb19f78c41
+slivers/min 039ae03105fecea947664106
+slivers/rot c3797b5f9aa3820dd09cacbf
+slivers/s24 a2234c705d5c59b382ad1b2d
+slivers/s512 35fcfadd5ddf9f04e1532921
+slivers/s64 f825bcbfd4ffffb24940090a
+slivers/s700 aed826a178dd27d450378e74
+slivers/w513 40814fceb7e51821ea7f0e41
+solid/h513 43a1663221bdccbf9eb087c0
+solid/min 96e21b696942bac11633d9b2
+solid/rot a7c4e428dbb704c7c1b1ba98
+solid/s24 73c005f33d81f85e6c1e78d2
+solid/s512 6ccd7eb20f6f9ad115f410f9
+solid/s64 61e4c73e4360f06ae226b9ab
+solid/s700 83dd4778d9bea29941f8ec61
+solid/w513 2e3ec9199d08c84cfb4d4b6d
+stop-order/h513 9c85ccaa6076b58b557d379d
+stop-order/min 5b02020383bfe90d4c62063b
+stop-order/rot bb44a3b4aec71037f603d11b
+stop-order/s24 b263b0ed695217327c253ddc
+stop-order/s512 f15cd74bec51274bedcef4ea
+stop-order/s64 da7899afccf8c259ed0ee1f7
+stop-order/s700 acb20998e8b73bff16278da6
+stop-order/w513 edf3b85553abc9b602f8a031
+stroke-bbox/h513 467c63a0187c782fe61d45f1
+stroke-bbox/min 17512f42bd9367e5efaa96d8
+stroke-bbox/rot 7e8f0252bb2ac7bcf5c76bf0
+stroke-bbox/s24 e3861660e4655b50faa9862f
+stroke-bbox/s512 fd5d4151397be6b69894e7fa
+stroke-bbox/s64 b3b2d08002bcf0f7c7692c9c
+stroke-bbox/s700 37a38ea4743e386b97b73e2a
+stroke-bbox/w513 e1fdd862cd180728f57c649b
+transforms/h513 aecd95389856544a6fdc69d9
+transforms/min b14560d1d90436a9ebe8d8e0
+transforms/rot 8660bab7ed5d98033cd5a162
+transforms/s24 86300b7322b3592408fa4c83
+transforms/s512 bd359e598807547223e11f5f
+transforms/s64 38315d84e6afd063b3e3fc15
+transforms/s700 68437f856acb5f1fbf9e8e21
+transforms/w513 7495b1d6e71560a662e11e22
+use/h513 b2a81ea65007957e0e84dc08
+use/min 93a9bed57ba59a339f5f2a21
+use/rot 215eed0f8db5960bc9754054
+use/s24 7b44a332ed30bf7581a36e87
+use/s512 37e848666424fd29d9dd32dd
+use/s64 d5fd33d2c7b2668448c39153
+use/s700 5aa7f9e905218943b04fa787
+use/w513 611817a56621d523284270ce

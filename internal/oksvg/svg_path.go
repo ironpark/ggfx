@@ -30,23 +30,17 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 	r, rf, adder := p.Dasher, &p.Dasher.Filler, &p.adder
 	adder.M = t.Mult(svgp.mAdder.M)
 	fill := !svgp.fillerColor.none()
-	// box is the fill's extent: a gradient's bounding box, for the stroke
-	// too, which SVG leaves out of it.
-	var box fixed.Rectangle26_6
-	if g := svgp.linerColor.grad; fill || g != nil && g.Units == rasterx.ObjectBoundingBox {
-		r.Clear()
-		adder.Adder = rf
-		svgp.Path.AddTo(adder)
-		box = rf.Scanner.GetPathExtent()
-	}
 	if mask != nil {
 		// Outside the mask, nothing is let through: no need to ask.
 		p.Scanner.SetClip(mask.Rect)
 		defer p.Scanner.SetClip(image.ZR)
 	}
 	if fill {
+		r.Clear()
+		adder.Adder = rf
+		svgp.Path.AddTo(adder)
 		rf.SetWinding(svgp.UseNonZeroWinding)
-		rf.SetPaint(through(svgp.fillerColor.paint(box, svgp.FillOpacity*opacity, adder.M), mask))
+		rf.SetPaint(through(svgp.fillerColor.paint(svgp.Path, svgp.FillOpacity*opacity, adder.M), mask))
 		rf.Draw()
 	}
 	if !svgp.linerColor.none() {
@@ -71,29 +65,28 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 			fixed.Int26_6(svgp.MiterLimit*64), leadLineCap, lineCap,
 			lineGap, svgp.LineJoin, svgp.Dash, svgp.DashOffset)
 		svgp.Path.AddTo(adder)
-		r.SetPaint(through(svgp.linerColor.paint(box, svgp.LineOpacity*opacity, adder.M), mask))
+		r.SetPaint(through(svgp.linerColor.paint(svgp.Path, svgp.LineOpacity*opacity, adder.M), mask))
 		r.Draw()
 	}
 }
 
-// paint is p as drawn at opacity for a path whose fill's extent is box,
-// which m placed: a gradient in that bounding box, or in the user space m
-// maps.
-func (p paint) paint(box fixed.Rectangle26_6, opacity float64, m rasterx.Matrix2D) rasterx.Paint {
+// paint is p as drawn at opacity for path, in the user space m maps: a
+// gradient in that space or in the path's bounding box there, its fill's,
+// for the stroke too, which SVG leaves out of it.
+func (p paint) paint(path rasterx.Path, opacity float64, m rasterx.Matrix2D) rasterx.Paint {
 	if p.grad == nil {
 		return rasterx.ColorPaint(rasterx.ApplyOpacity(p.color, opacity))
 	}
 	g := *p.grad
 	if g.Units == rasterx.ObjectBoundingBox {
-		if box.Min.X >= box.Max.X || box.Min.Y >= box.Max.Y {
+		minX, minY, maxX, maxY := path.Bounds()
+		if minX >= maxX || minY >= maxY {
 			// A box without width or height, as a line's, has no place
 			// for the gradient, which SVG says is then not drawn.
 			return rasterx.Paint{}
 		}
-		mnx, mny := float64(box.Min.X)/64, float64(box.Min.Y)/64
-		mxx, mxy := float64(box.Max.X)/64, float64(box.Max.Y)/64
-		g.Bounds.X, g.Bounds.Y = mnx, mny
-		g.Bounds.W, g.Bounds.H = mxx-mnx, mxy-mny
+		g.Bounds.X, g.Bounds.Y = minX, minY
+		g.Bounds.W, g.Bounds.H = maxX-minX, maxY-minY
 	}
 	return g.GetColorFunctionUS(opacity, m)
 }

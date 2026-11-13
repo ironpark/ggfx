@@ -1,61 +1,21 @@
-# drawing GOARCH sha256[:12] of the pixels; go test ./internal/rasterx -golden.update
-dest-large amd64 99ca793a965f25f2af4f1414
-dest-large arm64 e5fa241428c2a365fe463f9e
-dest-large wasm 85d99f21c99e0bcf3dee0661
-dest-offset amd64 16fb9874487ec6e9718ca0ad
-dest-offset arm64 6feccc0d0f43da393fef6d1a
-dest-offset wasm 16fb9874487ec6e9718ca0ad
-gradGV amd64 c5c088cf206f19dbe14fbf23
-gradGV arm64 054fefc11ff4b9e62ad14b83
-gradGV wasm c5c088cf206f19dbe14fbf23
-roundRect amd64 cb45e1b92d482cb29a3fcfc3
-roundRect arm64 4ed1e64dc0ffb876191ca578
-roundRect wasm cb45e1b92d482cb29a3fcfc3
-shapeGVD0 amd64 bdf5ea4c06e6269985d27245
-shapeGVD0 arm64 c57601efc99011510cbd0d8f
-shapeGVD0 wasm bdf5ea4c06e6269985d27245
-shapeGVD1 amd64 0c80e00689f172fbb30980eb
-shapeGVD1 arm64 7fd8d59a45820d15663c439f
-shapeGVD1 wasm 0c80e00689f172fbb30980eb
-shapeGVD2 amd64 e0ce564feb9dcbcd3e489007
-shapeGVD2 arm64 d89b9bed20a7bd85f1360845
-shapeGVD2 wasm e0ce564feb9dcbcd3e489007
-shapeGVD3 amd64 e9ac25ee0d41f7ab53dc72aa
-shapeGVD3 arm64 9ec5d5d14c3475e731a555f7
-shapeGVD3 wasm e9ac25ee0d41f7ab53dc72aa
-shapeGVD4 amd64 6bc343bfac0a9b3150056b02
-shapeGVD4 arm64 70b7a4bb4bdd1c347657a2e0
-shapeGVD4 wasm 6bc343bfac0a9b3150056b02
-shapeGVD5 amd64 6bc343bfac0a9b3150056b02
-shapeGVD5 arm64 70b7a4bb4bdd1c347657a2e0
-shapeGVD5 wasm 6bc343bfac0a9b3150056b02
-shapeGVD6 amd64 10a18b7097604565c8c9b7f9
-shapeGVD6 arm64 155b127ad70eb9b84282d7a8
-shapeGVD6 wasm 10a18b7097604565c8c9b7f9
-shapeGVF amd64 2dd0900ea68690bcca24f8da
-shapeGVF arm64 cfe12729772c703eaf4c7b48
-shapeGVF wasm 2dd0900ea68690bcca24f8da
-shapeGVS1 amd64 7ed9055a8e3f3fca24422607
-shapeGVS1 arm64 9e41e30d19c2ad3fffd3e24f
-shapeGVS1 wasm 7ed9055a8e3f3fca24422607
-shapeGVS2 amd64 7ed9055a8e3f3fca24422607
-shapeGVS2 arm64 9e41e30d19c2ad3fffd3e24f
-shapeGVS2 wasm 7ed9055a8e3f3fca24422607
-shapeGVS3 amd64 10a18b7097604565c8c9b7f9
-shapeGVS3 arm64 155b127ad70eb9b84282d7a8
-shapeGVS3 wasm 10a18b7097604565c8c9b7f9
-shapeT1 amd64 2893e94b834579197f943e14
-shapeT1 arm64 2893e94b834579197f943e14
-shapeT1 wasm 2893e94b834579197f943e14
-shapeT2 amd64 10ab784630d5b4648c5bc59c
-shapeT2 arm64 10ab784630d5b4648c5bc59c
-shapeT2 wasm 10ab784630d5b4648c5bc59c
-shapeT3 amd64 486752497be01b573a4cc3fa
-shapeT3 arm64 37d7258b5e0797236a92769f
-shapeT3 wasm 486752497be01b573a4cc3fa
-tmfGV amd64 35d599590bd825e6b4e07e46
-tmfGV arm64 ea03a6116216c2fe275efaaf
-tmfGV wasm 35d599590bd825e6b4e07e46
-translucent amd64 56a235496260d07eb6bf90f0
-translucent arm64 56a235496260d07eb6bf90f0
-translucent wasm 56a235496260d07eb6bf90f0
+# drawing sha256[:12] of the pixels; go test ./internal/rasterx -golden.update
+dest-large 042e4b6c43f963e0ce5aefa9
+dest-offset 3c03596d0f43bca82853a68d
+gradGV 941c9fa80abd8048afba7707
+roundRect ac566b7da39e0f95a543d722
+shapeGVD0 d9c074b030aa694de8f19381
+shapeGVD1 47098bf84c614ecdc8c19168
+shapeGVD2 4bafd402677859e882e38cc6
+shapeGVD3 94fb806beca3af973db2100e
+shapeGVD4 9b3f6b0857aaeabbda197f98
+shapeGVD5 9b3f6b0857aaeabbda197f98
+shapeGVD6 1097529398db48b2db76f5b9
+shapeGVF 0242732818d923563ae74a2c
+shapeGVS1 6e34c6eb21d157c76bc70092
+shapeGVS2 6e34c6eb21d157c76bc70092
+shapeGVS3 1097529398db48b2db76f5b9
+shapeT1 4e1fe17f5599155999143b69
+shapeT2 e3b57ba15c7494f91499a1e6
+shapeT3 737b2f8e6580412431aad501
+tmfGV 576b782d12f6077e9b3675da
+translucent 56a235496260d07eb6bf90f0

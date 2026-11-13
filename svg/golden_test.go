@@ -10,14 +10,15 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/goldentest"
+	"github.com/ironpark/ggfx/internal/rasterx"
 	"github.com/ironpark/ggfx/svg"
 )
 
 // The goldens pin what Draw draws, byte for byte, as a hash of the pixels
-// of each document drawn each way, per GOARCH; see goldentest.
+// of each document drawn each way; see goldentest.
 var goldens = goldentest.File{
 	Path:   "testdata/golden.txt",
-	Header: "# case GOARCH sha256[:12] of the pixels; go test ./svg -run TestGolden -golden.update",
+	Header: "# case sha256[:12] of the pixels; go test ./svg -run TestGolden -golden.update",
 }
 
 func TestMain(m *testing.M) { goldens.Main(m) }
@@ -26,26 +27,63 @@ func TestMain(m *testing.M) { goldens.Main(m) }
 type goldenView struct {
 	name   string
 	bounds image.Rectangle
-	geoM   func(*ggfx.GeoM)
+	geoM   func(*viewM)
 }
 
 func (v goldenView) transform() ggfx.GeoM {
+	var m viewM
+	v.geoM(&m)
 	var g ggfx.GeoM
-	v.geoM(&g)
+	g.SetElement(0, 0, m.a1+1)
+	g.SetElement(0, 1, m.b)
+	g.SetElement(0, 2, m.tx)
+	g.SetElement(1, 0, m.c)
+	g.SetElement(1, 1, m.d1+1)
+	g.SetElement(1, 2, m.ty)
 	return g
+}
+
+// viewM is a GeoM, kept as GeoM keeps one and composed as its methods
+// compose one, but with none of its products fused with an addition, as
+// the compiler fuses GeoM's on arm64, and with rasterx's trigonometry, as
+// it fuses the math package's: the goldens are then the same on every
+// architecture.
+type viewM struct{ a1, b, c, d1, tx, ty float64 }
+
+func (m *viewM) Scale(x, y float64) {
+	m.a1, m.b, m.tx = float64((m.a1+1)*x)-1, float64(m.b*x), float64(m.tx*x)
+	m.c, m.d1, m.ty = float64(m.c*y), float64((m.d1+1)*y)-1, float64(m.ty*y)
+}
+
+func (m *viewM) Translate(x, y float64) { m.tx, m.ty = m.tx+x, m.ty+y }
+
+func (m *viewM) Rotate(theta float64) {
+	sin, cos := rasterx.Sin(theta), rasterx.Cos(theta)
+	*m = viewM{
+		a1: float64(cos*(m.a1+1)) - float64(sin*m.c) - 1, b: float64(cos*m.b) - float64(sin*(m.d1+1)), tx: float64(cos*m.tx) - float64(sin*m.ty),
+		c: float64(sin*(m.a1+1)) + float64(cos*m.c), d1: float64(sin*m.b) + float64(cos*(m.d1+1)) - 1, ty: float64(sin*m.tx) + float64(cos*m.ty),
+	}
+}
+
+func (m *viewM) Skew(skewX, skewY float64) {
+	sx, sy := rasterx.Tan(skewX), rasterx.Tan(skewY)
+	*m = viewM{
+		a1: (m.a1 + 1) + float64(m.c*sx) - 1, b: m.b + float64((m.d1+1)*sx), tx: m.tx + float64(m.ty*sx),
+		c: float64((m.a1+1)*sy) + m.c, d1: float64(m.b*sy) + (m.d1 + 1) - 1, ty: m.ty + float64(m.tx*sy),
+	}
 }
 
 // The vector rasterizer accumulates in fixed point up to 512 pixels a
 // side, and in floating point past that: the views straddle it.
 var goldenViews = []goldenView{
-	{"s24", image.Rect(0, 0, 24, 24), func(g *ggfx.GeoM) { g.Scale(0.24, 0.24) }},
-	{"s64", image.Rect(0, 0, 64, 48), func(g *ggfx.GeoM) { g.Scale(0.64, 0.64); g.Translate(0.37, -3.61) }},
-	{"s512", image.Rect(0, 0, 512, 512), func(g *ggfx.GeoM) { g.Scale(5.12, 5.12); g.Translate(0.5, 0.25) }},
-	{"w513", image.Rect(0, 0, 513, 160), func(g *ggfx.GeoM) { g.Scale(5.13, 5.13); g.Translate(-0.3, -200.7) }},
-	{"h513", image.Rect(0, 0, 160, 513), func(g *ggfx.GeoM) { g.Scale(5.13, 5.13); g.Translate(-200.2, 0.4) }},
-	{"s700", image.Rect(0, 0, 700, 700), func(g *ggfx.GeoM) { g.Scale(8, 8); g.Translate(-50.25, -60.5) }},
-	{"min", image.Rect(7, 11, 107, 91), func(g *ggfx.GeoM) { g.Scale(1.1, 1.1); g.Translate(2.5, 1.75) }},
-	{"rot", image.Rect(0, 0, 300, 200), func(g *ggfx.GeoM) {
+	{"s24", image.Rect(0, 0, 24, 24), func(g *viewM) { g.Scale(0.24, 0.24) }},
+	{"s64", image.Rect(0, 0, 64, 48), func(g *viewM) { g.Scale(0.64, 0.64); g.Translate(0.37, -3.61) }},
+	{"s512", image.Rect(0, 0, 512, 512), func(g *viewM) { g.Scale(5.12, 5.12); g.Translate(0.5, 0.25) }},
+	{"w513", image.Rect(0, 0, 513, 160), func(g *viewM) { g.Scale(5.13, 5.13); g.Translate(-0.3, -200.7) }},
+	{"h513", image.Rect(0, 0, 160, 513), func(g *viewM) { g.Scale(5.13, 5.13); g.Translate(-200.2, 0.4) }},
+	{"s700", image.Rect(0, 0, 700, 700), func(g *viewM) { g.Scale(8, 8); g.Translate(-50.25, -60.5) }},
+	{"min", image.Rect(7, 11, 107, 91), func(g *viewM) { g.Scale(1.1, 1.1); g.Translate(2.5, 1.75) }},
+	{"rot", image.Rect(0, 0, 300, 200), func(g *viewM) {
 		g.Translate(-50, -50)
 		g.Rotate(0.3)
 		g.Skew(0.1, 0)
@@ -283,6 +321,12 @@ var goldenDocs = []struct{ name, src string }{
 <rect width="100" height="40" fill="#c00" mask="url(#m)"/>
 <defs><g id="later"><rect width="20" height="20" fill="#06c"/></g></defs>
 <use href="#later" x="40" y="60"/>`)},
+	{"grad-in-clip", goldenDoc(`
+<clipPath id="never"><linearGradient id="l"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient><rect width="10" height="10"/></clipPath>
+<mask id="later"><radialGradient id="r"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#080"/></radialGradient><rect width="100" height="100" fill="url(#r)"/></mask>
+<rect x="5" y="5" width="90" height="25" fill="url(#l)"/>
+<rect x="5" y="35" width="90" height="25" fill="url(#r)"/>
+<rect x="5" y="65" width="90" height="30" fill="#c60" mask="url(#later)"/>`)},
 	{"stroke-bbox", goldenDoc(`
 <defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="0.5" stop-color="#ff0"/><stop offset="1" stop-color="#00f"/></linearGradient>
 <radialGradient id="r"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#080"/></radialGradient></defs>

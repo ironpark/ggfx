@@ -187,7 +187,7 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 
 		C := (1 - math.Abs((2*L)-1)) * S
 		X := C * (1 - math.Abs(math.Mod((float64(H)/60), 2)-1))
-		m := L - C/2
+		m := L - float64(C/2) // not fused, as on arm64
 
 		var rp, gp, bp float64
 		if H < 60 {

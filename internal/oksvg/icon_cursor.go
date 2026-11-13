@@ -360,7 +360,7 @@ func (c *iconCursor) readStartElement(se xml.StartElement) error {
 		return nil
 	}
 	var skipDef bool
-	if se.Name.Local == "radialGradient" || se.Name.Local == "linearGradient" || c.inGrad {
+	if isGradient(se.Name.Local) || c.inGrad {
 		skipDef = true
 	}
 	if c.inDefs && !skipDef {

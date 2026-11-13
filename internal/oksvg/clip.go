@@ -69,15 +69,10 @@ func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D) *image.Alpha {
 		}
 	}
 	// Find the shapes' windows, without rasterizing them, then draw them
-	// over just those. A shape drawn all over, not in its window, is
-	// drawn again over all the shapes cover.
+	// over just those.
 	draw(nil)
 	area := c.Scanner.Touched
 	draw(c.scratch(area))
-	if !c.Scanner.Touched.In(area) {
-		area = c.Scanner.Touched
-		draw(c.scratch(area))
-	}
 	drawn := c.Scanner.Dest
 	c.Scanner.Dest = nil
 	mask := image.NewAlpha(area)

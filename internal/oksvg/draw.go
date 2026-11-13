@@ -370,10 +370,6 @@ func (c *iconCursor) expandDefs(defs []definition) error {
 			c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
 			continue
 		}
-		if def.Tag == "endGradient" {
-			c.inGrad = false
-			continue
-		}
 		if err := c.PushStyle(def.Attrs); err != nil {
 			return err
 		}

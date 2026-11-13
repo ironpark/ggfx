@@ -146,11 +146,11 @@ func BenchmarkDashGV(b *testing.B) {
 }
 
 // The original tests wrote these drawings to testdata to be looked at;
-// here each is pinned by a hash of its pixels, per GOARCH as for the svg
-// package's goldens.
+// here each is pinned by a hash of its pixels, as the svg package's
+// goldens are.
 var goldens = goldentest.File{
 	Path:   "testdata/golden.txt",
-	Header: "# drawing GOARCH sha256[:12] of the pixels; go test ./internal/rasterx -golden.update",
+	Header: "# drawing sha256[:12] of the pixels; go test ./internal/rasterx -golden.update",
 }
 
 func TestMain(m *testing.M) { goldens.Main(m) }

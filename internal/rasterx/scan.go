@@ -1,6 +1,6 @@
 // Package rasterx implements a rasterizer in go.
-// ScannerGV renders images with a port of golang.org/x/image/vector's
-// rasterizer; see raster.go.
+// ScannerGV renders images with golang.org/x/image/vector's line
+// rasterization; see raster.go.
 //
 // Copyright 2018 All rights reserved.
 // Created: 5/12/2018 by S.R.Wiley
@@ -22,10 +22,10 @@ type (
 		Func  ColorFunc
 	}
 
-	// ScannerGV rasterizes paths as golang.org/x/image/vector's
-	// Rasterizer, sized to the target, would, and draws them as its Draw
-	// would, byte for byte; but each path costs its extent, not the
-	// target's area. See raster.go.
+	// ScannerGV rasterizes paths with golang.org/x/image/vector's line
+	// rasterization, each in a window around it, so that a path costs
+	// its extent, not the target's area, and draws them as vector's Draw
+	// does. See raster.go.
 	ScannerGV struct {
 		Dest *image.RGBA
 		// Targ is where the mask goes in Dest: its origin at Targ.Min,
@@ -117,19 +117,15 @@ func (s *ScannerGV) Line(b fixed.Point26_6) {
 
 // Draw renders the accumulate scan to the desination
 func (s *ScannerGV) Draw() {
-	if s.size.X <= 0 || s.size.Y <= 0 || len(s.pts) == 0 {
+	if len(s.pts) == 0 {
 		return
 	}
-	win := s.window()
-	if s.Dest != nil && !s.rasterize(win) {
-		// The coverage's rounding errors outside the window show, or a
-		// line strayed from it: do as vector does, all over.
-		win = image.Rectangle{Max: s.size}
-		s.rasterize(win)
-	}
-	r := win.Intersect(image.Rectangle{Max: s.Targ.Size()})
+	r := s.window().Intersect(image.Rectangle{Max: s.Targ.Size()})
 	if s.clip != image.ZR {
 		r = r.Intersect(s.clip.Sub(s.Offset))
+	}
+	if s.Dest != nil {
+		r = r.Intersect(s.Dest.Rect.Sub(s.Targ.Min))
 	}
 	if r.Empty() {
 		return
@@ -138,11 +134,12 @@ func (s *ScannerGV) Draw() {
 	if s.Dest == nil {
 		return
 	}
-	s.drawRGBA(s.Dest, r.Intersect(s.Dest.Rect.Sub(s.Targ.Min)))
+	s.rasterize(r)
+	s.drawRGBA(s.Dest)
 }
 
-// window is the part of the mask the path can cover: its extent, and as
-// far around it as vector's lines can stray in rounding.
+// window is the part of the mask the path can cover: its extent, a pixel
+// further each side for the rounding of where its lines cross a row.
 func (s *ScannerGV) window() image.Rectangle {
 	// The points' own extent: rounding to float32 keeps the order, so
 	// the least of the points is the least of the fixed ones, rounded.
@@ -155,21 +152,14 @@ func (s *ScannerGV) window() image.Rectangle {
 	clampTo := func(v float64, n int) int {
 		return int(max(0, min(v, float64(n))))
 	}
-	r := image.Rect(0, 0, 0, 0)
-	r.Min.X = clampTo(math.Floor(float64(minX))-2, s.size.X)
-	r.Max.X = clampTo(math.Ceil(float64(maxX))+2, s.size.X)
-	r.Min.Y = clampTo(math.Floor(float64(minY))-1, s.size.Y)
-	r.Max.Y = clampTo(math.Ceil(float64(maxY))+1, s.size.Y)
-	if r.Max.X == 0 {
-		// Left of the mask, the path covers its column 0.
-		r.Max.X = 1
+	return image.Rectangle{
+		Min: image.Point{clampTo(math.Floor(float64(minX))-1, s.size.X), clampTo(math.Floor(float64(minY)), s.size.Y)},
+		Max: image.Point{clampTo(math.Floor(float64(maxX))+2, s.size.X), clampTo(math.Ceil(float64(maxY)), s.size.Y)},
 	}
-	return r
 }
 
-// rasterize accumulates the path's mask in win, reporting false if win
-// does not hold all of it that shows.
-func (s *ScannerGV) rasterize(win image.Rectangle) bool {
+// rasterize accumulates the path's cells in win.
+func (s *ScannerGV) rasterize(win image.Rectangle) {
 	z := &s.z
 	z.reset(s.size, win, s.evenOdd)
 	var penX, penY float32
@@ -179,23 +169,19 @@ func (s *ScannerGV) rasterize(win image.Rectangle) bool {
 		}
 		penX, penY = p.x, p.y
 	}
-	if z.stray {
-		return false
-	}
-	return z.accumulate()
 }
 
-// drawRGBA draws the paint through the mask in r over dst, with the
+// drawRGBA draws the paint through the window's mask over dst, with the
 // arithmetic of vector's Draw: its generic path, through color.RGBA64 and
 // image.RGBA.Set, which for a premultiplied color is its fast path for a
 // uniform one too. A pixel the mask does not cover is left alone, as both
 // leave it.
-func (s *ScannerGV) drawRGBA(dst *image.RGBA, r image.Rectangle) {
+func (s *ScannerGV) drawRGBA(dst *image.RGBA) {
 	z := &s.z
-	w := z.win.Dx()
+	r := z.win
 	f := s.paint.Func
 	for y := r.Min.Y; y < r.Max.Y; y++ {
-		mask := z.u32[(y-z.win.Min.Y)*w+r.Min.X-z.win.Min.X:][:r.Dx()]
+		mask := z.rowAlphas(y)
 		pix := dst.Pix[dst.PixOffset(s.Targ.Min.X+r.Min.X, s.Targ.Min.Y+y):]
 		if f == nil {
 			blend(pix, mask, s.paint.Color)

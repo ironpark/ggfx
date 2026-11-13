@@ -16,19 +16,32 @@ below.
 - The sources are formatted with gofmt.
 - `ScannerGV` no longer draws with `golang.org/x/image/vector`'s
   `Rasterizer`, sized to the target, which made each path cost the
-  target's whole area. `raster.go` ports its line rasterization and mask
-  accumulation, under the Go Authors' BSD license (see NOTICE.md), to
-  accumulate only a window around the path's extent. The window's mask is
-  vector's, byte for byte: the same arithmetic on the same coordinates, the
-  same choice of fixed or floating point by the target's size, and, on
-  amd64, the order its SSE4.1 assembly sums in. Outside the window,
-  vector's mask is the coverage's rounding error, which draws as nothing
-  unless it reaches 1/256 (`TestFaintMaskChangesNothing`); where it does,
-  or a line strays from the window, the path is accumulated all over, as
-  vector would. `TestScannerDrawsAsVector` checks the result against
-  vector's on random paths. The scanner keeps the path's points until
-  `Draw`, which draws only the pixels the mask covers, with the arithmetic
-  of vector's `Draw`.
+  target's whole area. `raster.go` ports its line rasterization, under the
+  Go Authors' BSD license (see NOTICE.md), to accumulate only a window
+  around the path's extent, clipped to what is drawn: in fixed point up to
+  512 pixels a side and in floating point past that, as vector chooses,
+  but each row summed on its own, from 0 at its start, in one scalar
+  order. Coverage left of the window starts a row's sum, and coverage
+  past the right edge falls in a spare cell past the row's end, where
+  vector carried it into the next row's first pixel; so the window's mask
+  is the whole target's whatever part of the path it holds (in floating
+  point, but for the order the cells left of it are added in), with no
+  fallback to accumulating the whole target, and the same on every
+  architecture, where vector's amd64 assembly summed in an order of its
+  own. A path's lines must enclose, as a `Filler`'s and a `Stroker`'s do:
+  what an open path would cover past its right end is not drawn.
+  `TestScannerDrawsAsVector` checks the result against vector's on random
+  paths, within `maxVectorDiff`, and a clipped draw against the whole.
+  The scanner keeps the path's points until `Draw`, which draws only the
+  pixels the mask covers, with the arithmetic of vector's `Draw`.
+- No multiplication is fused with an addition: each product that is
+  added is converted to its type, `float64(x*y) + z`, which forbids the
+  fused multiply-add the compiler emits on arm64 but not on amd64 or wasm.
+  `Sin`, `Cos`, `Tan` and `Atan2` (`trig.go`) are the math package's,
+  ported under the Go Authors' BSD license with their products so
+  converted: the compiler fuses the math package's own on arm64. So the
+  package draws the same bytes on every architecture
+  (`TestTrigIsTheSameEverywhere`).
 - Paint is typed: a `Paint` is a premultiplied `color.RGBA64`, or a
   `ColorFunc` returning one at each pixel, in place of `interface{}`
   holding a `color.Color` or a `ColorFunc` returning a `color.Color`.
@@ -45,9 +58,23 @@ below.
   it.
 - `Gradient.GetColorFunctionUS` no longer sorts `Stops`, which mutated the
   gradient as it drew; its caller orders them.
+- An `ObjectBoundingBox` gradient's `Bounds` is a box in the user space
+  `GetColorFunctionUS` is given: as SVG defines it, the gradient is a
+  `UserSpaceOnUse` one under that space's matrix times the box's, each
+  pixel mapped back into the gradient's own space. The original took the
+  box in device space and mapped only the gradient's transform back, which
+  under a rotation or skew drew the gradient in the wrong box. A
+  `UserSpaceOnUse` gradient is still placed by mapping its points forward
+  and its radii as vectors, which is right only where the matrices
+  neither rotate nor skew. `Path.Bounds` is a path's extent, its curves'
+  own, not their control points'.
+- A radial gradient whose focus is not its center finds each pixel's
+  place on the ray from the focus in closed form, with one square root,
+  where the original intersected the ray with the circle and took two
+  more.
 - The even-odd fill rule: `ScannerGV.SetWinding(false)` folds the
   accumulated coverage modulo 2, in fixed and floating point, where the
-  original ignored it. The non-zero rule's mask is vector's as before.
+  original ignored it. The non-zero rule clamps it to 1, as vector does.
 - `ApplyOpacity` returns the color not premultiplied, its alpha scaled by
   the opacity and clamped to [0, 1]. The original took the low byte of
   `RGBA`'s 16-bit premultiplied values and dropped the color's alpha,
@@ -60,7 +87,8 @@ below.
   and an `NRGBA64` stop color blends by its own 16-bit values, not by
   `RGBA`'s premultiplied ones unpremultiplied.
 - `rasterx_test.go` keeps the original's assertions; the drawings it wrote
-  to `testdata` are compared with goldens, a hash per drawing and
-  `GOARCH`, in `testdata/golden.txt`, through `internal/goldentest`.
+  to `testdata` are compared with goldens, a hash per drawing, the same
+  on every architecture, in `testdata/golden.txt`, through
+  `internal/goldentest`.
   `bezier_test.go` seeds its random numbers with constants, not the
   clock.

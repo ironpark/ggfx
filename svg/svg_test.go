@@ -150,6 +150,30 @@ func TestAGradientInAMaskEndsWithIt(t *testing.T) {
 	}
 }
 
+// A gradient inside a clip or mask is the document's, as one in defs: a
+// shape outside it is filled with it, whether the clip or mask is used
+// after the shape or never.
+func TestAGradientInAClipIsTheDocuments(t *testing.T) {
+	dst := draw(t, goldenDoc(`
+<clipPath id="never"><linearGradient id="l"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient><rect width="10" height="10"/></clipPath>
+<mask id="later"><linearGradient id="m"><stop offset="0" stop-color="#0f0"/><stop offset="1" stop-color="#0f0"/></linearGradient><rect width="100" height="100" fill="#fff"/></mask>
+<rect width="100" height="50" fill="url(#l)"/>
+<rect y="50" width="100" height="25" fill="url(#m)"/>
+<rect y="75" width="100" height="25" fill="#00f" mask="url(#later)"/>`), 1, 100, 100)
+	for _, tc := range []struct {
+		x, y int
+		want color.RGBA
+	}{
+		{0, 25, color.RGBA{0xfe, 0, 0x01, 0xff}}, {99, 25, color.RGBA{0x01, 0, 0xfe, 0xff}},
+		{50, 60, color.RGBA{0, 0xff, 0, 0xff}},
+		{50, 90, color.RGBA{0, 0, 0xff, 0xff}},
+	} {
+		if c := dst.RGBAAt(tc.x, tc.y); c != tc.want {
+			t.Errorf("(%d, %d): %v; want %v", tc.x, tc.y, c, tc.want)
+		}
+	}
+}
+
 const pentagram = `25,5 36.76,41.18 5.98,18.82 44.02,18.82 13.24,41.18`
 
 // fill-rule, as an attribute, a style property, a class's and a group's,
