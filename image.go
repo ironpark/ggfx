@@ -72,19 +72,16 @@ type Image struct {
 	// and can be returned to the pool via [Image.Recycle].
 	recyclable bool
 
-	// usageCallbacks are callbacks that are invoked when the image is used.
-	// usageCallbacks is valid only when the image is not a sub-image.
-	usageCallbacks map[int64]usageCallback
+	// pending is the work ggfx's own packages deferred on the image, run before its next use (see
+	// image_usage.go). It is valid only when the image is not a sub-image.
+	pending bridge.Pending[*Image]
 
-	// usageCallbackCount is len(usageCallbacks), readable without usageCallbacksM so that a draw
-	// skips invokeUsageCallbacks's work when there are no callbacks.
-	usageCallbackCount atomic.Int32
+	// hasPending reports whether pending is not nil, readable without pendingM so that a use skips
+	// the lock when there is nothing pending.
+	hasPending atomic.Bool
 
-	// inUsageCallbacks reports whether the image is in usageCallbacks.
-	inUsageCallbacks atomic.Bool
-
-	// usageCallbacksM is a mutex for usageCallbacks.
-	usageCallbacksM sync.Mutex
+	// pendingM is a mutex for pending.
+	pendingM sync.Mutex
 
 	// Do not add a 'buffering' member that are resolved lazily.
 	// This tends to forget resolving the buffer easily (#2362).
@@ -188,10 +185,9 @@ func (i *Image) Deallocate() {
 	if i.isSubImage() {
 		return
 	}
-	i.invokeUsageCallbacks()
+	i.flushPending()
 	i.image.Deallocate()
-	i.usageCallbacks = nil
-	i.usageCallbackCount.Store(0)
+	i.clearPending()
 }
 
 // MaxImageSize returns the device-dependent maximum width and height of an image in pixels.
@@ -271,9 +267,10 @@ func init() {
 			i.addr = i
 			return i
 		},
-		Original:            originalImage,
-		AddUsageCallback:    (*Image).addUsageCallback,
-		RemoveUsageCallback: (*Image).removeUsageCallback,
+		Original:     originalImage,
+		SetPending:   (*Image).setPending,
+		Pending:      (*Image).pendingWork,
+		ClearPending: (*Image).clearPending,
 	})
 }
 

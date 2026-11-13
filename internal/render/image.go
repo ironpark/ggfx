@@ -118,11 +118,10 @@ func (i *Image) registerLevels() {
 }
 
 // dropUnusedMipmapLevels drops the mipmap levels not drawn from for a while, of every image that
-// holds some. It looks at the images only every levelsSweepInterval frames, as no level can expire
-// sooner. No image's mutex may be held.
-func dropUnusedMipmapLevels() {
+// holds some. It is a frame sweeper, and looks at the images only every levelsSweepInterval
+// frames, as no level can expire sooner. No image's mutex may be held.
+func dropUnusedMipmapLevels(now int64) {
 	r := &theLevelsRegistry
-	now := recent.Now()
 	r.m.Lock()
 	if now-r.lastSweep < levelsSweepInterval || len(r.imgs) == 0 {
 		r.m.Unlock()

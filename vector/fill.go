@@ -17,10 +17,8 @@ package vector
 import (
 	"fmt"
 	"image"
-	"runtime"
 	"slices"
 	"sync"
-	"weak"
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/bridge"
@@ -45,9 +43,6 @@ const (
 )
 
 var (
-	// theFillPathsStates is keyed by weak pointers not to keep the destination images alive.
-	// When a destination image is collected before being used again, releaseFillPathsState removes the entry.
-	theFillPathsStates     = map[weak.Pointer[ggfx.Image]]*fillDst{}
 	theFillPathsStatesPool = pool.Pool[*fillPathsState]{
 		New: func() *fillPathsState {
 			return &fillPathsState{}
@@ -95,37 +90,29 @@ func fillPath(dst *ggfx.Image, path *Path, stroke *AddStrokeOptions, fillOptions
 
 	bounds := dst.Bounds()
 
-	// Get the original image if dst is a sub-image to integrate the callbacks.
+	// The pending slot is the original image's, which the paths drawn to sub-images share.
 	dst = originalImage(dst)
 
 	theFillPathM.Lock()
 	defer theFillPathM.Unlock()
 
-	key := weak.Make(dst)
-
-	d, ok := theFillPathsStates[key]
-	if !ok {
-		d = &fillDst{}
-		d.callback = d.fill
-		theFillPathsStates[key] = d
-		d.cleanup = runtime.AddCleanup(dst, releaseFillPathsState, key)
+	// The paths pending for dst are in its pending slot, which holds nothing else, so that the
+	// image fills them before it is next used, and they go with it if it is not.
+	var s *fillPathsState
+	if p := imageHooks.Pending(dst); p != nil {
+		s = p.(*fillPathsState)
 	}
-	s := d.state
 	if s != nil && (s.antialias != drawPathOptions.AntiAlias || s.blend != drawPathOptions.Blend || s.fillRule != fillOptions.FillRule) {
-		// Filling draws to dst, which would run the callback, so the batch goes idle first. s is
-		// kept for the next batch.
-		removeUsageCallback(dst, d.token)
-		d.state = nil
+		// Filling draws to dst, which would flush the slot, so it is emptied first. s is kept
+		// for the next batch.
+		imageHooks.ClearPending(dst)
 		s.fillPaths(dst)
 		s.reset()
+		imageHooks.SetPending(dst, s)
 	}
-	if d.state == nil {
-		// The destination goes from idle to pending: this is the only time the callback is added.
-		if s == nil {
-			s = theFillPathsStatesPool.Get()
-		}
-		d.state = s
-		d.token = addUsageCallback(dst, d.callback)
+	if s == nil {
+		s = theFillPathsStatesPool.Get()
+		imageHooks.SetPending(dst, s)
 	}
 	s.antialias = drawPathOptions.AntiAlias
 	s.blend = drawPathOptions.Blend
@@ -133,58 +120,20 @@ func fillPath(dst *ggfx.Image, path *Path, stroke *AddStrokeOptions, fillOptions
 	s.addPath(path, stroke, bounds, drawPathOptions.ColorScale)
 }
 
-// fill is the usage callback of a destination with pending paths. It fills them.
-func (d *fillDst) fill(dst *ggfx.Image) {
-	if originalImage(dst) != dst {
-		panic("vector: dst must be the original image")
-	}
-
+// FlushPending fills the paths pending for dst, before dst is used. A use of dst on another
+// goroutine may have filled them already while this one waited for theFillPathM, and f may even
+// be back from the pool with another destination's paths: f fills only if it is still dst's.
+func (f *fillPathsState) FlushPending(dst *ggfx.Image) {
 	theFillPathM.Lock()
 	defer theFillPathM.Unlock()
 
-	s := d.state
-	if s == nil {
-		panic("vector: fillPathsState must exist here")
-	}
-	// Remove the callback not to call this twice.
-	removeUsageCallback(dst, d.token)
-	s.fillPaths(dst)
-	s.reset()
-	// The entry and its cleanup stay for the image's next batch; the state goes back to the pool.
-	d.state = nil
-	theFillPathsStatesPool.Put(s)
-}
-
-// releaseFillPathsState discards the state for a destination image that was collected before being used again.
-func releaseFillPathsState(key weak.Pointer[ggfx.Image]) {
-	theFillPathM.Lock()
-	defer theFillPathM.Unlock()
-
-	// The destination image is already collected, and its usage callbacks are gone with it.
-	d, ok := theFillPathsStates[key]
-	if !ok {
+	if p := imageHooks.Pending(dst); p == nil || p.(*fillPathsState) != f {
 		return
 	}
-	delete(theFillPathsStates, key)
-	if s := d.state; s != nil {
-		d.state = nil
-		s.reset()
-		theFillPathsStatesPool.Put(s)
-	}
-}
-
-// fillDst is the entry of a destination image paths were filled to: the batch of paths pending
-// for it, if any, with the token of the usage callback that fills them, and the cleanup that
-// removes the entry once the image is collected. The entry stays while the image lives, so that
-// its later batches register no cleanup again.
-type fillDst struct {
-	state *fillPathsState
-	// token is the usage callback's while state is not nil.
-	token int64
-	// callback is fill, bound once so that adding it allocates nothing. It refers to d only,
-	// not to the destination, which the image's callbacks would otherwise keep alive.
-	callback func(dst *ggfx.Image)
-	cleanup  runtime.Cleanup
+	imageHooks.ClearPending(dst)
+	f.fillPaths(dst)
+	f.reset()
+	theFillPathsStatesPool.Put(f)
 }
 
 // imageHooks are what vector needs of ggfx.Image that ggfx does not export.
@@ -192,14 +141,6 @@ var imageHooks = bridge.Image[*ggfx.Image]()
 
 func originalImage(img *ggfx.Image) *ggfx.Image {
 	return imageHooks.Original(img)
-}
-
-func addUsageCallback(img *ggfx.Image, fn func(img *ggfx.Image)) int64 {
-	return imageHooks.AddUsageCallback(img, fn)
-}
-
-func removeUsageCallback(img *ggfx.Image, token int64) {
-	imageHooks.RemoveUsageCallback(img, token)
 }
 
 type offsetAndColor struct {

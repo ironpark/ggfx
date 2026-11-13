@@ -55,8 +55,8 @@ type atlas struct {
 // 2*recent.Window frames needed. The time is counted in frames, render's ticks, rather than in
 // calls of setPaths or in flushes of the command queue: a frame may fill any number of batches,
 // and reading pixels flushes the queue, but a window of frames spans about the same time, a second
-// or two, however the frames are drawn. A frame with no fill counts too, so the sizes decay while
-// the frames fill nothing; no image is given back before the next fill, though.
+// or two, however the frames are drawn. A frame with no fill counts too: the frame sweeper (see
+// sweepStencils) gives the images back once the frames fill nothing.
 
 // sizePeak tracks the size an atlas image recently had to have, per dimension.
 type sizePeak struct {
@@ -276,7 +276,20 @@ func (a *atlas) ensureImages(now int64, count int, maxImageSize int) {
 		a.allocations++
 	}
 
-	keep := max(count, a.countPeak.Max())
+	a.trim(max(count, a.countPeak.Max()))
+	a.atlasImages = a.images[:count]
+}
+
+// expire deallocates the images beyond the count the fills of the recent frames needed, at time
+// now, for the frames that fill nothing, after which the next fill lays out the paths anew.
+func (a *atlas) expire(now int64) {
+	a.countPeak.AdvanceTo(now)
+	a.trim(a.countPeak.Max())
+	a.atlasImages = a.atlasImages[:0]
+}
+
+// trim deallocates the images beyond the first keep.
+func (a *atlas) trim(keep int) {
 	for i := keep; i < len(a.images); i++ {
 		if a.images[i] != nil {
 			a.images[i].Deallocate()
@@ -285,7 +298,6 @@ func (a *atlas) ensureImages(now int64, count int, maxImageSize int) {
 	}
 	a.images = a.images[:min(keep, len(a.images))]
 	a.sizePeaks = a.sizePeaks[:len(a.images)]
-	a.atlasImages = a.images[:count]
 
 	var bytes int64
 	for _, img := range a.images {

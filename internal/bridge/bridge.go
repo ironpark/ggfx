@@ -28,12 +28,25 @@ type ImageHooks[I any] struct {
 	// Original returns the image img is a sub-image of, or img itself.
 	Original func(img I) I
 
-	// AddUsageCallback makes fn run before the next use of img or of a sub-image of it, with the
-	// original image, and returns the token RemoveUsageCallback removes it by.
-	AddUsageCallback func(img I, fn func(img I)) int64
+	// SetPending puts p in the pending slot of img, shared by img and its sub-images, replacing
+	// what was there. Before the next use of any of them, the image runs the slot's FlushPending
+	// with the original image.
+	SetPending func(img I, p Pending[I])
 
-	// RemoveUsageCallback removes the callback AddUsageCallback returned token for.
-	RemoveUsageCallback func(img I, token int64)
+	// Pending returns what is in the pending slot of img, or nil.
+	Pending func(img I) Pending[I]
+
+	// ClearPending empties the pending slot of img.
+	ClearPending func(img I)
+}
+
+// Pending is work a package has deferred on an image, done before the image is next used. vector
+// keeps its pending fills there, as it cannot add a field to the image.
+type Pending[I any] interface {
+	// FlushPending does the work on img, the original image. The image does not empty its slot:
+	// FlushPending does, before it uses img, as the use would run it again. It may find the
+	// slot holding something else, or nothing, when another use of img flushed it first.
+	FlushPending(img I)
 }
 
 // hooks is the *ImageHooks[*ggfx.Image] ggfx set.

@@ -22,6 +22,7 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/recent"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 // The stencil cache keeps the stencil buffers of the paths filled across flushes and frames, so
@@ -369,14 +370,36 @@ func (c *stencilCache) remove(pg *stencilPage) {
 	c.pages = slices.Delete(c.pages, i, i+1)
 }
 
-// expire removes the pages no fill used in the last recent.Window frames at least, so the cache
-// gives its memory back when the paths are gone, as theAtlas does.
+// expire removes the pages no fill used in the last 2*recent.Window frames, so the cache gives its
+// memory back when the paths are gone, as theAtlas does.
 func (c *stencilCache) expire(now int64) {
 	for i := len(c.pages) - 1; i >= 0; i-- {
 		if pg := c.pages[i]; now-pg.frame > 2*recent.Window {
 			c.remove(pg)
 		}
 	}
+}
+
+// stencilSweepInterval is how many frames apart sweepStencils looks at the stencil images.
+const stencilSweepInterval = recent.Window / 4
+
+func init() {
+	render.AddFrameSweeper(sweepStencils)
+}
+
+// sweepStencils expires the stencil cache's pages and theAtlas's images at the end of a frame at
+// time now, by the rules a fill expires them by, so that they go once the frames stop filling
+// rather than at the next fill, which may never come. Every stencilSweepInterval frames is soon
+// enough for windows of recent.Window frames. A frame sweeper is never called under theFillPathM:
+// a fill holds it, and nothing a fill calls ends a frame.
+func sweepStencils(now int64) {
+	if now%stencilSweepInterval != 0 || StencilBytes() == 0 {
+		return
+	}
+	theFillPathM.Lock()
+	defer theFillPathM.Unlock()
+	theStencilCache.expire(now)
+	theAtlas.expire(now)
 }
 
 // dispose removes every page, and forgets the keys seen.

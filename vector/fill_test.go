@@ -15,6 +15,7 @@
 package vector_test
 
 import (
+	"image"
 	"image/color"
 	"runtime"
 	"testing"
@@ -24,31 +25,11 @@ import (
 	"github.com/ironpark/ggfx/vector"
 )
 
-// waitForEmptyFillPathsStates waits until the pending fill states of collected images are released.
-func waitForEmptyFillPathsStates(t *testing.T) bool {
-	t.Helper()
-
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		runtime.GC()
-		if vector.FillPathsStateCount() == 0 && vector.CallbackTokenCount() == 0 {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 func TestFillPathDoesNotRetainDestination(t *testing.T) {
-	// Images that other tests left behind might still be registered. Wait for them to be released.
-	if !waitForEmptyFillPathsStates(t) {
-		t.Skip("the states of the other tests are not released")
-	}
-
+	collected := make(chan struct{})
 	func() {
 		dst := ggfx.NewImage(16, 16)
+		sub := dst.SubImage(image.Rect(4, 4, 12, 12)).(*ggfx.Image)
 		var path vector.Path
 		path.MoveTo(0, 0)
 		path.LineTo(16, 0)
@@ -56,20 +37,55 @@ func TestFillPathDoesNotRetainDestination(t *testing.T) {
 		path.Close()
 		op := &vector.DrawPathOptions{}
 		op.ColorScale.ScaleWithColor(color.White)
-		vector.FillPath(dst, &path, nil, op)
+		vector.FillPath(sub, &path, nil, op)
 
-		if got, want := vector.FillPathsStateCount(), 1; got != want {
-			t.Errorf("vector.FillPathsStateCount(): got: %d, want: %d", got, want)
+		// The paths filled to a sub-image are pending in the original image's slot.
+		if !vector.HasPendingPaths(dst) {
+			t.Errorf("vector.HasPendingPaths(dst): got false, want true")
 		}
-		if got, want := vector.CallbackTokenCount(), 1; got != want {
-			t.Errorf("vector.CallbackTokenCount(): got: %d, want: %d", got, want)
-		}
-
-		runtime.KeepAlive(dst)
+		runtime.AddCleanup(dst, func(ch chan struct{}) { close(ch) }, collected)
 	}()
 
-	// The destination image is no longer used. The states must be released after the image is collected.
-	if !waitForEmptyFillPathsStates(t) {
-		t.Errorf("the states must be released after the destination image is collected: fill paths states: %d, callback tokens: %d", vector.FillPathsStateCount(), vector.CallbackTokenCount())
+	// The pending paths must not keep the destination alive.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runtime.GC()
+		select {
+		case <-collected:
+			return
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the destination with pending paths was not collected")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestFillPathPendingIsFlushedOnUse(t *testing.T) {
+	dst := ggfx.NewImage(16, 16)
+	defer dst.Deallocate()
+	sub := dst.SubImage(image.Rect(0, 0, 8, 8)).(*ggfx.Image)
+	var path vector.Path
+	path.MoveTo(0, 0)
+	path.LineTo(16, 0)
+	path.LineTo(16, 16)
+	path.LineTo(0, 16)
+	path.Close()
+	op := &vector.DrawPathOptions{}
+	op.ColorScale.ScaleWithColor(color.White)
+	vector.FillPath(sub, &path, nil, op)
+	if !vector.HasPendingPaths(dst) {
+		t.Fatal("vector.HasPendingPaths(dst): got false, want true")
+	}
+	// A use of the original image fills the paths pending for its sub-image, and empties the slot.
+	if got, want := dst.At(4, 4), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {
+		t.Errorf("dst.At(4, 4): got %v, want %v", got, want)
+	}
+	if got, want := dst.At(12, 12), (color.RGBA{}); got != want {
+		t.Errorf("dst.At(12, 12): got %v, want %v", got, want)
+	}
+	if vector.HasPendingPaths(dst) {
+		t.Error("vector.HasPendingPaths(dst) after a use: got true, want false")
 	}
 }

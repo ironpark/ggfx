@@ -196,10 +196,9 @@ func Occluded() bool {
 
 // Flush runs the graphics commands queued in the frames since the last flush, and presents every
 // surface whose screen was drawn to when present is set. It ends a frame: it advances the frame
-// clock, recent.Now.
+// clock, recent.Now, and runs the frame sweepers.
 func Flush(present bool) error {
-	recent.Advance()
-	dropUnusedMipmapLevels()
+	sweep(recent.Advance())
 	return atlas.FlushCommands(driver, present)
 }
 

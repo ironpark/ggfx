@@ -283,3 +283,40 @@ func TestStencilCacheBounds(t *testing.T) {
 		t.Errorf("after idle frames: got %d bytes of cache pages, want at most one small page", got)
 	}
 }
+
+// TestStencilsExpireWithoutFills checks that the stencil cache's pages and the atlas's images are
+// given back once the frames stop filling, without another fill, and that filling again afterwards
+// renders the pixels it did with them.
+func TestStencilsExpireWithoutFills(t *testing.T) {
+	s := cacheScenes[0]
+	render := func() []byte {
+		dst := ggfx.NewImage(s.w, s.h)
+		defer dst.Deallocate()
+		for range 3 {
+			s.draw(dst, rand.New(rand.NewPCG(1, 2)), true, vector.FillRuleNonZero)
+			if err := vector.NextFrame(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pix := make([]byte, 4*s.w*s.h)
+		dst.ReadPixels(pix)
+		return pix
+	}
+
+	vector.ResetStencilCache()
+	want := render()
+	if len(vector.StencilCachePageSizes()) == 0 || vector.StencilBytes() == 0 {
+		t.Fatalf("after filling: got %d cache pages and %d stencil bytes, want some", len(vector.StencilCachePageSizes()), vector.StencilBytes())
+	}
+	for range 3 * vector.AtlasRecentWindow {
+		if err := vector.NextFrame(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, b := len(vector.StencilCachePageSizes()), vector.StencilBytes(); n != 0 || b != 0 {
+		t.Fatalf("after idle frames: got %d cache pages and %d stencil bytes, want none", n, b)
+	}
+	if diffs := diffPixels(render(), want, s.w, 5); len(diffs) > 0 {
+		t.Errorf("filling after the stencils expired renders different pixels: %v", diffs)
+	}
+}

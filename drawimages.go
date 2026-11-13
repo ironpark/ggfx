@@ -66,7 +66,7 @@ func (i *Image) DrawImages(draws []ImageDraw, options *DrawImageOptions) {
 		return
 	}
 
-	i.invokeUsageCallbacks()
+	i.flushPending()
 	i.updateAccessTime()
 
 	// The translation by (X, Y) and then by geoM, as GeoM.Concat computes it.
@@ -82,7 +82,7 @@ func (i *Image) DrawImages(draws []ImageDraw, options *DrawImageOptions) {
 		if img.isDisposed() {
 			panic("ggfx: the given image to DrawImages must not be disposed")
 		}
-		img.invokeUsageCallbacks()
+		img.flushPending()
 		img.updateAccessTime()
 		// As DrawImage translates by the offset after the GeoM.
 		tx := ga*dr.X + gb*dr.Y + geoM.tx + offsetX

@@ -19,6 +19,7 @@ import (
 	"image"
 	"strings"
 
+	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/render"
 )
@@ -76,24 +77,12 @@ func PathOperationsString(path *Path) string {
 	return sb.String()
 }
 
-func FillPathsStateCount() int {
+// HasPendingPaths reports whether paths filled to dst, or to an image sharing its original image,
+// are pending.
+func HasPendingPaths(dst *ggfx.Image) bool {
 	theFillPathM.Lock()
 	defer theFillPathM.Unlock()
-	return len(theFillPathsStates)
-}
-
-// CallbackTokenCount returns the number of destinations with a usage callback, which are the ones
-// with pending paths.
-func CallbackTokenCount() int {
-	theFillPathM.Lock()
-	defer theFillPathM.Unlock()
-	var n int
-	for _, d := range theFillPathsStates {
-		if d.state != nil {
-			n++
-		}
-	}
-	return n
+	return imageHooks.Pending(dst) != nil
 }
 
 func CircleVertexCount(radius float32) int {

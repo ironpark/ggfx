@@ -42,7 +42,7 @@ func (i *Image) Fill(clr color.Color) {
 		return
 	}
 
-	i.invokeUsageCallbacks()
+	i.flushPending()
 
 	i.updateAccessTime()
 
@@ -81,10 +81,10 @@ func (i *Image) ReadPixels(pixels []byte) {
 	if i.image.Format() == graphicsdriver.PixelFormatA8 {
 		switch len(pixels) {
 		case n:
-			i.invokeUsageCallbacks()
+			i.flushPending()
 			i.image.ReadPixels(pixels, i.adjustedBounds())
 		case 4 * n:
-			i.invokeUsageCallbacks()
+			i.flushPending()
 			a := make([]byte, n)
 			i.image.ReadPixels(a, i.adjustedBounds())
 			graphics.ExpandAlpha(pixels, a)
@@ -97,7 +97,7 @@ func (i *Image) ReadPixels(pixels []byte) {
 		panic(fmt.Sprintf("ggfx: len(pixels) must be %d but %d at ReadPixels", want, got))
 	}
 
-	i.invokeUsageCallbacks()
+	i.flushPending()
 
 	i.image.ReadPixels(pixels, i.adjustedBounds())
 }
@@ -143,7 +143,7 @@ func (i *Image) at(x, y int) (r, g, b, a byte) {
 		return 0, 0, 0, 0
 	}
 
-	i.invokeUsageCallbacks()
+	i.flushPending()
 
 	x, y = i.adjustPosition(x, y)
 	if i.image.Format() == graphicsdriver.PixelFormatA8 {
@@ -176,7 +176,7 @@ func (i *Image) Set(x, y int, clr color.Color) {
 		return
 	}
 
-	i.invokeUsageCallbacks()
+	i.flushPending()
 
 	i.updateAccessTime()
 
@@ -219,7 +219,7 @@ func (i *Image) WritePixels(pixels []byte) {
 		return
 	}
 
-	i.invokeUsageCallbacks()
+	i.flushPending()
 
 	if i.image.Format() == graphicsdriver.PixelFormatA8 {
 		b := i.Bounds()

@@ -154,8 +154,8 @@ func (i *Image) Recycle() {
 	clear(i.subImageCache)
 	i.subImageGCLastTick = 0
 	i.atime.Store(0)
-	clear(i.usageCallbacks)
-	i.usageCallbackCount.Store(0)
+	i.pending = nil
+	i.hasPending.Store(false)
 	i.recyclable = false
 
 	theImagePool.Put(i)

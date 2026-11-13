@@ -121,8 +121,8 @@ func (i *Image) DrawImage(img *Image, options *DrawImageOptions) {
 		return
 	}
 
-	i.invokeUsageCallbacks()
-	img.invokeUsageCallbacks()
+	i.flushPending()
+	img.flushPending()
 
 	i.updateAccessTime()
 	img.updateAccessTime()
@@ -348,8 +348,8 @@ func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, o
 		return
 	}
 
-	i.invokeUsageCallbacks()
-	img.invokeUsageCallbacks()
+	i.flushPending()
+	img.flushPending()
 
 	img.updateAccessTime()
 	i.updateAccessTime()
@@ -488,7 +488,7 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 		options = &DrawTrianglesShaderOptions{}
 	}
 
-	i.invokeUsageCallbacks()
+	i.flushPending()
 	imgs, srcRegions := useShaderSources(&options.Images)
 	i.updateAccessTime()
 
@@ -515,14 +515,14 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 	i.image.DrawTriangles(imgs, vs, indices, blend, i.adjustedBounds(), srcRegions, shader.shader, uniforms, true)
 }
 
-// useShaderSources runs the usage callbacks of the source images of a shader draw and marks them
+// useShaderSources flushes the pending work of the source images of a shader draw and marks them
 // used, and returns their images and the regions they are drawn from.
 func useShaderSources(images *[graphics.ShaderSrcImageCount]*Image) (imgs [graphics.ShaderSrcImageCount]*render.Image, regions [graphics.ShaderSrcImageCount]image.Rectangle) {
 	for k, img := range images {
 		if img == nil {
 			continue
 		}
-		img.invokeUsageCallbacks()
+		img.flushPending()
 		img.updateAccessTime()
 		imgs[k] = img.image
 		regions[k] = img.adjustedBounds()
@@ -617,7 +617,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 	}
 
 	imgs, srcRegions := useShaderSources(&options.Images)
-	i.invokeUsageCallbacks()
+	i.flushPending()
 	i.updateAccessTime()
 
 	for _, img := range options.Images {
