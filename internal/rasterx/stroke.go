@@ -8,6 +8,8 @@ import (
 	"math"
 
 	"golang.org/x/image/math/fixed"
+
+	"github.com/ironpark/ggfx/internal/trig"
 )
 
 const (
@@ -182,8 +184,8 @@ func strokeArc(p Adder, a, s1, s2 fixed.Point26_6, clockwise bool, trimStart,
 	// or cubic Bezier curves", 2003
 	// https://www.spaceroots.org/documents/elllipse/elliptical-arc.pdf
 	// The method was simplified for circles.
-	theta1 := Atan2(float64(s1.Y-a.Y), float64(s1.X-a.X))
-	theta2 := Atan2(float64(s2.Y-a.Y), float64(s2.X-a.X))
+	theta1 := trig.Atan2(float64(s1.Y-a.Y), float64(s1.X-a.X))
+	theta2 := trig.Atan2(float64(s2.Y-a.Y), float64(s2.X-a.X))
 	if !clockwise {
 		for theta1 < theta2 {
 			theta1 += math.Pi * 2
@@ -206,17 +208,17 @@ func strokeArc(p Adder, a, s1, s2 fixed.Point26_6, clockwise bool, trimStart,
 
 	segs := int(math.Abs(deltaTheta)/(math.Pi/cubicsPerHalfCircle)) + 1
 	dTheta := deltaTheta / float64(segs)
-	tde := Tan(dTheta / 2)
-	alpha := fixed.Int26_6(Sin(dTheta) * (math.Sqrt(4+float64(3*tde*tde)) - 1) * (64.0 / 3.0)) // Math is fun!
-	r := float64(Length(s1.Sub(a)))                                                            // Note r is *64
-	ldp := fixed.Point26_6{X: -fixed.Int26_6(r * Sin(theta1)), Y: fixed.Int26_6(r * Cos(theta1))}
+	tde := trig.Tan(dTheta / 2)
+	alpha := fixed.Int26_6(trig.Sin(dTheta) * (math.Sqrt(4+float64(3*tde*tde)) - 1) * (64.0 / 3.0)) // Math is fun!
+	r := float64(Length(s1.Sub(a)))                                                                 // Note r is *64
+	ldp := fixed.Point26_6{X: -fixed.Int26_6(r * trig.Sin(theta1)), Y: fixed.Int26_6(r * trig.Cos(theta1))}
 	ds1 = ldp
 	ps1 = fixed.Point26_6{X: a.X + ldp.Y, Y: a.Y - ldp.X}
 	firstPoint(ps1)
 	s1 = ps1
 	for i := 1; i <= segs; i++ {
 		eta := theta1 + float64(dTheta*float64(i))
-		ds2 = fixed.Point26_6{X: -fixed.Int26_6(r * Sin(eta)), Y: fixed.Int26_6(r * Cos(eta))}
+		ds2 = fixed.Point26_6{X: -fixed.Int26_6(r * trig.Sin(eta)), Y: fixed.Int26_6(r * trig.Cos(eta))}
 		ps2 = fixed.Point26_6{X: a.X + ds2.Y, Y: a.Y - ds2.X} // Using deriviative to calc new pt, because circle
 		p1 := s1.Add(ldp.Mul(alpha))
 		p2 := ps2.Sub(ds2.Mul(alpha))

@@ -1,7 +1,7 @@
 // Copyright 2026 The ggfx Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package rasterx
+package trig
 
 import (
 	"crypto/sha256"
@@ -42,6 +42,27 @@ func TestTrigIsTheSameEverywhere(t *testing.T) {
 		}
 		if got := hex.EncodeToString(h.Sum(nil)[:6]); got != tc.want {
 			t.Errorf("%s: hashed %s; want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// Sincos is Sin and Cos, bit for bit.
+func TestSincosIsSinAndCos(t *testing.T) {
+	r := rand.New(rand.NewSource(1))
+	for range 1000000 {
+		x := (r.Float64() - 0.5) * math.Pow(10, float64(r.Intn(8)-3))
+		s, c := Sincos(x)
+		if s != Sin(x) || c != Cos(x) {
+			t.Fatalf("Sincos(%v) = %v, %v; Sin, Cos %v, %v", x, s, c, Sin(x), Cos(x))
+		}
+		if ms, mc := math.Sincos(x); (s != ms || c != mc) && runtime.GOARCH == "wasm" {
+			t.Fatalf("Sincos(%v) = %v, %v; math's %v, %v", x, s, c, ms, mc)
+		}
+	}
+	for _, x := range []float64{0, math.Copysign(0, -1), math.Inf(1), math.Inf(-1), 1 << 30, -(1 << 31)} {
+		s, c := Sincos(x)
+		if ms, mc := math.Sincos(x); math.Float64bits(s) != math.Float64bits(ms) || math.Float64bits(c) != math.Float64bits(mc) {
+			t.Errorf("Sincos(%v) = %v, %v; math's %v, %v", x, s, c, ms, mc)
 		}
 	}
 }

@@ -145,96 +145,45 @@ func (st *gradStops) at(s *stop) color.RGBA64 {
 	return ColorPaint(applyOpacity64(s.r, s.g, s.b, s.a, s.opacity*st.opacity)).Color
 }
 
-// color takes the paramaterized value along the gradient's stops and
-// returns a color depending on the spreadMethod value of the gradient and
-// the gradient's slice of stop values.
+// color is the color at t along the gradient: past its ends, the first or
+// last stop's for PadSpread; t modulo 1 for RepeatSpread, which wraps from
+// the last stop's color to the first's with no blend between them; and t
+// modulo 2 mirrored into [0, 1] for ReflectSpread (SVG 1.1 13.2.4).
 func (st gradStops) color(t float64) color.RGBA64 {
-	s := st.stops
-	d := len(s)
-	mod := t
-	if st.spread == PadSpread {
-		// These cases can be taken care of early on; past them, t is in
-		// (0, 1), or NaN, as math.Mod would leave it.
-		if t >= 1.0 {
-			return st.last
-		}
-		if t <= 0.0 {
-			return st.first
-		}
-	} else {
-		var modRange = 1.0
-		if st.spread == ReflectSpread {
-			modRange = 2.0
-		}
-		mod = math.Mod(t, modRange)
-		if mod < 0 {
-			mod += modRange
-		}
-	}
-
-	place := 0 // Advance to place where mod is greater than the indicated stop
-	for place != d && mod > s[place].offset {
-		place++
-	}
 	switch st.spread {
 	case RepeatSpread:
-		var s1, s2 *stop
-		switch place {
-		case 0, d:
-			s1, s2 = &s[d-1], &s[0]
-		default:
-			s1, s2 = &s[place-1], &s[place]
-		}
-		return st.blend(mod, s1, s2, false)
+		t -= math.Floor(t) // exact where t >= 0
 	case ReflectSpread:
-		switch place {
-		case 0:
-			return st.first
-		case d:
-			// Advance to place where mod-1 is greater than the stop indicated by place in reverse of the stop slice.
-			// Since this is the reflect spead mode, the mod interval is two, allowing the stop list to be
-			// iterated in reverse before repeating the sequence.
-			for place != d*2 && mod-1 > (1-s[d*2-place-1].offset) {
-				place++
-			}
-			switch place {
-			case d:
-				return st.last
-			case d * 2:
-				return st.first
-			default:
-				return st.blend(mod-1, &s[d*2-place], &s[d*2-place-1], true)
-			}
-		default:
-			return st.blend(mod, &s[place-1], &s[place], false)
+		if t -= float64(2 * math.Floor(t/2)); t > 1 {
+			t = 2 - t
 		}
-	default: // PadSpread
-		switch place {
-		case 0:
-			return st.first
-		case d:
+	default:
+		if t >= 1 {
 			return st.last
-		default:
-			return st.blend(mod, &s[place-1], &s[place], false)
+		}
+		if t <= 0 {
+			return st.first
 		}
 	}
+	// Past here, t is in [0, 1], or NaN, which no comparison takes.
+	s := st.stops
+	if !(t > s[0].offset) {
+		return st.first
+	}
+	place := 1 // the first stop t is not past
+	for place != len(s) && t > s[place].offset {
+		place++
+	}
+	if place == len(s) {
+		return st.last
+	}
+	return st.blend(t, &s[place-1], &s[place])
 }
 
-func (st *gradStops) blend(t float64, s1, s2 *stop, flip bool) color.RGBA64 {
-	s1off := s1.offset
-	if s1.offset > s2.offset && !flip { // happens in repeat spread mode
-		s1off--
-		if t > 1 {
-			t--
-		}
-	}
-	if s2.offset == s1off {
-		return st.at(s2)
-	}
-	if flip {
-		t = 1 - t
-	}
-	tp := (t - s1off) / (s2.offset - s1off)
+// blend is the color at t between s1 and s2, t past s1's offset and not
+// past s2's.
+func (st *gradStops) blend(t float64, s1, s2 *stop) color.RGBA64 {
+	tp := (t - s1.offset) / (s2.offset - s1.offset)
 	return ColorPaint(applyOpacity(
 		uint8((float64(float64(s1.r)*(1-tp))+float64(float64(s2.r)*tp))/256),
 		uint8((float64(float64(s1.g)*(1-tp))+float64(float64(s2.g)*tp))/256),
@@ -250,10 +199,10 @@ func (g *Gradient) GetColorFunction(opacity float64) Paint {
 // GetColorFunctionUS returns the color function using the User Space
 // objMatrix. An ObjectBoundingBox gradient is drawn in Bounds, a box in
 // that user space: as SVG has it, it is a UserSpaceOnUse gradient under
-// objMatrix times the box's matrix. Its geometry is in the gradient's own
-// space, into which each pixel is mapped back; a UserSpaceOnUse one's is
-// mapped forward into the pixels', its radii as vectors, which is right
-// only where the matrices neither rotate nor skew.
+// objMatrix times the box's matrix. Either way its geometry stays in the
+// gradient's own space, into which each pixel is mapped back, so that a
+// radial one under a rotation, skew or uneven scale is an ellipse turned
+// as the shape is.
 func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint {
 	switch len(g.Stops) {
 	case 0:
@@ -262,29 +211,23 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 		return ColorPaint(ApplyOpacity(g.Stops[0].StopColor, opacity)) // Illegal, I think, should really should not happen.
 	}
 	st := g.colors(opacity)
-	// toGrad maps a pixel's center to where the geometry is.
-	toGrad := Identity
-	p := g.Points
+	toUser := objMatrix
 	if g.Units == ObjectBoundingBox {
-		box := Identity.Translate(g.Bounds.X, g.Bounds.Y).Scale(g.Bounds.W, g.Bounds.H)
-		toGrad = objMatrix.Mult(box).Mult(g.Matrix).Invert()
-	} else {
-		p[0], p[1] = objMatrix.Transform(g.Matrix.Transform(p[0], p[1]))
-		p[2], p[3] = objMatrix.Transform(g.Matrix.Transform(p[2], p[3]))
+		toUser = toUser.Mult(Identity.Translate(g.Bounds.X, g.Bounds.Y).Scale(g.Bounds.W, g.Bounds.H))
 	}
+	// toGrad maps a pixel's center to where the geometry is.
+	toGrad := toUser.Mult(g.Matrix).Invert()
+	p := g.Points
 
 	if g.IsRadial {
-		cx, cy, fx, fy, rx, ry := p[0], p[1], p[2], p[3], p[4], p[4]
-		if g.Units != ObjectBoundingBox {
-			rx, ry = objMatrix.TransformVector(g.Matrix.TransformVector(rx, ry))
-		}
+		cx, cy, fx, fy, r := p[0], p[1], p[2], p[3], p[4]
 		if cx == fx && cy == fy {
-			return st.centered(toGrad, cx, cy, rx, ry)
+			return st.centered(toGrad, cx, cy, r)
 		}
-		fx /= rx
-		fy /= ry
-		cx /= rx
-		cy /= ry
+		fx /= r
+		fy /= r
+		cx /= r
+		cy /= r
 
 		dfx := fx - cx
 		dfy := fy - cy
@@ -297,7 +240,7 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 				return ColorPaint(color.RGBA{255, 255, 0, 255}) // should not happen
 			}
 		}
-		return st.focal(toGrad, fx, fy, cx, cy, rx, ry)
+		return st.focal(toGrad, fx, fy, cx, cy, r)
 	}
 	return st.linear(toGrad, p[0], p[1], p[2], p[3])
 }
@@ -308,29 +251,28 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 // where its geometry is; for Identity, exactly to itself.
 
 // centered is the paint of a radial gradient whose focus is its center:
-// t is just distance from center scaled by the bounds aspect ratio times
-// r.
-func (st gradStops) centered(toGrad Matrix2D, cx, cy, rx, ry float64) Paint {
+// t is the distance from the center over r.
+func (st gradStops) centered(toGrad Matrix2D, cx, cy, r float64) Paint {
 	return FuncPaint(func(xi, yi int) color.RGBA64 {
 		x, y := toGrad.Transform(float64(xi)+0.5, float64(yi)+0.5)
 		dx := x - cx
 		dy := y - cy
-		return st.color(math.Sqrt(float64(dx*dx/(rx*rx)) + float64((dy*dy)/(ry*ry))))
+		return st.color(math.Sqrt(float64(dx*dx/(r*r)) + float64((dy*dy)/(r*r))))
 	})
 }
 
 // focal is the paint of a radial gradient whose focus, (fx, fy), is not
-// its center, (cx, cy), both divided by the radii, the circle then of
+// its center, (cx, cy), both divided by the radius r, the circle then of
 // radius 1. A point e is at t = |e-f| / |p-f| along the ray from the
 // focus f through it to the circle at p = f + (e-f)/t: with g = f-c and
 // d = e-f, |g + d/t| = 1, whose root past the focus, the focus inside, is
 // t = (g·d + √((g·d)² + |d|²(1-|g|²))) / (1-|g|²).
-func (st gradStops) focal(toGrad Matrix2D, fx, fy, cx, cy, rx, ry float64) Paint {
+func (st gradStops) focal(toGrad Matrix2D, fx, fy, cx, cy, r float64) Paint {
 	gx, gy := fx-cx, fy-cy
 	den := 1 - (float64(gx*gx) + float64(gy*gy))
 	return FuncPaint(func(xi, yi int) color.RGBA64 {
 		x, y := toGrad.Transform(float64(xi)+0.5, float64(yi)+0.5)
-		dx, dy := x/rx-fx, y/ry-fy
+		dx, dy := x/r-fx, y/r-fy
 		gd := float64(gx*dx) + float64(gy*dy)
 		dd := float64(dx*dx) + float64(dy*dy)
 		t := (gd + math.Sqrt(float64(gd*gd)+float64(dd*den))) / den

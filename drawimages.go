@@ -85,8 +85,8 @@ func (i *Image) DrawImages(draws []ImageDraw, options *DrawImageOptions) {
 		img.flushPending()
 		img.updateAccessTime()
 		// As DrawImage translates by the offset after the GeoM.
-		tx := ga*dr.X + gb*dr.Y + geoM.tx + offsetX
-		ty := gc*dr.X + gd*dr.Y + geoM.ty + offsetY
+		tx := float64(ga*dr.X) + float64(gb*dr.Y) + geoM.tx + offsetX
+		ty := float64(gc*dr.X) + float64(gd*dr.Y) + geoM.ty + offsetY
 		bounds := img.Bounds()
 		sx0, sy0 := img.adjustPosition(bounds.Min.X, bounds.Min.Y)
 		sx1, sy1 := img.adjustPosition(bounds.Max.X, bounds.Max.Y)

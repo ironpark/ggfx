@@ -17,9 +17,12 @@ package ggfx_test
 import (
 	"fmt"
 	"math"
+	"math/big"
+	"math/rand"
 	"testing"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/trig"
 )
 
 func TestGeoMInit(t *testing.T) {
@@ -362,6 +365,132 @@ func TestGeoMEquals(t *testing.T) {
 		if got != want {
 			t.Errorf("%#v == %#v: got %t, want: %t", test.a, test.b, got, want)
 		}
+	}
+}
+
+// refM is a GeoM, kept as GeoM keeps one, composed with each product
+// rounded on its own by math/big, which no compiler fuses with an addition.
+type refM struct{ a1, b, c, d1, tx, ty float64 }
+
+func mul(x, y float64) float64 {
+	z, _ := new(big.Float).Mul(big.NewFloat(x), big.NewFloat(y)).Float64()
+	return z
+}
+
+// newRefM is the matrix newGeoM makes, as GeoM keeps it.
+func newRefM(a, b, c, d, tx, ty float64) refM { return refM{a - 1, b, c, d - 1, tx, ty} }
+
+// elements are m's elements as GeoM.Element gives them.
+func (m refM) elements() [2][3]float64 {
+	return [2][3]float64{{m.a1 + 1, m.b, m.tx}, {m.c, m.d1 + 1, m.ty}}
+}
+
+func (m refM) apply(x, y float64) (float64, float64) {
+	return mul(m.a1+1, x) + mul(m.b, y) + m.tx, mul(m.c, x) + mul(m.d1+1, y) + m.ty
+}
+
+func (m refM) concat(o refM) refM {
+	return refM{
+		a1: mul(o.a1+1, m.a1+1) + mul(o.b, m.c) - 1,
+		b:  mul(o.a1+1, m.b) + mul(o.b, m.d1+1),
+		tx: mul(o.a1+1, m.tx) + mul(o.b, m.ty) + o.tx,
+		c:  mul(o.c, m.a1+1) + mul(o.d1+1, m.c),
+		d1: mul(o.c, m.b) + mul(o.d1+1, m.d1+1) - 1,
+		ty: mul(o.c, m.tx) + mul(o.d1+1, m.ty) + o.ty,
+	}
+}
+
+func (m refM) scale(x, y float64) refM {
+	return refM{mul(m.a1+1, x) - 1, mul(m.b, x), mul(m.c, y), mul(m.d1+1, y) - 1, mul(m.tx, x), mul(m.ty, y)}
+}
+
+func (m refM) rotate(theta float64) refM {
+	sin, cos := trig.Sin(theta), trig.Cos(theta)
+	return refM{
+		a1: mul(cos, m.a1+1) - mul(sin, m.c) - 1,
+		b:  mul(cos, m.b) - mul(sin, m.d1+1),
+		tx: mul(cos, m.tx) - mul(sin, m.ty),
+		c:  mul(sin, m.a1+1) + mul(cos, m.c),
+		d1: mul(sin, m.b) + mul(cos, m.d1+1) - 1,
+		ty: mul(sin, m.tx) + mul(cos, m.ty),
+	}
+}
+
+func (m refM) skew(skewX, skewY float64) refM {
+	sx, sy := trig.Tan(skewX), trig.Tan(skewY)
+	return refM{
+		a1: (m.a1 + 1) + mul(m.c, sx) - 1,
+		b:  m.b + mul(m.d1+1, sx),
+		c:  mul(m.a1+1, sy) + m.c,
+		d1: mul(m.b, sy) + (m.d1 + 1) - 1,
+		tx: m.tx + mul(m.ty, sx),
+		ty: m.ty + mul(m.tx, sy),
+	}
+}
+
+func (m refM) invert() refM {
+	det := mul(m.a1+1, m.d1+1) - mul(m.b, m.c)
+	return refM{
+		a1: (m.d1+1)/det - 1,
+		b:  -m.b / det,
+		c:  -m.c / det,
+		d1: (m.a1+1)/det - 1,
+		tx: (mul(-(m.d1+1), m.tx) + mul(m.b, m.ty)) / det,
+		ty: (mul(m.c, m.tx) + mul(-(m.a1+1), m.ty)) / det,
+	}
+}
+
+// GeoM rounds each product on its own, as amd64 and wasm do, and not as
+// the compiler would fuse it on arm64: a matrix composed with it places
+// the same on every architecture.
+func TestGeoMIsTheSameEverywhere(t *testing.T) {
+	r := rand.New(rand.NewSource(1))
+	v := func() float64 { return (r.Float64() - 0.5) * math.Pow(10, float64(r.Intn(5)-2)) }
+	check := func(op string, got ggfx.GeoM, want refM) {
+		t.Helper()
+		w := want.elements()
+		for i := range 2 {
+			for j := range 3 {
+				if g := got.Element(i, j); math.Float64bits(g) != math.Float64bits(w[i][j]) {
+					t.Fatalf("%s: element (%d, %d) is %v; want %v", op, i, j, g, w[i][j])
+				}
+			}
+		}
+	}
+	for range 10000 {
+		e := [12]float64{}
+		for i := range e {
+			e[i] = v()
+		}
+		m, o := newRefM(e[0], e[1], e[2], e[3], e[4], e[5]), newRefM(e[6], e[7], e[8], e[9], e[10], e[11])
+		gm, gom := newGeoM(e[0], e[1], e[2], e[3], e[4], e[5]), newGeoM(e[6], e[7], e[8], e[9], e[10], e[11])
+		x, y := v(), v()
+
+		g := gm
+		gx, gy := g.Apply(x, y)
+		if wx, wy := m.apply(x, y); gx != wx || gy != wy {
+			t.Fatalf("Apply(%v, %v): (%v, %v); want (%v, %v)", x, y, gx, gy, wx, wy)
+		}
+
+		g = gm
+		g.Concat(gom)
+		check("Concat", g, m.concat(o))
+
+		g = gm
+		g.Scale(x, y)
+		check("Scale", g, m.scale(x, y))
+
+		g = gm
+		g.Rotate(x)
+		check("Rotate", g, m.rotate(x))
+
+		g = gm
+		g.Skew(x, y)
+		check("Skew", g, m.skew(x, y))
+
+		g = gm
+		g.Invert()
+		check("Invert", g, m.invert())
 	}
 }
 

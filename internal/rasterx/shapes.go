@@ -9,6 +9,8 @@ import (
 	"math"
 
 	"golang.org/x/image/math/fixed"
+
+	"github.com/ironpark/ggfx/internal/trig"
 )
 
 // MaxDx is the Maximum radians a cubic splice is allowed to span
@@ -100,14 +102,14 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 	rotX := points[2] * math.Pi / 180 // Convert degress to radians
 	largeArc := points[3] != 0
 	sweep := points[4] != 0
-	startAngle := Atan2(py-cy, px-cx) - rotX
-	endAngle := Atan2(points[6]-cy, points[5]-cx) - rotX
+	startAngle := trig.Atan2(py-cy, px-cx) - rotX
+	endAngle := trig.Atan2(points[6]-cy, points[5]-cx) - rotX
 	deltaTheta := endAngle - startAngle
 	arcBig := math.Abs(deltaTheta) > math.Pi
 
 	// Approximate ellipse using cubic bezeir splines
-	etaStart := Atan2(Sin(startAngle)/points[1], Cos(startAngle)/points[0])
-	etaEnd := Atan2(Sin(endAngle)/points[1], Cos(endAngle)/points[0])
+	etaStart := trig.Atan2(trig.Sin(startAngle)/points[1], trig.Cos(startAngle)/points[0])
+	etaEnd := trig.Atan2(trig.Sin(endAngle)/points[1], trig.Cos(endAngle)/points[0])
 	deltaEta := etaEnd - etaStart
 	if (arcBig && !largeArc) || (!arcBig && largeArc) { // Go has no boolean XOR
 		if deltaEta < 0 {
@@ -131,10 +133,10 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 	// L. Maisonobe, "Drawing an elliptical arc using polylines, quadratic
 	// or cubic Bezier curves", 2003
 	// https://www.spaceroots.org/documents/elllipse/elliptical-arc.pdf
-	tde := Tan(dEta / 2)
-	alpha := Sin(dEta) * (math.Sqrt(4+float64(3*tde*tde)) - 1) / 3 // Math is fun!
+	tde := trig.Tan(dEta / 2)
+	alpha := trig.Sin(dEta) * (math.Sqrt(4+float64(3*tde*tde)) - 1) / 3 // Math is fun!
 	lx, ly = px, py
-	sinTheta, cosTheta := Sin(rotX), Cos(rotX)
+	sinTheta, cosTheta := trig.Sin(rotX), trig.Cos(rotX)
 	ldx, ldy := ellipsePrime(points[0], points[1], sinTheta, cosTheta, etaStart, cx, cy)
 	for i := 1; i <= segs; i++ {
 		eta := etaStart + float64(dEta*float64(i))
@@ -154,8 +156,8 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 
 // ellipsePrime gives tangent vectors for parameterized elipse; a, b, radii, eta parameter, center cx, cy
 func ellipsePrime(a, b, sinTheta, cosTheta, eta, cx, cy float64) (px, py float64) {
-	bCosEta := b * Cos(eta)
-	aSinEta := a * Sin(eta)
+	bCosEta := b * trig.Cos(eta)
+	aSinEta := a * trig.Sin(eta)
 	px = float64(-aSinEta*cosTheta) - float64(bCosEta*sinTheta)
 	py = float64(-aSinEta*sinTheta) + float64(bCosEta*cosTheta)
 	return
@@ -163,8 +165,8 @@ func ellipsePrime(a, b, sinTheta, cosTheta, eta, cx, cy float64) (px, py float64
 
 // ellipsePointAt gives points for parameterized elipse; a, b, radii, eta parameter, center cx, cy
 func ellipsePointAt(a, b, sinTheta, cosTheta, eta, cx, cy float64) (px, py float64) {
-	aCosEta := a * Cos(eta)
-	bSinEta := b * Sin(eta)
+	aCosEta := a * trig.Cos(eta)
+	bSinEta := b * trig.Sin(eta)
 	px = cx + float64(aCosEta*cosTheta) - float64(bSinEta*sinTheta)
 	py = cy + float64(aCosEta*sinTheta) + float64(bSinEta*cosTheta)
 	return
@@ -178,7 +180,7 @@ func ellipsePointAt(a, b, sinTheta, cosTheta, eta, cx, cy float64) (px, py float
 // and an arbitrary point. The center of the circle is then transformed
 // back to the original coordinates and returned.
 func FindEllipseCenter(ra, rb *float64, rotX, startX, startY, endX, endY float64, sweep, smallArc bool) (cx, cy float64) {
-	cos, sin := Cos(rotX), Sin(rotX)
+	cos, sin := trig.Cos(rotX), trig.Sin(rotX)
 
 	// Move origin to start point
 	nx, ny := endX-startX, endY-startY

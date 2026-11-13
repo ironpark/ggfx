@@ -1,7 +1,7 @@
 # drawing sha256[:12] of the pixels; go test ./internal/rasterx -golden.update
 dest-large 72e48aea4ab78a03f5eddc35
 dest-offset fc2e78d3fde6b8b2741b909f
-gradGV a60e764942c519b0f99737fd
+gradGV 3684354e419bc287c5c03f8c
 roundRect 227d45afb80f4c7079f60b53
 shapeGVD0 73204a8ae6f3407fbbb00885
 shapeGVD1 ea8ebc696ae86df48d5556c0

@@ -16,7 +16,8 @@ package ggfx
 
 import (
 	"fmt"
-	"math"
+
+	"github.com/ironpark/ggfx/internal/trig"
 )
 
 // GeoMDim is a dimension of a GeoM.
@@ -25,6 +26,12 @@ const GeoMDim = 3
 // A GeoM represents a matrix to transform geometry when rendering an image.
 //
 // The initial value is identity.
+//
+// Its methods round as amd64 and wasm do on every architecture: each
+// product that is added is converted to float64, which keeps the compiler
+// from fusing it with the addition as it would on arm64, and Rotate and
+// Skew take their sines, cosines and tangents from internal/trig, not the
+// math package, whose own the compiler fuses.
 type GeoM struct {
 	a_1 float64 // The actual 'a' value minus 1
 	b   float64
@@ -53,7 +60,7 @@ func (g *GeoM) Reset() {
 // In other words, Apply calculates GeoM * (x, y, 1)^T.
 // The return value is x and y values of the result vector.
 func (g *GeoM) Apply(x, y float64) (float64, float64) {
-	return (g.a_1+1)*x + g.b*y + g.tx, g.c*x + (g.d_1+1)*y + g.ty
+	return float64((g.a_1+1)*x) + float64(g.b*y) + g.tx, float64(g.c*x) + float64((g.d_1+1)*y) + g.ty
 }
 
 func (g *GeoM) elements32() (a, b, c, d, tx, ty float32) {
@@ -83,12 +90,12 @@ func (g *GeoM) Element(i, j int) float64 {
 // Concat multiplies a geometry matrix with the other geometry matrix.
 // This is same as multiplying the matrix other and the matrix g in this order.
 func (g *GeoM) Concat(other GeoM) {
-	a := (other.a_1+1)*(g.a_1+1) + other.b*g.c
-	b := (other.a_1+1)*g.b + other.b*(g.d_1+1)
-	tx := (other.a_1+1)*g.tx + other.b*g.ty + other.tx
-	c := other.c*(g.a_1+1) + (other.d_1+1)*g.c
-	d := other.c*g.b + (other.d_1+1)*(g.d_1+1)
-	ty := other.c*g.tx + (other.d_1+1)*g.ty + other.ty
+	a := float64((other.a_1+1)*(g.a_1+1)) + float64(other.b*g.c)
+	b := float64((other.a_1+1)*g.b) + float64(other.b*(g.d_1+1))
+	tx := float64((other.a_1+1)*g.tx) + float64(other.b*g.ty) + other.tx
+	c := float64(other.c*(g.a_1+1)) + float64((other.d_1+1)*g.c)
+	d := float64(other.c*g.b) + float64((other.d_1+1)*(g.d_1+1))
+	ty := float64(other.c*g.tx) + float64((other.d_1+1)*g.ty) + other.ty
 
 	g.a_1 = a - 1
 	g.b = b
@@ -100,19 +107,14 @@ func (g *GeoM) Concat(other GeoM) {
 
 // Scale scales the matrix by (x, y).
 func (g *GeoM) Scale(x, y float64) {
-	a := (g.a_1 + 1) * x
-	b := g.b * x
-	tx := g.tx * x
-	c := g.c * y
-	d := (g.d_1 + 1) * y
-	ty := g.ty * y
-
-	g.a_1 = a - 1
-	g.b = b
-	g.c = c
-	g.d_1 = d - 1
-	g.tx = tx
-	g.ty = ty
+	// Converted, so that a-1 and d-1 are not fused; assigned in place, so
+	// that Scale is still inlined.
+	g.a_1 = float64((g.a_1+1)*x) - 1
+	g.b *= x
+	g.tx *= x
+	g.c *= y
+	g.d_1 = float64((g.d_1+1)*y) - 1
+	g.ty *= y
 }
 
 // Translate translates the matrix by (tx, ty).
@@ -128,14 +130,14 @@ func (g *GeoM) Rotate(theta float64) {
 		return
 	}
 
-	sin, cos := math.Sincos(theta)
+	sin, cos := trig.Sincos(theta)
 
-	a := cos*(g.a_1+1) - sin*g.c
-	b := cos*g.b - sin*(g.d_1+1)
-	tx := cos*g.tx - sin*g.ty
-	c := sin*(g.a_1+1) + cos*g.c
-	d := sin*g.b + cos*(g.d_1+1)
-	ty := sin*g.tx + cos*g.ty
+	a := float64(cos*(g.a_1+1)) - float64(sin*g.c)
+	b := float64(cos*g.b) - float64(sin*(g.d_1+1))
+	tx := float64(cos*g.tx) - float64(sin*g.ty)
+	c := float64(sin*(g.a_1+1)) + float64(cos*g.c)
+	d := float64(sin*g.b) + float64(cos*(g.d_1+1))
+	ty := float64(sin*g.tx) + float64(cos*g.ty)
 
 	g.a_1 = a - 1
 	g.b = b
@@ -147,15 +149,15 @@ func (g *GeoM) Rotate(theta float64) {
 
 // Skew skews the matrix by (skewX, skewY). The unit is radian.
 func (g *GeoM) Skew(skewX, skewY float64) {
-	sx := math.Tan(skewX)
-	sy := math.Tan(skewY)
+	sx := trig.Tan(skewX)
+	sy := trig.Tan(skewY)
 
-	a := (g.a_1 + 1) + g.c*sx
-	b := g.b + (g.d_1+1)*sx
-	c := (g.a_1+1)*sy + g.c
-	d := g.b*sy + (g.d_1 + 1)
-	tx := g.tx + g.ty*sx
-	ty := g.ty + g.tx*sy
+	a := (g.a_1 + 1) + float64(g.c*sx)
+	b := g.b + float64((g.d_1+1)*sx)
+	c := float64((g.a_1+1)*sy) + g.c
+	d := float64(g.b*sy) + (g.d_1 + 1)
+	tx := g.tx + float64(g.ty*sx)
+	ty := g.ty + float64(g.tx*sy)
 
 	g.a_1 = a - 1
 	g.b = b
@@ -166,7 +168,7 @@ func (g *GeoM) Skew(skewX, skewY float64) {
 }
 
 func (g *GeoM) det2x2() float64 {
-	return (g.a_1+1)*(g.d_1+1) - g.b*g.c
+	return float64((g.a_1+1)*(g.d_1+1)) - float64(g.b*g.c)
 }
 
 // IsInvertible returns a boolean value indicating
@@ -187,8 +189,8 @@ func (g *GeoM) Invert() {
 	b := -g.b / det
 	c := -g.c / det
 	d := (g.a_1 + 1) / det
-	tx := (-(g.d_1+1)*g.tx + g.b*g.ty) / det
-	ty := (g.c*g.tx + -(g.a_1+1)*g.ty) / det
+	tx := (float64(-(g.d_1+1)*g.tx) + float64(g.b*g.ty)) / det
+	ty := (float64(g.c*g.tx) + float64(-(g.a_1+1)*g.ty)) / det
 
 	g.a_1 = a - 1
 	g.b = b

@@ -100,6 +100,11 @@ included.
   takes the fill geometry's box, not its outline's; a shape whose box has
   no width or height, as a line's, is not drawn, as SVG says, instead of
   filling with its first stop.
+- A `userSpaceOnUse` gradient is drawn in its own space too, each pixel
+  mapped back through the shape's transform and the gradient's, where the
+  original placed its points and radii forward in device space: under a
+  rotation or skew a radial one is now the ellipse SVG defines, turned as
+  the shape is, and a linear one's stripes lie across its vector.
 - Color names are converted by their 8-bit components, not by the low
   byte of their 16-bit ones (the same for opaque colors).
 - An icon is drawn with a `Painter`, in place of a `rasterx.Dasher`: the

@@ -44,11 +44,12 @@ below.
 - No multiplication is fused with an addition: each product that is
   added is converted to its type, `float64(x*y) + z`, which forbids the
   fused multiply-add the compiler emits on arm64 but not on amd64 or wasm.
-  `Sin`, `Cos`, `Tan` and `Atan2` (`trig.go`) are the math package's,
-  ported under the Go Authors' BSD license with their products so
-  converted: the compiler fuses the math package's own on arm64. So the
-  package draws the same bytes on every architecture
-  (`TestTrigIsTheSameEverywhere`).
+  Its sines, cosines, tangents and arctangents are `internal/trig`'s, the
+  math package's ported under the Go Authors' BSD license with their
+  products so converted: the compiler fuses the math package's own on
+  arm64. So the package draws the same bytes on every architecture
+  (`TestTrigIsTheSameEverywhere` there). `Sin`, `Cos`, `Tan` and `Atan2`,
+  which this package exported in their place, are gone.
 - Paint is typed: a `Paint` is a premultiplied `color.RGBA64`, or a
   `ColorFunc` returning one at each pixel, in place of `interface{}`
   holding a `color.Color` or a `ColorFunc` returning a `color.Color`.
@@ -71,10 +72,13 @@ below.
   pixel mapped back into the gradient's own space. The original took the
   box in device space and mapped only the gradient's transform back, which
   under a rotation or skew drew the gradient in the wrong box. A
-  `UserSpaceOnUse` gradient is still placed by mapping its points forward
-  and its radii as vectors, which is right only where the matrices
-  neither rotate nor skew. `Path.Bounds` is a path's extent, its curves'
-  own, not their control points'.
+  `UserSpaceOnUse` gradient is drawn the same way, each pixel mapped back
+  through the inverse of the user space's matrix times the gradient's;
+  the original mapped its points forward and its radii as vectors, so
+  that under a rotation or skew a radial one stayed a circle, or an
+  ellipse, square to the pixels (`TestUserSpaceRadialGradientIsTransformed`
+  in `svg`). `Path.Bounds` is a path's extent, its curves' own, not their
+  control points'.
 - A radial gradient whose focus is not its center finds each pixel's
   place on the ray from the focus in closed form, with one square root,
   where the original intersected the ray with the circle and took two
@@ -87,9 +91,14 @@ below.
   `RGBA`'s 16-bit premultiplied values and dropped the color's alpha,
   right only for an opaque 8-bit color. A gradient blends its stops'
   colors not premultiplied and their opacities apart, a stop color's
-  alpha part of its opacity, and the first stop, drawn where a repeated
-  gradient's last and first stops meet, takes the gradient's opacity,
-  which it dropped.
+  alpha part of its opacity.
+- Spread is as SVG 1.1 (13.2.4) has it: a repeated gradient takes t
+  modulo 1 and a reflected one t modulo 2, mirrored into [0, 1], each
+  then padded past its first and last stops as one that does not spread.
+  The original blended a repeated gradient's last stop into its first
+  across the wrap, with a weight past 1 beyond the last stop that
+  overflowed the color's bytes into stripes, and dropped the gradient's
+  opacity on the first stop there (`TestGradientSpreadSeam`).
 - A gradient's paint decodes its stops' colors once, not at each pixel,
   and an `NRGBA64` stop color blends by its own 16-bit values, not by
   `RGBA`'s premultiplied ones unpremultiplied.

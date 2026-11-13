@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ironpark/ggfx/internal/rasterx"
+	"github.com/ironpark/ggfx/internal/trig"
 )
 
 // A shape that names markers, as a diagram's edges name the arrowheads
@@ -113,7 +114,7 @@ func vertices(p rasterx.Path) []vertex {
 	var cur, start [2]float64
 	var lastOut float64
 	pt := func(i int) [2]float64 { return [2]float64{float64(p[i]) / 64, float64(p[i+1]) / 64} }
-	dir := func(a, b [2]float64) float64 { return rasterx.Atan2(b[1]-a[1], b[0]-a[0]) }
+	dir := func(a, b [2]float64) float64 { return trig.Atan2(b[1]-a[1], b[0]-a[0]) }
 	// seg is a segment from cur to to, leaving toward in and arriving from
 	// out: a line's are its ends.
 	seg := func(in, out, to [2]float64) {

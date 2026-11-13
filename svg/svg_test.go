@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -299,5 +300,70 @@ func TestBoundingBoxLeavesOutTheStroke(t *testing.T) {
 	// leaves it undrawn.
 	if c := dst.RGBAAt(50, 95); c.A != 0 {
 		t.Errorf("a line stroked by its bounding box: %v; want clear", c)
+	}
+}
+
+// A userSpaceOnUse radial gradient is a circle in its own space, which the
+// shape's transforms and the view turn, skew or stretch: here an ellipse,
+// rotated, and a circle scaled unevenly under a rotated view. Each pixel
+// is gray by its distance from the center over the radius, mapped back
+// from the pixel's center by the inverse of view · transform ·
+// gradientTransform, from black at the center to white at the circle.
+func TestUserSpaceRadialGradientIsTransformed(t *testing.T) {
+	const deg = math.Pi / 180
+	for _, tc := range []struct {
+		name, transform, gradientTransform string
+		// grad is gradientTransform, transform and the view, in turn.
+		grad, elem, view func(*ggfx.GeoM)
+	}{
+		{
+			name:              "rotated",
+			transform:         "rotate(30,50,50)",
+			gradientTransform: "translate(50,50) scale(2,0.5) translate(-50,-50)",
+			grad:              func(g *ggfx.GeoM) { g.Translate(-50, -50); g.Scale(2, 0.5); g.Translate(50, 50) },
+			elem:              func(g *ggfx.GeoM) { g.Translate(-50, -50); g.Rotate(30 * deg); g.Translate(50, 50) },
+			view:              func(g *ggfx.GeoM) { g.Scale(2, 2) },
+		},
+		{
+			name:      "scaled",
+			transform: "translate(50,50) scale(1.8,0.6) translate(-50,-50)",
+			grad:      func(g *ggfx.GeoM) {},
+			elem:      func(g *ggfx.GeoM) { g.Translate(-50, -50); g.Scale(1.8, 0.6); g.Translate(50, 50) },
+			view:      func(g *ggfx.GeoM) { g.Translate(-50, -50); g.Rotate(0.4); g.Scale(2, 2); g.Translate(100, 100) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := parse(t, goldenDoc(`<defs><radialGradient id="g" gradientUnits="userSpaceOnUse" cx="50" cy="50" r="40" gradientTransform="`+tc.gradientTransform+`">
+<stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#fff"/></radialGradient></defs>
+<g transform="`+tc.transform+`"><rect x="-500" y="-500" width="1100" height="1100" fill="url(#g)"/></g>`))
+			var view ggfx.GeoM
+			tc.view(&view)
+			dst := drawInto(d, image.Rect(0, 0, 200, 200), view)
+			var toGrad ggfx.GeoM
+			tc.grad(&toGrad)
+			tc.elem(&toGrad)
+			tc.view(&toGrad)
+			toGrad.Invert()
+			n := 0
+			for y := 5; y < 200; y += 19 {
+				for x := 3; x < 200; x += 17 {
+					gx, gy := toGrad.Apply(float64(x)+0.5, float64(y)+0.5)
+					s := math.Hypot(gx-50, gy-50) / 40
+					want := 255.0
+					if s < 1 {
+						want = 255 * s
+					}
+					if c := dst.RGBAAt(x, y); math.Abs(float64(c.R)-want) > 1 || c.R != c.G || c.R != c.B || c.A != 0xff {
+						t.Errorf("(%d, %d), at %.3f of the radius: %v; want gray %.1f", x, y, s, c, want)
+					}
+					if s < 1 {
+						n++
+					}
+				}
+			}
+			if n < 20 {
+				t.Errorf("only %d samples inside the circle", n)
+			}
+		})
 	}
 }

@@ -6,6 +6,8 @@ package rasterx
 
 import (
 	"golang.org/x/image/math/fixed"
+
+	"github.com/ironpark/ggfx/internal/trig"
 )
 
 // Matrix2D represents an SVG style matrix
@@ -121,7 +123,7 @@ func (a Matrix2D) Scale(x, y float64) Matrix2D {
 func (a Matrix2D) SkewY(theta float64) Matrix2D {
 	return a.Mult(Matrix2D{
 		A: 1,
-		B: Tan(theta),
+		B: trig.Tan(theta),
 		C: 0,
 		D: 1,
 		E: 0,
@@ -133,7 +135,7 @@ func (a Matrix2D) SkewX(theta float64) Matrix2D {
 	return a.Mult(Matrix2D{
 		A: 1,
 		B: 0,
-		C: Tan(theta),
+		C: trig.Tan(theta),
 		D: 1,
 		E: 0,
 		F: 0})
@@ -153,10 +155,10 @@ func (a Matrix2D) Translate(x, y float64) Matrix2D {
 // Rotate rotate the matrix by theta
 func (a Matrix2D) Rotate(theta float64) Matrix2D {
 	return a.Mult(Matrix2D{
-		A: Cos(theta),
-		B: Sin(theta),
-		C: -Sin(theta),
-		D: Cos(theta),
+		A: trig.Cos(theta),
+		B: trig.Sin(theta),
+		C: -trig.Sin(theta),
+		D: trig.Cos(theta),
 		E: 0,
 		F: 0})
 }

@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// The functions here are the math package's sin, cos, tan and atan2, in Go
+// Package trig is the math package's sin, cos, tan and atan2, in Go
 // (sin.go, tan.go, atan.go and atan2.go), with each product converted to
 // float64 so that the compiler does not fuse it with an addition. On arm64
 // it fuses the math package's, which then rounds otherwise than on amd64
-// and wasm, where these return what it does, bit for bit.
-
-package rasterx
+// and wasm, where these return what it does, bit for bit. The rasterizer
+// and GeoM use them so as to draw and place the same on every
+// architecture.
+package trig
 
 import "math"
 
@@ -127,6 +128,34 @@ func Cos(x float64) float64 {
 		y = -y
 	}
 	return y
+}
+
+// Sincos is math.Sincos: Sin and Cos with one reduction.
+func Sincos(x float64) (sin, cos float64) {
+	if x == 0 || math.IsNaN(x) || math.IsInf(x, 0) || math.Abs(x) >= reduceThreshold {
+		return math.Sincos(x)
+	}
+	j, z, sinSign := reduce(x)
+	j &= 7 // octant modulo 2Pi radians (360 degrees)
+	cosSign := false
+	if j > 3 { // reflect in x axis
+		j -= 4
+		sinSign, cosSign = !sinSign, !cosSign
+	}
+	if j > 1 {
+		cosSign = !cosSign
+	}
+	sin, cos = sinPoly(z), cosPoly(z)
+	if j == 1 || j == 2 {
+		sin, cos = cos, sin
+	}
+	if cosSign {
+		cos = -cos
+	}
+	if sinSign {
+		sin = -sin
+	}
+	return sin, cos
 }
 
 // Tan is math.Tan.

@@ -761,3 +761,37 @@ func TestGradientBlendsTranslucentStops(t *testing.T) {
 		t.Errorf("halfway: %v; want %v", got, want)
 	}
 }
+
+// A repeated gradient wraps from its last stop's color to its first's,
+// with no blend between them, and a reflected one mirrors, as SVG 1.1
+// (13.2.4) takes t modulo its period: past the stops, here at 0.2 and 0.8
+// from x = 0 to 10, a pixel is the nearer end's color.
+func TestGradientSpreadSeam(t *testing.T) {
+	red, blue := ColorPaint(color.NRGBA{0xff, 0, 0, 0xff}).Color, ColorPaint(color.NRGBA{0, 0, 0xff, 0xff}).Color
+	g := &Gradient{Points: [5]float64{0, 0, 10, 0, 0}, Matrix: Identity, Units: UserSpaceOnUse,
+		Stops: []GradStop{
+			{StopColor: color.NRGBA{0xff, 0, 0, 0xff}, Offset: 0.2, Opacity: 1},
+			{StopColor: color.NRGBA{0, 0, 0xff, 0xff}, Offset: 0.8, Opacity: 1},
+		}}
+	for _, tc := range []struct {
+		spread SpreadMethod
+		want   map[int]color.RGBA64 // by pixel, at t = (x+0.5)/10
+	}{
+		{RepeatSpread, map[int]color.RGBA64{-2: blue, -1: blue, 0: red, 1: red, 8: blue, 9: blue, 10: red, 11: red, 18: blue, 19: blue, 20: red}},
+		{ReflectSpread, map[int]color.RGBA64{-2: red, -1: red, 0: red, 1: red, 8: blue, 9: blue, 10: blue, 11: blue, 18: red, 19: red, 20: red, 21: red, 28: blue, 29: blue, 30: blue}},
+	} {
+		g.Spread = tc.spread
+		f := g.GetColorFunction(1).Func
+		for x, want := range tc.want {
+			if got := f(x, 0); got != want {
+				t.Errorf("spread %d, x %d: %v; want %v", tc.spread, x, got, want)
+			}
+		}
+		if tc.spread == ReflectSpread {
+			// t = 0.45 and 1.55 mirror each other.
+			if a, b := f(4, 0), f(15, 0); a != b {
+				t.Errorf("reflect: %v at t = 0.45 but %v at 1.55", a, b)
+			}
+		}
+	}
+}
