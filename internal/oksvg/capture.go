@@ -23,7 +23,7 @@ type captured struct {
 
 // capturing reports whether se is kept rather than drawn: inside a
 // clipPath, a mask or a marker being read, or one beginning.
-func (c *IconCursor) capturing(se xml.StartElement) bool {
+func (c *iconCursor) capturing(se xml.StartElement) bool {
 	if c.capture != nil {
 		c.captureDepth++
 		c.capture.defs = append(c.capture.defs, definition{Tag: se.Name.Local, Attrs: se.Attr})
@@ -55,7 +55,7 @@ func (c *IconCursor) capturing(se xml.StartElement) bool {
 
 // endCapture reports whether se ends an element kept by capturing, or the
 // element it began.
-func (c *IconCursor) endCapture(se xml.EndElement) bool {
+func (c *iconCursor) endCapture(se xml.EndElement) bool {
 	if c.capture == nil {
 		return false
 	}
@@ -87,10 +87,10 @@ func urlID(v string) string {
 // the document's, under the transform m and the default style: what a clip
 // or mask covers, or a marker's shapes. A marker's are added to the
 // document's paths too, as add says; a clip's are returned.
-func (c *IconCursor) expandCaptured(def *captured, m rasterx.Matrix2D, add bool) ([]SvgPath, error) {
+func (c *iconCursor) expandCaptured(def *captured, m rasterx.Matrix2D, add bool) ([]SvgPath, error) {
 	start := len(c.icon.SVGPaths)
 	stack := c.StyleStack
-	base := DefaultStyle
+	base := defaultStyle
 	base.mAdder.M = m
 	c.StyleStack = []PathStyle{base}
 	// The element's own transform, as a clipPath's, places what it holds.

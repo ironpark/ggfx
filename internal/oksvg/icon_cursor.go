@@ -7,33 +7,31 @@ package oksvg
 import (
 	"encoding/xml"
 	"errors"
-	"fmt"
 	"image/color"
-	"log"
 	"math"
 	"strings"
 
 	"github.com/srwiley/rasterx"
 )
 
-// IconCursor is used while parsing SVG files.
-type IconCursor struct {
-	PathCursor
-	icon                                                 *SvgIcon
-	StyleStack                                           []PathStyle
-	grad                                                 *rasterx.Gradient
-	inTitleText, inDescText, inGrad, inDefs, inDefsStyle bool
-	currentDef                                           []definition
-	useExpansions                                        int
-	capture                                              *captured // the clip, mask or marker being read
-	captureDepth                                         int
+// iconCursor is used while parsing SVG files.
+type iconCursor struct {
+	pathCursor
+	icon                        *SvgIcon
+	StyleStack                  []PathStyle
+	grad                        *rasterx.Gradient
+	inGrad, inDefs, inDefsStyle bool
+	currentDef                  []definition
+	useExpansions               int
+	capture                     *captured // the clip, mask or marker being read
+	captureDepth                int
 }
 
 // ReadGradURL reads an SVG format gradient url
 // Since the context of the gradient can affect the colors
 // the current fill or line color is passed in and used in
 // the case of a nil stopClor value
-func (c *IconCursor) ReadGradURL(v string, defaultColor any) (grad rasterx.Gradient, ok bool) {
+func (c *iconCursor) ReadGradURL(v string, defaultColor any) (grad rasterx.Gradient, ok bool) {
 	if strings.HasPrefix(v, "url(") && strings.HasSuffix(v, ")") {
 		urlStr := strings.TrimSpace(v[4 : len(v)-1])
 		if strings.HasPrefix(urlStr, "#") {
@@ -48,7 +46,7 @@ func (c *IconCursor) ReadGradURL(v string, defaultColor any) (grad rasterx.Gradi
 }
 
 // ReadGradAttr reads an SVG gradient attribute
-func (c *IconCursor) ReadGradAttr(attr xml.Attr) (err error) {
+func (c *iconCursor) ReadGradAttr(attr xml.Attr) (err error) {
 	switch attr.Name.Local {
 	case "gradientTransform":
 		c.grad.Matrix, err = c.parseTransform(attr.Value)
@@ -75,7 +73,7 @@ func (c *IconCursor) ReadGradAttr(attr xml.Attr) (err error) {
 // PushStyle parses the style element, and push it on the style stack. Only color and opacity are supported
 // for fill. Note that this parses both the contents of a style attribute plus
 // direct fill and opacity attributes.
-func (c *IconCursor) PushStyle(attrs []xml.Attr) error {
+func (c *iconCursor) PushStyle(attrs []xml.Attr) error {
 	var pairs []string
 	var className string
 	for _, attr := range attrs {
@@ -116,7 +114,7 @@ func (c *IconCursor) PushStyle(attrs []xml.Attr) error {
 	return nil
 }
 
-func (c *IconCursor) readTransformAttr(m1 rasterx.Matrix2D, k string) (rasterx.Matrix2D, error) {
+func (c *iconCursor) readTransformAttr(m1 rasterx.Matrix2D, k string) (rasterx.Matrix2D, error) {
 	ln := len(c.points)
 	switch k {
 	case "rotate":
@@ -175,7 +173,7 @@ func (c *IconCursor) readTransformAttr(m1 rasterx.Matrix2D, k string) (rasterx.M
 	return m1, nil
 }
 
-func (c *IconCursor) parseTransform(v string) (rasterx.Matrix2D, error) {
+func (c *iconCursor) parseTransform(v string) (rasterx.Matrix2D, error) {
 	ts := strings.Split(v, ")")
 	m1 := c.StyleStack[len(c.StyleStack)-1].mAdder.M
 	for _, t := range ts {
@@ -199,7 +197,7 @@ func (c *IconCursor) parseTransform(v string) (rasterx.Matrix2D, error) {
 	return m1, nil
 }
 
-func (c *IconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
+func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 	switch k {
 	case "fill":
 		gradient, ok := c.ReadGradURL(v, curStyle.fillerColor)
@@ -343,7 +341,7 @@ func (c *IconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 	return nil
 }
 
-func (c *IconCursor) readStartElement(se xml.StartElement) (err error) {
+func (c *iconCursor) readStartElement(se xml.StartElement) error {
 	if c.capturing(se) {
 		return nil
 	}
@@ -371,28 +369,19 @@ func (c *IconCursor) readStartElement(se xml.StartElement) (err error) {
 	}
 	df, ok := drawFuncs[se.Name.Local]
 	if !ok {
-		errStr := "Cannot process svg element " + se.Name.Local
-		if c.returnError(errStr) {
-			return errors.New(errStr)
-		}
-		return nil
+		return errors.New("Cannot process svg element " + se.Name.Local)
 	}
-	err = df(c, se.Attr)
-	if err != nil {
-		e := fmt.Sprintf("error during processing svg element %s: %s", se.Name.Local, err.Error())
-		if c.returnError(e) {
-			err = errors.New(e)
-		}
-		err = nil
-	}
-
+	// An element that fails to draw is skipped, not an error, as the
+	// original had it: it built an error there in strict mode but then
+	// discarded it.
+	_ = df(c, se.Attr)
 	c.addPath(se.Name.Local)
-	return
+	return nil
 }
 
 // addPath keeps the path the element tag drew, if it drew one, under the
 // style on top of the stack, and the markers the style puts on it.
-func (c *IconCursor) addPath(tag string) {
+func (c *iconCursor) addPath(tag string) {
 	if len(c.Path) == 0 {
 		return
 	}
@@ -404,7 +393,7 @@ func (c *IconCursor) addPath(tag string) {
 	c.addMarkers(tag, pathCopy, style)
 }
 
-func (c *IconCursor) adaptClasses(pathStyle *PathStyle, className string) error {
+func (c *iconCursor) adaptClasses(pathStyle *PathStyle, className string) error {
 	if className == "" || len(c.icon.classes) == 0 {
 		return nil
 	}
@@ -414,15 +403,4 @@ func (c *IconCursor) adaptClasses(pathStyle *PathStyle, className string) error 
 		}
 	}
 	return nil
-}
-
-func (c *IconCursor) returnError(errMsg string) bool {
-	if c.ErrorMode == StrictErrorMode {
-		return true
-	}
-	if c.ErrorMode == WarnErrorMode {
-		log.Println(errMsg)
-	}
-
-	return false
 }

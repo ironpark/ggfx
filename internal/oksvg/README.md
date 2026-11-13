@@ -59,6 +59,13 @@ included.
   style, not the shape's.
 - Mechanical modernizations applied by `go fix` (e.g. `interface{}` to
   `any`).
+- Trimmed to what the `svg` package uses: `ReadIcon`,
+  `ReadReplacingCurrentColor`, `SvgIcon.SetTarget`, `SvgPath.Draw` and the
+  path color getters and setters are removed, as is the collection of
+  `<title>` and `<desc>` text. `ErrorMode` is removed with them:
+  `ReadIconStream` always behaves as the original's `StrictErrorMode`,
+  failing on an element or path command it does not handle. Types and
+  helpers used only inside the package are unexported.
 - The original license headers are replaced with SPDX-style headers
   crediting the original authors.
 
@@ -68,17 +75,17 @@ This package implements a subset of SVG 1.1 and does not yet cover
 everything that the [OpenType SVG table
 specification](https://learn.microsoft.com/en-us/typography/opentype/spec/svg)
 allows in glyph documents. The SVG documents in current Noto Color Emoji
-fonts stay within the supported subset, but other fonts may not. Note that
-parsing with `IgnoreErrorMode` skips unsupported constructs silently, so a
-glyph using them renders with missing shapes or wrong colors rather than
-failing.
+fonts stay within the supported subset, but other fonts may not. Unsupported
+elements, and style values that fail to parse, fail the whole document, but
+unknown attributes are skipped silently, and a shape whose geometry fails to parse is
+dropped or drawn in part, so a document using them renders with missing shapes or
+wrong colors rather than failing.
 
 Required by the OpenType SVG specification but not implemented:
 
 - `currentColor`. The specification requires it, initialized to the text
-  foreground color. `ReadReplacingCurrentColor` substitutes it textually
-  before parsing, but the `svg` package and ggui's glyph drawing use `ReadIconStream`, and
-  gradient stops do not inherit it.
+  foreground color. It is not substituted or inherited anywhere, gradient
+  stops included.
 - `<image>` elements with embedded base64 PNG or JPEG data.
 - The `fill-rule` property. `evenodd` is not parsed; all paths are filled
   with the nonzero rule.
@@ -91,7 +98,8 @@ Optional in the specification but strongly recommended, not implemented:
 
 - The CSS `var()` function with a fallback value, and CPAL palette colors
   referenced as `--color<N>` custom properties. A color value using
-  `var()` fails to parse and is dropped instead of applying the fallback.
+  `var()` fails to parse, failing the document, instead of applying the
+  fallback.
 - Inline `style` attributes on gradient `<stop>` elements
   (`style="stop-color:..."`). Inline styles are parsed on shape and group
   elements, but stops read only the `offset`, `stop-color`, and
@@ -122,5 +130,5 @@ gradients, and presentation attributes. The implementation cost varies:
   event model.
 
 Elements banned by the specification (`<text>`, `<foreignObject>`,
-`<switch>`, `<script>`, `<a>`, `<view>`) must be ignored by renderers; the
-parser's unknown-element skipping already handles them.
+`<switch>`, `<script>`, `<a>`, `<view>`) must be ignored by renderers; this
+parser instead fails on them, as on any element it does not know.

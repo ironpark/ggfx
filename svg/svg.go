@@ -31,7 +31,7 @@ type Document struct {
 // Parse reads an SVG document. It fails on what it cannot draw rather than
 // drawing without it.
 func Parse(r io.Reader) (*Document, error) {
-	icon, err := oksvg.ReadIconStream(r, oksvg.StrictErrorMode)
+	icon, err := oksvg.ReadIconStream(r)
 	if err != nil {
 		return nil, fmt.Errorf("svg: %w", err)
 	}

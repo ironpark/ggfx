@@ -23,7 +23,7 @@ var markerShapes = map[string]bool{"path": true, "line": true, "polyline": true,
 
 // addMarkers draws, after the shape tag drew as p in style, the markers
 // the style names.
-func (c *IconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) {
+func (c *iconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) {
 	if style.markers == [3]string{} || !markerShapes[tag] {
 		return
 	}

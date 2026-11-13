@@ -5,13 +5,11 @@
 package oksvg
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"image/color"
 	"io"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 
@@ -21,17 +19,12 @@ import (
 
 // ReadIconStream reads the Icon from the given io.Reader.
 // This only supports a sub-set of SVG, but
-// is enough to draw many icons. If errMode is provided,
-// the first value determines if the icon ignores, errors out, or logs a warning
-// if it does not handle an element found in the icon file. Ignore warnings is
-// the default if no ErrorMode value is provided.
-func ReadIconStream(stream io.Reader, errMode ...ErrorMode) (*SvgIcon, error) {
+// is enough to draw many icons. It fails on an element or a path command
+// it does not handle.
+func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 	icon := &SvgIcon{Defs: make(map[string][]definition), Grads: make(map[string]*rasterx.Gradient), Transform: rasterx.Identity,
 		clips: map[string]*captured{}, markers: map[string]*captured{}}
-	cursor := &IconCursor{StyleStack: []PathStyle{DefaultStyle}, icon: icon}
-	if len(errMode) > 0 {
-		cursor.ErrorMode = errMode[0]
-	}
+	cursor := &iconCursor{StyleStack: []PathStyle{defaultStyle}, icon: icon}
 	var classInfo string
 	decoder := xml.NewDecoder(stream)
 	for {
@@ -71,10 +64,6 @@ func ReadIconStream(stream io.Reader, errMode ...ErrorMode) (*SvgIcon, error) {
 						Tag: "endg",
 					})
 				}
-			case "title":
-				cursor.inTitleText = false
-			case "desc":
-				cursor.inDescText = false
 			case "defs":
 				if len(cursor.currentDef) > 0 {
 					cursor.icon.Defs[cursor.currentDef[0].ID] = cursor.currentDef
@@ -94,12 +83,6 @@ func ReadIconStream(stream io.Reader, errMode ...ErrorMode) (*SvgIcon, error) {
 				}
 			}
 		case xml.CharData:
-			if cursor.inTitleText {
-				icon.Titles[len(icon.Titles)-1] += string(se)
-			}
-			if cursor.inDescText {
-				icon.Descriptions[len(icon.Descriptions)-1] += string(se)
-			}
 			if cursor.inDefsStyle {
 				classInfo = string(se)
 			}
@@ -108,46 +91,8 @@ func ReadIconStream(stream io.Reader, errMode ...ErrorMode) (*SvgIcon, error) {
 	return icon, nil
 }
 
-// ReadReplacingCurrentColor replaces currentColor value with specified value and loads SvgIcon as ReadIconStream do.
-// currentColor value should be valid hex, rgb or named color value.
-func ReadReplacingCurrentColor(stream io.Reader, currentColor string, errMode ...ErrorMode) (icon *SvgIcon, err error) {
-	var (
-		data []byte
-	)
-
-	if data, err = io.ReadAll(stream); err != nil {
-		return nil, fmt.Errorf("%w: read data: %v", errParamMismatch, err)
-	}
-
-	if currentColor != "" && strings.Contains(string(data), "currentColor") {
-		data = []byte(strings.ReplaceAll(string(data), "currentColor", currentColor))
-	}
-
-	if icon, err = ReadIconStream(bytes.NewBuffer(data), errMode...); err != nil {
-		return nil, fmt.Errorf("%w: load: %v", errParamMismatch, err)
-	}
-
-	return icon, nil
-}
-
-// ReadIcon reads the Icon from the named file.
-// This only supports a sub-set of SVG, but is enough to draw many icons.
-// If errMode is provided, the first value determines if the icon ignores, errors out, or logs a warning
-// if it does not handle an element found in the icon file.
-// Ignore warnings is the default if no ErrorMode value is provided.
-func ReadIcon(iconFile string, errMode ...ErrorMode) (*SvgIcon, error) {
-	fin, errf := os.Open(iconFile)
-	if errf != nil {
-		return nil, errf
-	}
-	defer func() {
-		_ = fin.Close()
-	}()
-	return ReadIconStream(fin, errMode...)
-}
-
-// ParseSVGColorNum reads the SVG color string e.g. #FBD9BD
-func ParseSVGColorNum(colorStr string) (r, g, b uint8, err error) {
+// parseSVGColorNum reads the SVG color string e.g. #FBD9BD
+func parseSVGColorNum(colorStr string) (r, g, b uint8, err error) {
 	colorStr = strings.TrimPrefix(colorStr, "#")
 	var t uint64
 	if len(colorStr) != 6 {
@@ -279,7 +224,7 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 	}
 
 	if colorStr[0] == '#' {
-		r, g, b, err := ParseSVGColorNum(colorStr)
+		r, g, b, err := parseSVGColorNum(colorStr)
 		if err != nil {
 			return nil, err
 		}

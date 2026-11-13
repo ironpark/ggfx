@@ -6,7 +6,6 @@ package oksvg
 
 import (
 	"errors"
-	"log"
 	"math"
 	"unicode"
 
@@ -15,32 +14,16 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-type (
-	// ErrorMode is the for setting how the parser reacts to unparsed elements
-	ErrorMode uint8
-	// PathCursor is used to parse SVG format path strings into a rasterx Path
-	PathCursor struct {
-		rasterx.Path
-		placeX, placeY         float64
-		cntlPtX, cntlPtY       float64
-		pathStartX, pathStartY float64
-		points                 []float64
-		lastKey                uint8
-		ErrorMode              ErrorMode
-		inPath                 bool
-	}
-)
-
-const (
-	// IgnoreErrorMode skips un-parsed SVG elements.
-	IgnoreErrorMode ErrorMode = iota
-
-	// WarnErrorMode outputs a warning when an un-parsed SVG element is found.
-	WarnErrorMode
-
-	// StrictErrorMode causes an error when an un-parsed SVG element is found.
-	StrictErrorMode
-)
+// pathCursor is used to parse SVG format path strings into a rasterx Path
+type pathCursor struct {
+	rasterx.Path
+	placeX, placeY         float64
+	cntlPtX, cntlPtY       float64
+	pathStartX, pathStartY float64
+	points                 []float64
+	lastKey                uint8
+	inPath                 bool
+}
 
 var (
 	errParamMismatch  = errors.New("param mismatch")
@@ -49,7 +32,7 @@ var (
 )
 
 // ReadFloat reads a floating point value and adds it to the cursor's points slice.
-func (c *PathCursor) ReadFloat(numStr string) error {
+func (c *pathCursor) ReadFloat(numStr string) error {
 	var last int
 	isFirst := true
 	for i, n := range numStr {
@@ -76,7 +59,7 @@ func (c *PathCursor) ReadFloat(numStr string) error {
 
 // GetPoints reads a set of floating point values from the SVG format number string,
 // and add them to the cursor's points slice.
-func (c *PathCursor) GetPoints(dataPoints string) error {
+func (c *pathCursor) GetPoints(dataPoints string) error {
 	lastIndex := -1
 	c.points = c.points[0:0]
 	lr := ' '
@@ -106,8 +89,8 @@ func (c *PathCursor) GetPoints(dataPoints string) error {
 }
 
 // EllipseAt adds a path of an elipse centered at cx, cy of radius rx and ry
-// to the PathCursor
-func (c *PathCursor) EllipseAt(cx, cy, rx, ry float64) {
+// to the pathCursor
+func (c *pathCursor) EllipseAt(cx, cy, rx, ry float64) {
 	c.placeX, c.placeY = cx+rx, cy
 	c.points = c.points[0:0]
 	c.points = append(c.points, rx, ry, 0.0, 1.0, 0.0, c.placeX, c.placeY)
@@ -118,8 +101,8 @@ func (c *PathCursor) EllipseAt(cx, cy, rx, ry float64) {
 	c.Path.Stop(true)
 }
 
-// AddArcFromA adds a path of an arc element to the cursor path to the PathCursor
-func (c *PathCursor) AddArcFromA(points []float64) {
+// AddArcFromA adds a path of an arc element to the cursor path to the pathCursor
+func (c *pathCursor) AddArcFromA(points []float64) {
 	cx, cy := rasterx.FindEllipseCenter(&points[0], &points[1], points[2]*math.Pi/180, c.placeX,
 		c.placeY, points[5], points[6], points[4] == 0, points[3] == 0)
 	c.placeX, c.placeY = rasterx.AddArc(c.points, cx, cy, c.placeX, c.placeY, &c.Path)
@@ -127,8 +110,8 @@ func (c *PathCursor) AddArcFromA(points []float64) {
 
 // CompilePath translates the svgPath description string into a rasterx path.
 // All valid SVG path elements are interpreted to rasterx equivalents.
-// The resulting path element is stored in the PathCursor.
-func (c *PathCursor) CompilePath(svgPath string) error {
+// The resulting path element is stored in the pathCursor.
+func (c *pathCursor) CompilePath(svgPath string) error {
 	c.init()
 	lastIndex := -1
 	for i, v := range svgPath {
@@ -153,14 +136,14 @@ func reflect(px, py, rx, ry float64) (x, y float64) {
 	return px*2 - rx, py*2 - ry
 }
 
-func (c *PathCursor) valsToAbs(last float64) {
+func (c *pathCursor) valsToAbs(last float64) {
 	for i := 0; i < len(c.points); i++ {
 		last += c.points[i]
 		c.points[i] = last
 	}
 }
 
-func (c *PathCursor) pointsToAbs(sz int) {
+func (c *pathCursor) pointsToAbs(sz int) {
 	lastX := c.placeX
 	lastY := c.placeY
 	for j := 0; j < len(c.points); j += sz {
@@ -173,7 +156,7 @@ func (c *PathCursor) pointsToAbs(sz int) {
 	}
 }
 
-func (c *PathCursor) hasSetsOrMore(sz int, rel bool) bool {
+func (c *pathCursor) hasSetsOrMore(sz int, rel bool) bool {
 	if !(len(c.points) >= sz && len(c.points)%sz == 0) {
 		return false
 	}
@@ -183,7 +166,7 @@ func (c *PathCursor) hasSetsOrMore(sz int, rel bool) bool {
 	return true
 }
 
-func (c *PathCursor) reflectControlQuad() {
+func (c *pathCursor) reflectControlQuad() {
 	switch c.lastKey {
 	case 'q', 'Q', 'T', 't':
 		c.cntlPtX, c.cntlPtY = reflect(c.placeX, c.placeY, c.cntlPtX, c.cntlPtY)
@@ -192,7 +175,7 @@ func (c *PathCursor) reflectControlQuad() {
 	}
 }
 
-func (c *PathCursor) reflectControlCube() {
+func (c *pathCursor) reflectControlCube() {
 	switch c.lastKey {
 	case 'c', 'C', 's', 'S':
 		c.cntlPtX, c.cntlPtY = reflect(c.placeX, c.placeY, c.cntlPtX, c.cntlPtY)
@@ -203,7 +186,7 @@ func (c *PathCursor) reflectControlCube() {
 
 // addSeg decodes an SVG seqment string into equivalent raster path commands saved
 // in the cursor's Path
-func (c *PathCursor) addSeg(segString string) error {
+func (c *pathCursor) addSeg(segString string) error {
 	// Parse the string describing the numeric points in SVG format
 	if err := c.GetPoints(segString[1:]); err != nil {
 		return err
@@ -374,19 +357,14 @@ func (c *PathCursor) addSeg(segString string) error {
 			c.AddArcFromA(c.points[i:])
 		}
 	default:
-		if c.ErrorMode == StrictErrorMode {
-			return errCommandUnknown
-		}
-		if c.ErrorMode == WarnErrorMode {
-			log.Println("Ignoring svg command " + string(k))
-		}
+		return errCommandUnknown
 	}
 	// So we know how to extend some segment types
 	c.lastKey = k
 	return nil
 }
 
-func (c *PathCursor) init() {
+func (c *pathCursor) init() {
 	c.placeX = 0.0
 	c.placeY = 0.0
 	c.points = c.points[0:0]

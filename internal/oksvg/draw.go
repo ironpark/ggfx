@@ -7,7 +7,6 @@ package oksvg
 import (
 	"encoding/xml"
 	"errors"
-	"log"
 	"strings"
 
 	"github.com/srwiley/rasterx"
@@ -15,7 +14,7 @@ import (
 )
 
 // svgFunc defines function interface to use as drawing implementation.
-type svgFunc func(c *IconCursor, attrs []xml.Attr) error
+type svgFunc func(c *iconCursor, attrs []xml.Attr) error
 
 var (
 	drawFuncs = map[string]svgFunc{
@@ -29,15 +28,15 @@ var (
 		"polyline":       polylineF,
 		"polygon":        polygonF,
 		"path":           pathF,
-		"desc":           descF,
+		"desc":           gF, // title and desc are read past
 		"defs":           defsF,
 		"style":          styleF,
-		"title":          titleF,
+		"title":          gF,
 		"linearGradient": linearGradientF,
 		"radialGradient": radialGradientF,
 	}
 
-	svgF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	svgF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		c.icon.ViewBox.X = 0
 		c.icon.ViewBox.Y = 0
 		c.icon.ViewBox.W = 0
@@ -72,8 +71,8 @@ var (
 		}
 		return nil
 	}
-	gF    svgFunc = func(*IconCursor, []xml.Attr) error { return nil } // g does nothing but push the style
-	rectF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	gF    svgFunc = func(*iconCursor, []xml.Attr) error { return nil } // g does nothing but push the style
+	rectF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var x, y, w, h, rx, ry float64
 		var setRx, setRy bool
 		var err error
@@ -110,7 +109,7 @@ var (
 		rasterx.AddRoundRect(x, y, w+x, h+y, rx, ry, 0, rasterx.RoundGap, &c.Path)
 		return nil
 	}
-	circleF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	circleF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var cx, cy, rx, ry float64
 		var err error
 		for _, attr := range attrs {
@@ -137,7 +136,7 @@ var (
 		c.EllipseAt(cx, cy, rx, ry)
 		return nil
 	}
-	lineF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	lineF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var x1, x2, y1, y2 float64
 		var err error
 		for _, attr := range attrs {
@@ -163,7 +162,7 @@ var (
 			Y: fixed.Int26_6((y2) * 64)})
 		return nil
 	}
-	polylineF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	polylineF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var err error
 		for _, attr := range attrs {
 			switch attr.Name.Local {
@@ -189,14 +188,14 @@ var (
 		}
 		return nil
 	}
-	polygonF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	polygonF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		err := polylineF(c, attrs)
 		if len(c.points) > 4 {
 			c.Path.Stop(true)
 		}
 		return err
 	}
-	pathF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	pathF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var err error
 		for _, attr := range attrs {
 			switch attr.Name.Local {
@@ -209,25 +208,15 @@ var (
 		}
 		return nil
 	}
-	descF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
-		c.inDescText = true
-		c.icon.Descriptions = append(c.icon.Descriptions, "")
-		return nil
-	}
-	titleF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
-		c.inTitleText = true
-		c.icon.Titles = append(c.icon.Titles, "")
-		return nil
-	}
-	defsF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	defsF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		c.inDefs = true
 		return nil
 	}
-	styleF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	styleF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		c.inDefsStyle = true
 		return nil
 	}
-	linearGradientF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	linearGradientF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var err error
 		c.inGrad = true
 		c.grad = &rasterx.Gradient{Points: [5]float64{0, 0, 1, 0, 0},
@@ -258,7 +247,7 @@ var (
 		}
 		return nil
 	}
-	radialGradientF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	radialGradientF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		c.inGrad = true
 		c.grad = &rasterx.Gradient{Points: [5]float64{0.5, 0.5, 0.5, 0.5, 0.5},
 			IsRadial: true, Bounds: c.icon.ViewBox, Matrix: rasterx.Identity}
@@ -300,7 +289,7 @@ var (
 		}
 		return nil
 	}
-	stopF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	stopF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var err error
 		if c.inGrad {
 			stop := rasterx.GradStop{Opacity: 1.0}
@@ -322,7 +311,7 @@ var (
 		}
 		return nil
 	}
-	useF svgFunc = func(c *IconCursor, attrs []xml.Attr) error {
+	useF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		var (
 			href string
 			x, y float64
@@ -362,7 +351,7 @@ var (
 // clip, a mask or a marker expands one, each under the style on top of the
 // stack. The expansion is bounded: a cyclic reference recurses until the
 // stack overflows, and nested uses expand exponentially.
-func (c *IconCursor) expandDefs(defs []definition) error {
+func (c *iconCursor) expandDefs(defs []definition) error {
 	const maxUseExpansions = 10000
 	c.useExpansions += len(defs)
 	if c.useExpansions > maxUseExpansions {
@@ -379,13 +368,7 @@ func (c *IconCursor) expandDefs(defs []definition) error {
 		}
 		df, ok := drawFuncs[def.Tag]
 		if !ok {
-			errStr := "Cannot process svg element " + def.Tag
-			if c.ErrorMode == StrictErrorMode {
-				return errors.New(errStr)
-			} else if c.ErrorMode == WarnErrorMode {
-				log.Println(errStr)
-			}
-			return nil
+			return errors.New("Cannot process svg element " + def.Tag)
 		}
 		if err := df(c, def.Attrs); err != nil {
 			return err

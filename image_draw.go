@@ -24,7 +24,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/render"
-	"github.com/ironpark/ggfx/internal/scratch"
 )
 
 func canSkipMipmap(det float32, filter builtinshader.Filter) bool {
@@ -311,7 +310,7 @@ func (i *Image) indices32[I Index](indices []I) []uint32 {
 	if is, ok := any(indices).([]uint32); ok {
 		return is
 	}
-	i.tmpIndices = scratch.Resize(i.tmpIndices, len(indices))
+	i.tmpIndices = resizeScratch(i.tmpIndices, len(indices))
 	is := i.tmpIndices
 	if is16, ok := any(indices).([]uint16); ok {
 		graphics.WidenIndices(is, is16)
@@ -657,7 +656,7 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 }
 
 func (i *Image) ensureTmpVertices(n int) []float32 {
-	i.tmpVertices = scratch.Resize(i.tmpVertices, n)
+	i.tmpVertices = resizeScratch(i.tmpVertices, n)
 	return i.tmpVertices
 }
 
@@ -683,4 +682,14 @@ func checkUniformBlock(shader *Shader, block *Uniforms, uniforms map[string]any)
 	if block.shader != shader {
 		panic("ggfx: UniformBlock must be created by the shader it is drawn with")
 	}
+}
+
+// resizeScratch returns a slice of length n backed by s's array when it is big enough.
+// Otherwise it allocates a new slice without copying s's contents,
+// so it is only for buffers whose contents need not be preserved.
+func resizeScratch[T any](s []T, n int) []T {
+	if cap(s) >= n {
+		return s[:n]
+	}
+	return make([]T, n)
 }

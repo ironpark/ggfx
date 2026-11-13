@@ -18,11 +18,6 @@ type SvgPath struct {
 	Path rasterx.Path
 }
 
-// Draw the compiled SvgPath into the Dasher.
-func (svgp *SvgPath) Draw(r *rasterx.Dasher, opacity float64) {
-	svgp.DrawTransformed(r, opacity, rasterx.Identity)
-}
-
 // DrawTransformed draws the compiled SvgPath into the Dasher while applying transform t.
 func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D) {
 	svgp.drawThrough(r, opacity, t, nil)
@@ -33,7 +28,9 @@ func (svgp *SvgPath) DrawTransformed(r *rasterx.Dasher, opacity float64, t raste
 func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.Matrix2D, mask *image.Alpha) {
 	m := svgp.mAdder.M
 	svgp.mAdder.M = t.Mult(m)
-	defer func() { svgp.mAdder.M = m }() // Restore untransformed matrix
+	// Restore the untransformed matrix, and let go of r, which holds the
+	// destination image.
+	defer func() { svgp.mAdder.M, svgp.mAdder.Adder = m, nil }()
 	if svgp.fillerColor != nil {
 		r.Clear()
 		rf := &r.Filler
@@ -63,11 +60,11 @@ func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.M
 		svgp.mAdder.Adder = r
 		lineGap := svgp.LineGap
 		if lineGap == nil {
-			lineGap = DefaultStyle.LineGap
+			lineGap = defaultStyle.LineGap
 		}
 		lineCap := svgp.LineCap
 		if lineCap == nil {
-			lineCap = DefaultStyle.LineCap
+			lineCap = defaultStyle.LineCap
 		}
 		leadLineCap := lineCap
 		if svgp.LeadLineCap != nil {
@@ -92,24 +89,4 @@ func (svgp *SvgPath) drawThrough(r *rasterx.Dasher, opacity float64, t rasterx.M
 		}
 		r.Draw()
 	}
-}
-
-// GetFillColor returns the fill color of the SvgPath if one is defined and otherwise returns colornames.Black
-func (svgp *SvgPath) GetFillColor() color.Color {
-	return getColor(svgp.fillerColor)
-}
-
-// GetLineColor returns the stroke color of the SvgPath if one is defined and otherwise returns colornames.Black
-func (svgp *SvgPath) GetLineColor() color.Color {
-	return getColor(svgp.linerColor)
-}
-
-// SetFillColor sets the fill color of the SvgPath
-func (svgp *SvgPath) SetFillColor(clr color.Color) {
-	svgp.fillerColor = clr
-}
-
-// SetLineColor sets the line color of the SvgPath
-func (svgp *SvgPath) SetLineColor(clr color.Color) {
-	svgp.linerColor = clr
 }

@@ -29,7 +29,7 @@ type clipUse struct {
 
 // compileClip places u's shapes in the user space m of the element naming
 // it.
-func (c *IconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
+func (c *iconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
 	paths, err := c.expandCaptured(u.def, m, false)
 	if err != nil {
 		return err
