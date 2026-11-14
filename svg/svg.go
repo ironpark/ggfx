@@ -36,6 +36,35 @@ func Parse(r io.Reader) (*Document, error) {
 	return &Document{icon: icon}, nil
 }
 
+// ErrNoBinaryForm is why MarshalBinary has nothing to return for a document.
+var ErrNoBinaryForm = oksvg.ErrNoBinaryForm
+
+// MarshalBinary returns what parsing arrived at, for a document known ahead
+// of time, an icon of a library say, to be kept without its source and read
+// back by UnmarshalBinary without parsing it. It holds a document of shapes
+// painted in plain colors; one with gradients, clip paths, masks or markers
+// has no binary form, and the error is ErrNoBinaryForm.
+//
+// The form is versioned: a later ggfx reads what an earlier one wrote.
+func (d *Document) MarshalBinary() ([]byte, error) {
+	b, err := d.icon.AppendBinary(nil)
+	if err != nil {
+		return nil, fmt.Errorf("svg: %w", err)
+	}
+	return b, nil
+}
+
+// UnmarshalBinary makes d the document MarshalBinary wrote as data, which
+// draws as the one it was written from does.
+func (d *Document) UnmarshalBinary(data []byte) error {
+	icon, err := oksvg.ReadBinary(data)
+	if err != nil {
+		return fmt.Errorf("svg: %w", err)
+	}
+	d.icon = icon
+	return nil
+}
+
 // ViewBox returns the rectangle of the document's user space that its
 // viewBox attribute names as the picture.
 func (d *Document) ViewBox() (x, y, width, height float64) {
