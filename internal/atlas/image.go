@@ -625,6 +625,15 @@ func (i *Image) writePixels(pix []byte, region image.Rectangle) {
 	i.backend.backendImage.WritePixels(pixb, r)
 }
 
+// DiscardDeferred drops the calls deferred until the next BeginFrame without running them: what
+// they would have drawn, written or released is lost. It is for a process that begins no frame,
+// as a benchmark or a test with no renderer is, which would otherwise keep every draw it made.
+func DiscardDeferred() {
+	deferredM.Lock()
+	deferred = nil
+	deferredM.Unlock()
+}
+
 func (i *Image) ReadPixels(graphicsDriver graphicsdriver.Graphics, pixels []byte, region image.Rectangle) (ok bool, err error) {
 	backendsM.Lock()
 	defer backendsM.Unlock()

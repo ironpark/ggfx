@@ -249,6 +249,12 @@ func BeginFrame() error {
 	return nil
 }
 
+// DiscardDeferred drops what was drawn outside a frame and waits for the next BeginFrame, without
+// running it. See host.DiscardDeferred.
+func DiscardDeferred() {
+	atlas.DiscardDeferred()
+}
+
 // EndFrame ends the frame BeginFrame began.
 func EndFrame() error {
 	return atlas.EndFrame(driver)

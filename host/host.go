@@ -198,6 +198,16 @@ func (f Frame) End() error {
 	return render.EndFrame()
 }
 
+// DiscardDeferred drops what was drawn outside a frame without running it. A draw, a write of
+// pixels or a deallocation made outside a frame waits for the next [BeginFrame], each with a copy
+// of its vertices, so a process that begins no frame keeps every one it makes: a benchmark that
+// paints a million times with no renderer holds a million draws. Such a process calls
+// DiscardDeferred now and then. What was deferred is lost, the contents of the images it drew to
+// with it, so a process that will begin a frame does not call it.
+func DiscardDeferred() {
+	render.DiscardDeferred()
+}
+
 // FlushResult is what [Flush] tells of the present.
 type FlushResult struct {
 	// Occluded reports that the present went to a swap chain nothing of which is visible, and so
