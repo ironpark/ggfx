@@ -367,3 +367,19 @@ func TestUserSpaceRadialGradientIsTransformed(t *testing.T) {
 		})
 	}
 }
+
+// A command of several arcs draws each with its own radii, flags and end,
+// as one command for each would: Lucide's pin is drawn so.
+func TestArcsOfOneCommandAreEachTheirOwn(t *testing.T) {
+	stroke := func(d string) *image.RGBA {
+		doc := parse(t, svgDoc("0 0 24 24", `<path d="`+d+`" fill="none" stroke="#fff" stroke-width="2"/>`))
+		var g ggfx.GeoM
+		g.Scale(4, 4)
+		return drawInto(doc, image.Rect(0, 0, 96, 96), g)
+	}
+	one := stroke("M15 7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1")
+	each := stroke("M15 7a1 1 0 0 1 1-1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4a1 1 0 0 1 1 1")
+	if !bytes.Equal(one.Pix, each.Pix) {
+		t.Fatal("the arcs of one command are drawn otherwise than one command each")
+	}
+}

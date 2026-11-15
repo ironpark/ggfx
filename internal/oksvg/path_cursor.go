@@ -101,11 +101,13 @@ func (c *pathCursor) EllipseAt(cx, cy, rx, ry float64) {
 	c.Path.Stop(true)
 }
 
-// AddArcFromA adds a path of an arc element to the cursor path to the pathCursor
+// AddArcFromA adds a path of an arc element to the cursor path to the pathCursor:
+// points are the arc's own seven, which a command of several arcs has after
+// those of the arcs before it.
 func (c *pathCursor) AddArcFromA(points []float64) {
 	cx, cy := rasterx.FindEllipseCenter(&points[0], &points[1], points[2]*math.Pi/180, c.placeX,
 		c.placeY, points[5], points[6], points[4] == 0, points[3] == 0)
-	c.placeX, c.placeY = rasterx.AddArc(c.points, cx, cy, c.placeX, c.placeY, &c.Path)
+	c.placeX, c.placeY = rasterx.AddArc(points, cx, cy, c.placeX, c.placeY, &c.Path)
 }
 
 // CompilePath translates the svgPath description string into a rasterx path.
