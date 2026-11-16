@@ -30,7 +30,7 @@ func init() {
 
 // MainInFrame runs m inside one frame of the renderer, with no window: that is what makes
 // (*Image).At and the rest of the graphics API available to a test. OpenGL needs a context to
-// draw in, which the test gets of its own where it can (macOS); elsewhere a test runs with the
+// draw in, which the test gets of its own where it can (macOS, and Linux with Mesa); elsewhere a test runs with the
 // driver that needs none.
 func MainInFrame(m *testing.M) {
 	code, err := runInFrame(m)
@@ -38,6 +38,16 @@ func MainInFrame(m *testing.M) {
 		panic(err)
 	}
 	os.Exit(code)
+}
+
+// NewGLContext returns an OpenGL context with no window to draw in, for a test of its own that
+// draws with OpenGL: CGL's on macOS, and Mesa's surfaceless EGL on Linux.
+func NewGLContext() (host.GLContext, error) {
+	c, err := newGLContext()
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func runInFrame(m *testing.M) (int, error) {

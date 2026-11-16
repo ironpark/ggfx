@@ -12,62 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package rendertest drives the renderer through its public API with no window system, as one of
-// its own would. Metal renders without a surface, so this runs on macOS.
 package rendertest_test
 
 import (
-	"fmt"
 	"image"
 	"image/color"
-	"os"
-	"runtime"
 	"testing"
 
 	"github.com/ironpark/ggfx"
-	"github.com/ironpark/ggfx/host"
 	"github.com/ironpark/ggfx/internal/render"
 )
-
-func init() {
-	// Init must be called on the main thread.
-	runtime.LockOSThread()
-}
-
-func TestMain(m *testing.M) {
-	// The child process of TestRemoteReplayMatchesNative is an app of the remote driver's, which
-	// must not initialize Metal: it records instead of running the tests.
-	if path := os.Getenv(recordEnv); path != "" {
-		if err := recordRemote(path); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-	if err := host.Init(&host.Options{GraphicsLibrary: host.GraphicsLibraryMetal}); err != nil {
-		panic(err)
-	}
-	newViewSurface()
-	code := m.Run()
-	host.Terminate()
-	os.Exit(code)
-}
-
-// frame runs f in a frame and flushes it, as a window system's loop does.
-func frame(t *testing.T, f func()) {
-	t.Helper()
-	fr, err := host.BeginFrame()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f()
-	if err := fr.End(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := host.Flush(false); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestDrawWithoutWindow(t *testing.T) {
 	// The images are deallocated rather than left to the garbage collector, which would take

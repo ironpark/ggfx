@@ -27,6 +27,7 @@ type graphicsPlatform struct{}
 // NewGraphics creates an implementation of graphicsdriver.Graphics for OpenGL.
 // The returned graphics value is nil iff the error is not nil.
 func NewGraphics() (graphicsdriver.Graphics, error) {
+	created.Store(true)
 	ctx, err := gl.NewDefaultContext()
 	if err != nil {
 		return nil, err

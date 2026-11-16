@@ -17,21 +17,17 @@
 package remote_test
 
 import (
-	"image/color"
-	"testing"
-
-	"github.com/ironpark/ggfx/host"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 )
 
-// TestNoGPUDevice checks that an app drawing through the remote driver never makes its Metal
-// device, though the Metal driver is linked into it: it opens no GPU, and would run on a machine
-// without one.
-func TestNoGPUDevice(t *testing.T) {
-	frame(t, true, func(f host.Frame) {
-		f.Screen(surface, 16, 16).Fill(color.White)
-	})
-	if metal.DeviceCreated() {
-		t.Error("the process made a Metal device")
+// gpuDriverUsed returns the name of a platform driver the process made a device of, if any.
+func gpuDriverUsed() string {
+	switch {
+	case metal.DeviceCreated():
+		return "Metal"
+	case opengl.Created():
+		return "OpenGL"
 	}
+	return ""
 }

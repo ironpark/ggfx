@@ -89,6 +89,12 @@ jobs:
         run: |
           env GGFX_DIRECTX=warp,version=12 go test -shuffle=on -v ./...
 
+      # Mesa's surfaceless EGL gives internal/rendertest an OpenGL context with no window, in
+      # which the remote driver's replay is compared with a native draw.
+      - name: Install Mesa
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri
+
       - name: go test (Linux, no drawing)
         if: runner.os == 'Linux'
         run: |

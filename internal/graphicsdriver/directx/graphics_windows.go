@@ -130,9 +130,19 @@ func surfaceTarget(target any) (windows.HWND, error) {
 	return windows.HWND(w), nil
 }
 
+var deviceCreated atomic.Bool
+
+// DeviceCreated reports whether this process has asked for a DirectX driver, and so made its
+// Direct3D device, which a process that draws through the remote driver never does; its tests
+// check that it stays so.
+func DeviceCreated() bool {
+	return deviceCreated.Load()
+}
+
 // NewGraphics creates an implementation of graphicsdriver.Graphics for DirectX.
 // The returned graphics value is nil iff the error is not nil.
 func NewGraphics() (graphicsdriver.Graphics, error) {
+	deviceCreated.Store(true)
 	if !isD3DCompilerDLLAvailable() {
 		return nil, fmt.Errorf("directx: d3dcompiler_*.dll is missing in this environment")
 	}

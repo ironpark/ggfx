@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"io"
@@ -29,7 +30,6 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/host"
-	"github.com/ironpark/ggfx/internal/graphicsdriver/metal"
 	"github.com/ironpark/ggfx/remote"
 	"github.com/ironpark/ggfx/vector"
 )
@@ -103,7 +103,7 @@ func (t fileTransport) ReadPixels(batch []byte, id uint32, regions []image.Recta
 }
 
 // recordRemote is the child's TestMain: it draws two frames of the scene on a remote screen,
-// writing the batches to path, and checks that it made no Metal device.
+// writing the batches to path, and checks that it made no device of the platform's drivers.
 func recordRemote(path string) error {
 	b, err := hex.DecodeString(os.Getenv(infoEnv))
 	if err != nil {
@@ -146,8 +146,8 @@ func recordRemote(path string) error {
 			return err
 		}
 	}
-	if metal.DeviceCreated() {
-		return errors.New("rendertest: the remote app made a Metal device")
+	if d := gpuDriverUsed(); d != "" {
+		return fmt.Errorf("rendertest: the remote app made a %s device", d)
 	}
 	return nil
 }
@@ -177,8 +177,8 @@ func readBatches(path string) ([][]byte, error) {
 // process with no GPU, replays the child's batches here, and checks that the two are the same,
 // pixel for pixel.
 func TestRemoteReplayMatchesNative(t *testing.T) {
-	if !metal.DeviceCreated() {
-		t.Fatal("this process draws with Metal, but made no Metal device")
+	if gpuDriverUsed() == "" {
+		t.Fatalf("this process draws with %s, but made no device", host.CurrentDriver().Library)
 	}
 	info, err := remote.LocalInfo()
 	if err != nil {
