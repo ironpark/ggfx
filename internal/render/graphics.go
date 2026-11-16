@@ -25,6 +25,9 @@ import (
 // newGraphicsDriver creates the driver for lib. For GraphicsLibraryAuto, the environment variable
 // can name one, and otherwise the platform chooses.
 func newGraphicsDriver(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {
+	if overrideDriver.g != nil {
+		return overrideDriver.g, overrideDriver.lib, nil
+	}
 	if lib == GraphicsLibraryAuto {
 		// Ebitengine's names are read too, for backward compatibility.
 		env := cmp.Or(os.Getenv("GGFX_GRAPHICS_LIBRARY"), os.Getenv("EBITENGINE_GRAPHICS_LIBRARY"), os.Getenv("EBITEN_GRAPHICS_LIBRARY"))
@@ -66,6 +69,7 @@ const (
 	GraphicsLibraryOpenGL
 	GraphicsLibraryDirectX
 	GraphicsLibraryMetal
+	GraphicsLibraryRemote
 )
 
 func (g GraphicsLibrary) String() string {
@@ -80,6 +84,8 @@ func (g GraphicsLibrary) String() string {
 		return "DirectX"
 	case GraphicsLibraryMetal:
 		return "Metal"
+	case GraphicsLibraryRemote:
+		return "Remote"
 	default:
 		return fmt.Sprintf("GraphicsLibrary(%d)", g)
 	}

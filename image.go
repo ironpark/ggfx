@@ -254,8 +254,9 @@ func NewImageWithOptions(bounds image.Rectangle, options *NewImageOptions) *Imag
 	return newImage(bounds, imageType, format)
 }
 
-// What ggfx/host and ggfx/vector need of Image that is not exported goes through the bridge: host
-// makes the Image of a surface's screen, and vector runs its pending fills when an image is used.
+// What ggfx/host, ggfx/vector and ggfx/remote need of Image that is not exported goes through the
+// bridge: host makes the Image of a surface's screen, vector runs its pending fills when an image
+// is used, and remote replays an app's draws onto an image of the viewer's.
 func init() {
 	bridge.SetImageHooks(&bridge.ImageHooks[*Image]{
 		ScreenImage: func(cur *Image, img *render.Image) *Image {
@@ -271,6 +272,7 @@ func init() {
 		SetPending:   (*Image).setPending,
 		Pending:      (*Image).pendingWork,
 		ClearPending: (*Image).clearPending,
+		Render:       func(i *Image) *render.Image { return originalImage(i).image },
 	})
 }
 

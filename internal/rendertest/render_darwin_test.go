@@ -17,6 +17,7 @@
 package rendertest_test
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"os"
@@ -34,6 +35,15 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	// The child process of TestRemoteReplayMatchesNative is an app of the remote driver's, which
+	// must not initialize Metal: it records instead of running the tests.
+	if path := os.Getenv(recordEnv); path != "" {
+		if err := recordRemote(path); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if err := host.Init(&host.Options{GraphicsLibrary: host.GraphicsLibraryMetal}); err != nil {
 		panic(err)
 	}

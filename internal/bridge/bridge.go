@@ -38,6 +38,10 @@ type ImageHooks[I any] struct {
 
 	// ClearPending empties the pending slot of img.
 	ClearPending func(img I)
+
+	// Render returns the renderer's image of img's original image, for ggfx/remote, whose replay
+	// draws to an image of the viewer's with the driver directly.
+	Render func(img I) *render.Image
 }
 
 // Pending is work a package has deferred on an image, done before the image is next used. vector

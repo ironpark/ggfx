@@ -37,6 +37,10 @@ const (
 
 	// GraphicsLibraryMetal represents the graphics library Apple's Metal.
 	GraphicsLibraryMetal GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryMetal)
+
+	// GraphicsLibraryRemote represents the remote driver of package remote, which draws on the
+	// graphics library of a viewer in another process.
+	GraphicsLibraryRemote GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryRemote)
 )
 
 // String returns a string representing the graphics library.

@@ -57,6 +57,10 @@ type Program struct {
 	// TextureCount is how many source textures the prelude declares.
 	TextureCount int
 
+	// Source is the user's source Compile was given, without the prelude. The IR has no wire form,
+	// so a driver that runs the program in another process, the remote driver, sends this instead.
+	Source []byte
+
 	// Uniforms describes the user's uniform block, if any.
 	Uniforms []Uniform
 
@@ -118,6 +122,7 @@ func Compile(src []byte, textureCount int) (*Program, error) {
 	p := &Program{
 		Module:       module,
 		TextureCount: textureCount,
+		Source:       append([]byte(nil), src...),
 	}
 	if err := p.reflectUniforms(); err != nil {
 		return nil, err
