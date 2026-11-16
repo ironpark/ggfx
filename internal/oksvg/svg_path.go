@@ -6,6 +6,7 @@ package oksvg
 
 import (
 	"image"
+	"math"
 
 	"golang.org/x/image/math/fixed"
 
@@ -61,11 +62,48 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 		if svgp.LeadLineCap != nil {
 			leadLineCap = svgp.LeadLineCap
 		}
-		r.SetStroke(fixed.Int26_6(svgp.LineWidth*64),
+		// A stroke is as wide as its transform makes it: user units, not
+		// pixels. Where the transform keeps shapes, turning and scaling
+		// alike in every direction, the stroke of the placed path at the
+		// scaled width is that stroke. Elsewhere the outline itself has to
+		// be transformed, being wider along one axis than the other. It is
+		// then made of the path scaled alike in both, by as much as the
+		// transform stretches where it stretches most, so that the rest
+		// of the transform, which places it, only ever shrinks: what the
+		// stroker rounds to a 64th stays within a 64th of a pixel, and
+		// curves are flattened finely enough for the pixels they cover.
+		m := adder.M
+		sq := m.A*m.A + m.B*m.B + m.C*m.C + m.D*m.D
+		det := m.A*m.D - m.B*m.C
+		scale := math.Sqrt((sq + math.Sqrt(max(sq*sq-4*det*det, 0))) / 2)
+		if scale == 0 {
+			return // nothing of the picture is left to see
+		}
+		dash := svgp.Dash
+		if len(dash) > 0 {
+			p.dash = p.dash[:0]
+			for _, d := range dash {
+				p.dash = append(p.dash, d*scale)
+			}
+			dash = p.dash
+		}
+		const near = 1e-9
+		turned := math.Abs(m.A-m.D) <= near*scale && math.Abs(m.B+m.C) <= near*scale
+		flipped := math.Abs(m.A+m.D) <= near*scale && math.Abs(m.B-m.C) <= near*scale
+		if !turned && !flipped {
+			adder.M = rasterx.Matrix2D{A: scale, D: scale}
+			p.outline.Adder = &r.Filler
+			p.outline.M = rasterx.Matrix2D{A: m.A / scale, B: m.B / scale, C: m.C / scale, D: m.D / scale, E: m.E, F: m.F}
+			r.Out = &p.outline
+			defer func() { r.Out = nil }()
+		}
+		// The stroker halves the width: rounded to a whole half, it is
+		// within a 64th of what was asked for.
+		r.SetStroke(2*fixed.Int26_6(math.Round(svgp.LineWidth*scale*32)),
 			fixed.Int26_6(svgp.MiterLimit*64), leadLineCap, lineCap,
-			lineGap, svgp.LineJoin, svgp.Dash, svgp.DashOffset)
+			lineGap, svgp.LineJoin, dash, svgp.DashOffset*scale)
 		svgp.Path.AddTo(adder)
-		r.SetPaint(through(svgp.linerColor.paint(svgp.Path, svgp.LineOpacity*opacity, adder.M), mask))
+		r.SetPaint(through(svgp.linerColor.paint(svgp.Path, svgp.LineOpacity*opacity, m), mask))
 		r.Draw()
 	}
 }

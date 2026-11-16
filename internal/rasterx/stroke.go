@@ -51,8 +51,24 @@ type (
 
 		JoinMode JoinMode
 		inStroke bool
+
+		// Out, if not nil, is given the stroke's outline in place of the
+		// Stroker's own Filler, which it is expected to end in: a
+		// MatrixAdder over that Filler draws a stroke made in one space
+		// as it lies in another, which is how a stroke comes out under a
+		// transform that is not a similarity, wider along one axis than
+		// along the other.
+		Out Adder
 	}
 )
+
+// out is what the outline of a stroke is added to.
+func (r *Stroker) out() Adder {
+	if r.Out != nil {
+		return r.Out
+	}
+	return &r.Filler
+}
 
 // JoinMode constants determine how stroke segments bridge the gap at a join
 // ArcClip mode is like MiterClip applied to arcs, and is not part of the SVG2.0
@@ -243,7 +259,7 @@ func (r *Stroker) Joiner(p C2Point) {
 // the top and bottom edges. This function encodes most of the logic of how to
 // handle joins between the given C2Point point p, and the end of the line.
 func (r *Stroker) strokeEdge(p C2Point, crossProd fixed.Int26_6) {
-	ra := &r.Filler
+	ra := r.out()
 	s1, s2 := p.P.Add(p.TNorm), p.P.Add(p.LNorm) // Bevel points for top leading and trailing
 	ra.Start(s1)
 	if crossProd > -epsilonFixed*epsilonFixed { // Almost co-linear or convex
@@ -431,7 +447,7 @@ func (r *Stroker) strokeEdge(p C2Point, crossProd fixed.Int26_6) {
 						// t is the fraction to scale the line or arc from the bevel point
 						// to the line intersection, so that they abbut the miter limit line.
 						t := fixed.Int26_6(1<<tStrokeShift) - ((r.mLimit - projLen) << tStrokeShift / (Length(xa) - projLen))
-						_, _, ps1, ds1 := strokeArc(ra, ct, s1, xt, clockwiseT, 0, t, r.Filler.Line)
+						_, _, ps1, ds1 := strokeArc(ra, ct, s1, xt, clockwiseT, 0, t, ra.Line)
 						ps2, ds2, fs2, _ := strokeArc(ra, cl, xt, s2, clockwiseL, t, 0, ra.Start)
 						midP := ps1.Add(ps2).Mul(fixed.Int26_6(1 << 5)) // midpoint
 						midLine := turnStarboard90(midP.Sub(ps1))
@@ -469,12 +485,12 @@ func (r *Stroker) Stop(isClosed bool) {
 	if r.inStroke == false {
 		return
 	}
-	rf := &r.Filler
+	rf := r.out()
 	if isClosed {
-		if r.firstP.P != rf.a {
+		if r.firstP.P != r.a {
 			r.Line(r.firstP.P)
 		}
-		a := rf.a
+		a := r.a
 		r.firstP.TNorm = r.leadPoint.TNorm
 		r.firstP.RT = r.leadPoint.RT
 		r.firstP.TTan = r.leadPoint.TTan
@@ -486,7 +502,7 @@ func (r *Stroker) Stop(isClosed bool) {
 		r.Joiner(r.firstP)
 		r.firstP.blackWidowMark(rf)
 	} else {
-		a := rf.a
+		a := r.a
 		rf.Start(r.leadPoint.P.Sub(r.leadPoint.TNorm))
 		rf.Line(a.Sub(r.ln))
 		rf.Start(a.Add(r.ln))
@@ -597,7 +613,7 @@ func (r *Stroker) lineF(b fixed.Point26_6) {
 	} else {
 		bnorm = turnPort90(ToLength(b.Sub(a), r.u)) // Intra segment normal
 	}
-	ra := &r.Filler
+	ra := r.out()
 	ra.Start(b.Sub(bnorm))
 	ra.Line(a.Sub(r.ln))
 	ra.Start(a.Add(r.ln))
@@ -609,6 +625,12 @@ func (r *Stroker) lineF(b fixed.Point26_6) {
 // Start iniitates a stroked path
 func (r *Stroker) Start(a fixed.Point26_6) {
 	r.inStroke = false
+	if r.Out != nil {
+		// The Filler keeps the place of the path being stroked, which is
+		// not a point of the outline, and not in the outline's space.
+		r.a, r.first = a, a
+		return
+	}
 	r.Filler.Start(a)
 }
 
@@ -638,7 +660,7 @@ func (r *Stroker) joinF() {
 		r.inStroke = true
 		r.firstP = r.trailPoint
 	} else {
-		ra := &r.Filler
+		ra := r.out()
 		tl := r.trailPoint.P.Sub(r.trailPoint.TNorm)
 		th := r.trailPoint.P.Add(r.trailPoint.TNorm)
 		if r.a != r.trailPoint.P || r.ln != r.trailPoint.TNorm {

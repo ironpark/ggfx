@@ -19,6 +19,11 @@ type Painter struct {
 	// adder places a path. One made for each, given to Path.AddTo as an
 	// Adder, would be moved to the heap.
 	adder rasterx.MatrixAdder
+	// outline places a stroke's outline, and dash holds its dashes, when
+	// the stroke is made in a space other than the picture's; see
+	// drawThrough.
+	outline rasterx.MatrixAdder
+	dash    []float64
 	// clips draws clips and masks; see clip.go. It is made when one is
 	// first drawn.
 	clips *Painter

@@ -124,7 +124,7 @@ func (r *Dasher) Stop(isClosed bool) {
 	if isClosed && r.a != r.firstP.P {
 		r.LineSeg(r.sgm, r.firstP.P)
 	}
-	ra := &r.Filler
+	ra := r.out()
 	if isClosed && !r.firstDashIsGap && !r.dashIsGap { // closed connect w/o caps
 		a := r.a
 		r.firstP.TNorm = r.leadPoint.TNorm
@@ -152,7 +152,7 @@ func (r *Dasher) Stop(isClosed bool) {
 func (r *Dasher) dashLineStrokeBit(b, bnorm fixed.Point26_6, dontClose bool) {
 	if !r.dashIsGap { // Moving from dash to gap
 		a := r.a
-		ra := &r.Filler
+		ra := r.out()
 		ra.Start(b.Sub(bnorm))
 		ra.Line(a.Sub(r.ln))
 		ra.Start(a.Add(r.ln))
@@ -162,7 +162,7 @@ func (r *Dasher) dashLineStrokeBit(b, bnorm fixed.Point26_6, dontClose bool) {
 		}
 	} else { // Moving from gap to dash
 		if dontClose == false {
-			ra := &r.Filler
+			ra := r.out()
 			r.CapT(ra, b, Invert(bnorm))
 		}
 	}
