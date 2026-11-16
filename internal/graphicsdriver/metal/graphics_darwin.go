@@ -19,6 +19,7 @@ import (
 	"image"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego/objc"
@@ -89,12 +90,18 @@ type Graphics struct {
 }
 
 var (
-	systemDefaultDevice    mtl.Device
-	systemDefaultDeviceErr error
+	systemDefaultDevice     mtl.Device
+	systemDefaultDeviceErr  error
+	systemDefaultDeviceOnce sync.Once
 )
 
-func init() {
-	// mtl.CreateSystemDefaultDevice must be called on the main thread (#2147).
+// createSystemDefaultDevice creates the device NewGraphics hands out. It runs at the first
+// NewGraphics rather than at package initialization: linking this package must not open the GPU, as
+// a process that draws through another driver (a remote app, see package remote) links it all the
+// same. MTLCreateSystemDefaultDevice must be called on the main thread (#2147), which NewGraphics
+// is: render.Init calls it, and Init is documented to run on the main thread.
+func createSystemDefaultDevice() {
+	deviceCreated.Store(true)
 	d, err := mtl.CreateSystemDefaultDevice()
 	if err != nil {
 		systemDefaultDeviceErr = err
@@ -103,9 +110,19 @@ func init() {
 	systemDefaultDevice = d
 }
 
+// DeviceCreated reports whether this process has made its Metal device, which a process that
+// draws through the remote driver never does; its tests check that it stays so.
+func DeviceCreated() bool {
+	return deviceCreated.Load()
+}
+
+var deviceCreated atomic.Bool
+
 // NewGraphics creates an implementation of graphicsdriver.Graphics for Metal.
 // The returned graphics value is nil iff the error is not nil.
 func NewGraphics(colorSpace color.ColorSpace) (graphicsdriver.Graphics, error) {
+	systemDefaultDeviceOnce.Do(createSystemDefaultDevice)
+
 	// On old mac devices like iMac 2011, Metal is not supported (#779).
 	// TODO: Is there a better way to check whether Metal is available or not?
 	// It seems OK to call MTLCreateSystemDefaultDevice multiple times, so this should be fine.
