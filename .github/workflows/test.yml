@@ -59,7 +59,8 @@ jobs:
 
       # The tests run in a frame of the renderer with no window (internal/testing.MainInFrame).
       # Metal and DirectX draw without a surface; OpenGL needs a context, which the harness makes
-      # on macOS alone, so Linux runs the tests that draw nothing.
+      # with CGL on macOS and Mesa's surfaceless EGL on Linux. Linux leaves out the packages that
+      # draw in MainInFrame, as before it had a context, and draws in internal/rendertest.
       # The runners' virtual GPU fails to compile one of the ten thousand blend pipelines
       # TestImageBlendFactor makes now and then; it runs on the OpenGL and DirectX steps.
       - name: go test (macOS Metal)
@@ -95,7 +96,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri
 
-      - name: go test (Linux, no drawing)
+      - name: go test (Linux)
         if: runner.os == 'Linux'
         run: |
           go list ./... \
