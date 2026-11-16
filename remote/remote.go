@@ -84,17 +84,22 @@ func Install(info Info, t Transport) error {
 }
 
 // LocalInfo returns what this process's driver answers, for the viewer to send an app. It is
-// called after host.Init.
+// called after host.Init, and on OpenGL after the window system set its context
+// (host.SetGLContext); the driver is initialized then if no frame has run yet.
 func LocalInfo() (Info, error) {
 	g := render.GraphicsDriver()
 	if g == nil {
 		return Info{}, errors.New("remote: LocalInfo is called before host.Init")
 	}
+	maxImageSize, a8, err := render.DriverLimits()
+	if err != nil {
+		return Info{}, err
+	}
 	return Info{
 		ColorSpace:   uint8(g.ColorSpace()),
 		FlipsY:       g.FlipsY(),
-		A8:           g.SupportsPixelFormat(graphicsdriver.PixelFormatA8),
-		MaxImageSize: g.MaxImageSize(),
+		A8:           a8,
+		MaxImageSize: maxImageSize,
 	}, nil
 }
 

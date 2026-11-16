@@ -737,6 +737,53 @@ func (i *imageImpl) deallocateImpl() {
 	panic("atlas: backend not found at an image being deallocated")
 }
 
+// Initialize initializes the graphics driver's state and the sizes of the atlas, as the first
+// BeginFrame does, if that has not happened yet: what the driver supports, such as MaxImageSize
+// and A8 images, is known after it. On OpenGL the context must be set.
+func Initialize(graphicsDriver graphicsdriver.Graphics) error {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	return initialize(graphicsDriver)
+}
+
+// SupportsA8 reports whether the driver makes A8 images. It is false before the driver is
+// initialized.
+func SupportsA8() bool {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	return a8Supported
+}
+
+// initialize is Initialize with backendsM held.
+func initialize(graphicsDriver graphicsdriver.Graphics) error {
+	var err error
+	initOnce.Do(func() {
+		err = graphicscommand.InitializeGraphicsDriverState(graphicsDriver)
+		if err != nil {
+			return
+		}
+		if len(theBackends) != 0 {
+			panic("atlas: all the images must be not on an atlas before the game starts")
+		}
+
+		// min*Size and maxSize can already be set for testings.
+		if minSourceSize == 0 {
+			// A source page starts small, as an app's first images are often a few small ones,
+			// and grows as images come (see backend.tryAlloc).
+			minSourceSize = 256
+		}
+		if minDestinationSize == 0 {
+			minDestinationSize = 16
+		}
+		if maxSize == 0 {
+			maxSize = floorPowerOf2(graphicscommand.MaxImageSize(graphicsDriver))
+		}
+		a8Supported = graphicscommand.SupportsPixelFormat(graphicsDriver, graphicsdriver.PixelFormatA8)
+		inited.Store(true)
+	})
+	return err
+}
+
 // MaxImageSize returns the maximum width and height of an image in pixels.
 // MaxImageSize returns 0 before the graphics driver is ready.
 func MaxImageSize() int {
@@ -1030,32 +1077,7 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 
 	inFrame = true
 
-	var err error
-	initOnce.Do(func() {
-		err = graphicscommand.InitializeGraphicsDriverState(graphicsDriver)
-		if err != nil {
-			return
-		}
-		if len(theBackends) != 0 {
-			panic("atlas: all the images must be not on an atlas before the game starts")
-		}
-
-		// min*Size and maxSize can already be set for testings.
-		if minSourceSize == 0 {
-			// A source page starts small, as an app's first images are often a few small ones,
-			// and grows as images come (see backend.tryAlloc).
-			minSourceSize = 256
-		}
-		if minDestinationSize == 0 {
-			minDestinationSize = 16
-		}
-		if maxSize == 0 {
-			maxSize = floorPowerOf2(graphicscommand.MaxImageSize(graphicsDriver))
-		}
-		a8Supported = graphicscommand.SupportsPixelFormat(graphicsDriver, graphicsdriver.PixelFormatA8)
-		inited.Store(true)
-	})
-	if err != nil {
+	if err := initialize(graphicsDriver); err != nil {
 		return err
 	}
 

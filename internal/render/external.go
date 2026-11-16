@@ -62,3 +62,16 @@ func DrawExternally(dst *Image, f func(g graphicsdriver.Graphics, target *atlas.
 	dst.mu.Unlock()
 	return err
 }
+
+// DriverLimits returns the largest image the driver makes, and whether it makes A8 images,
+// initializing it as the first frame does if no frame has run yet. It is called after Init, and on
+// OpenGL after the window system set its context.
+func DriverLimits() (maxImageSize int, a8 bool, err error) {
+	if driver == nil {
+		return 0, false, errors.New("render: DriverLimits is called before Init")
+	}
+	if err := atlas.Initialize(driver); err != nil {
+		return 0, false, err
+	}
+	return atlas.MaxImageSize(), atlas.SupportsA8(), nil
+}
