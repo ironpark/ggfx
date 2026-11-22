@@ -53,8 +53,6 @@ func abs(x float32) float32 {
 	return x
 }
 
-const epsilon = 1e-6
-
 type point struct {
 	x float32
 	y float32
@@ -396,35 +394,6 @@ func (p *Path) Close() {
 	p.subPaths[len(p.subPaths)-1].closed = true
 }
 
-// lineForTwoPoints returns parameters for a line passing through p0 and p1.
-func lineForTwoPoints(p0, p1 point) (a, b, c float32) {
-	// Line passing through p0 and p1 in the form of ax + by + c = 0
-	a = p1.y - p0.y
-	b = -(p1.x - p0.x)
-	c = (p1.x-p0.x)*p0.y - (p1.y-p0.y)*p0.x
-	return
-}
-
-// crossingPointForTwoLines returns a crossing point for two lines.
-func crossingPointForTwoLines(p00, p01, p10, p11 point) point {
-	a0, b0, c0 := lineForTwoPoints(p00, p01)
-	a1, b1, c1 := lineForTwoPoints(p10, p11)
-	det := a0*b1 - a1*b0
-
-	// If det is close to 0, the two lines are almost parallel.
-	if abs(det) < epsilon {
-		return point{
-			x: float32(math.NaN()),
-			y: float32(math.NaN()),
-		}
-	}
-
-	return point{
-		x: (b0*c1 - b1*c0) / det,
-		y: (a1*c0 - a0*c1) / det,
-	}
-}
-
 func (p *Path) currentPosition() (point, bool) {
 	if len(p.subPaths) == 0 {
 		return point{}, false
@@ -474,7 +443,6 @@ func (p *Path) ArcTo(x1, y1, x2, y2, radius float32) {
 	dot := min(max(float64(d0.x*d1.x+d0.y*d1.y), -1.0), 1.0)
 	// theta is the angle between two vectors d0 and d1.
 	theta := math.Acos(dot)
-	// TODO: When theta is bigger than π/2, the arc should be split into two.
 	if theta == 0 {
 		p.LineTo(x2, y2)
 		return
@@ -483,7 +451,11 @@ func (p *Path) ArcTo(x1, y1, x2, y2, radius float32) {
 	// dist is the distance between the control point and the arc's beginning and ending points.
 	dist := radius / float32(math.Tan(theta/2))
 	if !isRegularF32(dist) {
-		p.LineTo(x2, y2)
+		if math.IsInf(float64(dist), 0) && isRegularF32(radius) {
+			p.LineTo(x2, y2)
+		} else {
+			p.LineTo(float32(math.NaN()), float32(math.NaN()))
+		}
 		return
 	}
 
@@ -491,33 +463,23 @@ func (p *Path) ArcTo(x1, y1, x2, y2, radius float32) {
 	ax0 := x1 + d0.x*dist
 	ay0 := y1 + d0.y*dist
 
-	var cx, cy, a0, a1 float32
+	var cx, cy float32
+	var a0 float64
 	var dir Direction
 
-	// A cross product can be calculated by d0.x*d1.y - d0.y*d1.x,
-	// but this can cause a floating-point precision issue due to FMSUBS.
-	// Avoid this subtraction.
-	//
-	// a*b - c*d can be translated into
-	//     (1) x := c*d
-	//     (2) y := a*b-x
-	// One rounding happens at (1). The number of rounding is not determined at (2).
-	// If FMSUBS is used for (2), only one rounding happens at (2) for the multiplying and the subtraction.
-	// Thus, even if a*b == c*d, y can be non-zero.
-	if d0.x*d1.y >= d0.y*d1.x {
+	// Compute the cross product in float64 so products of float32 components are exact.
+	if float64(d0.x)*float64(d1.y) >= float64(d0.y)*float64(d1.x) {
 		cx = ax0 - d0.y*radius
 		cy = ay0 + d0.x*radius
-		a0 = float32(math.Atan2(float64(-d0.x), float64(d0.y)))
-		a1 = float32(math.Atan2(float64(d1.x), float64(-d1.y)))
+		a0 = math.Atan2(float64(-d0.x), float64(d0.y))
 		dir = CounterClockwise
 	} else {
 		cx = ax0 + d0.y*radius
 		cy = ay0 - d0.x*radius
-		a0 = float32(math.Atan2(float64(d0.x), float64(-d0.y)))
-		a1 = float32(math.Atan2(float64(-d1.x), float64(d1.y)))
+		a0 = math.Atan2(float64(d0.x), float64(-d0.y))
 		dir = Clockwise
 	}
-	p.Arc(cx, cy, radius, a0, a1, dir)
+	p.arcSweep(cx, cy, radius, a0, math.Pi-theta, dir)
 }
 
 // Arc adds an arc to the path.
@@ -555,6 +517,11 @@ func (p *Path) Arc(x, y, radius, startAngle, endAngle float32, dir Direction) {
 		s = math.Mod(s, 2*math.Pi)
 	}
 
+	p.arcSweep(x, y, radius, s, da, dir)
+}
+
+// arcSweep adds an arc starting at startAngle and sweeping by da (in [0, 2*pi]) in direction dir.
+func (p *Path) arcSweep(x, y, radius float32, startAngle, da float64, dir Direction) {
 	// If the angle is big, split this into multiple arcs using an integer segment count.
 	if da > math.Pi/2 {
 		n := max(1, int(math.Ceil(da/(math.Pi/3))))
@@ -562,16 +529,16 @@ func (p *Path) Arc(x, y, radius, startAngle, endAngle float32, dir Direction) {
 		for i := range n {
 			var a0, a1 float64
 			if dir == Clockwise {
-				a0 = s + step*float64(i)
-				a1 = s + step*float64(i+1)
+				a0 = startAngle + step*float64(i)
+				a1 = startAngle + step*float64(i+1)
 				if i == n-1 {
-					a1 = s + da
+					a1 = startAngle + da
 				}
 			} else {
-				a0 = s - step*float64(i)
-				a1 = s - step*float64(i+1)
+				a0 = startAngle - step*float64(i)
+				a1 = startAngle - step*float64(i+1)
 				if i == n-1 {
-					a1 = s - da
+					a1 = startAngle - da
 				}
 			}
 			p.arc(x, y, radius, a0, a1, dir)
@@ -580,9 +547,9 @@ func (p *Path) Arc(x, y, radius, startAngle, endAngle float32, dir Direction) {
 	}
 
 	if dir == Clockwise {
-		p.arc(x, y, radius, s, s+da, dir)
+		p.arc(x, y, radius, startAngle, startAngle+da, dir)
 	} else {
-		p.arc(x, y, radius, s, s-da, dir)
+		p.arc(x, y, radius, startAngle, startAngle-da, dir)
 	}
 }
 

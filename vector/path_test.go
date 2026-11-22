@@ -798,13 +798,19 @@ func TestAddStrokeAllocs(t *testing.T) {
 			var src vector.Path
 			var dst vector.Path
 			// Stroking must not allocate for a path that is reset and rebuilt repeatedly.
-			if got := testing.AllocsPerRun(10, func() {
-				src.Reset()
-				tc.build(&src)
-				dst.Reset()
-				dst.AddStroke(&src, op)
-			}); got != 0 {
-				t.Errorf("allocations: got: %v, want: 0", got)
+			for _, stroke := range []vector.StrokeOptions{
+				{Width: 4, LineCap: vector.LineCapButt, LineJoin: vector.LineJoinMiter, MiterLimit: 4},
+				{Width: 4, LineCap: vector.LineCapRound, LineJoin: vector.LineJoinRound},
+			} {
+				op.StrokeOptions = stroke
+				if got := testing.AllocsPerRun(10, func() {
+					src.Reset()
+					tc.build(&src)
+					dst.Reset()
+					dst.AddStroke(&src, op)
+				}); got != 0 {
+					t.Errorf("cap=%d join=%d allocations: got: %v, want: 0", stroke.LineCap, stroke.LineJoin, got)
+				}
 			}
 		})
 	}
@@ -899,5 +905,196 @@ func TestCubicToEmptyPath(t *testing.T) {
 	b := p.Bounds()
 	if b.Min.X != 10 || b.Min.Y != 20 {
 		t.Errorf("CubicTo on empty path bounds = %v, want Min=(10, 20)", b)
+	}
+}
+
+func TestStrokeCubicArcNoSpikes(t *testing.T) {
+	buildCubicArc := func(cx, cy, r, start, end float64) vector.Path {
+		var p vector.Path
+		sweep := end - start
+		at := func(a float64) (float32, float32) {
+			return float32(cx + r*math.Cos(a)), float32(cy + r*math.Sin(a))
+		}
+		x0, y0 := at(start)
+		p.MoveTo(x0, y0)
+		n := max(1, int(math.Ceil(math.Abs(sweep)/(math.Pi/2)-1e-9)))
+		step := sweep / float64(n)
+		k := 4.0 / 3 * math.Tan(step/4) * r
+		for i := range n {
+			a0, a1 := start+step*float64(i), start+step*float64(i+1)
+			sx, sy := cx+r*math.Cos(a0), cy+r*math.Sin(a0)
+			ex, ey := cx+r*math.Cos(a1), cy+r*math.Sin(a1)
+			p.CubicTo(
+				float32(sx-k*math.Sin(a0)), float32(sy+k*math.Cos(a0)),
+				float32(ex+k*math.Sin(a1)), float32(ey-k*math.Cos(a1)),
+				float32(ex), float32(ey),
+			)
+		}
+		return p
+	}
+
+	centers := [][2]float64{{20, 20}, {600, 400}, {1200, 800}, {4000, 3000}}
+	fractions := []float64{0.25, 0.5, 0.68, 0.75, 0.99, 1.0}
+	joins := []vector.LineJoin{vector.LineJoinRound, vector.LineJoinMiter, vector.LineJoinBevel}
+	caps := []vector.LineCap{vector.LineCapButt, vector.LineCapRound, vector.LineCapSquare}
+
+	const (
+		r     = 10.0
+		width = 4.0
+	)
+	for _, c := range centers {
+		cx, cy := c[0], c[1]
+		allow := image.Rect(
+			int(math.Floor(cx-r-width-2)),
+			int(math.Floor(cy-r-width-2)),
+			int(math.Ceil(cx+r+width+2)),
+			int(math.Ceil(cy+r+width+2)),
+		)
+		for _, frac := range fractions {
+			src := buildCubicArc(cx, cy, r, -math.Pi/2, -math.Pi/2+2*math.Pi*frac)
+			for _, lj := range joins {
+				for _, lc := range caps {
+					var sp vector.Path
+					sp.AddStroke(&src, &vector.AddStrokeOptions{
+						StrokeOptions: vector.StrokeOptions{
+							Width:      width,
+							LineJoin:   lj,
+							LineCap:    lc,
+							MiterLimit: 4,
+						},
+					})
+					if got := sp.Bounds(); !got.In(allow) {
+						t.Errorf("center=(%.0f,%.0f) frac=%.2f join=%d cap=%d: bounds %v exceeded %v", cx, cy, frac, lj, lc, got, allow)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestStrokeNearlyTangentJoinLargeCoords(t *testing.T) {
+	angles := []float64{1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 0.1}
+	joins := []vector.LineJoin{vector.LineJoinRound, vector.LineJoinMiter}
+	const (
+		cx, cy = 4000.0, 3000.0
+		segLen = 40.0
+		width  = 8.0
+	)
+	allow := image.Rect(
+		int(cx-segLen-width-2),
+		int(cy-segLen-width-2),
+		int(cx+segLen+width+2),
+		int(cy+segLen+width+2),
+	)
+	for _, da := range angles {
+		for _, sign := range []float64{-1, 1} {
+			var src vector.Path
+			src.MoveTo(float32(cx-segLen), float32(cy))
+			src.LineTo(float32(cx), float32(cy))
+			src.LineTo(float32(cx+segLen*math.Cos(sign*da)), float32(cy+segLen*math.Sin(sign*da)))
+			for _, lj := range joins {
+				var sp vector.Path
+				sp.AddStroke(&src, &vector.AddStrokeOptions{
+					StrokeOptions: vector.StrokeOptions{
+						Width:      width,
+						LineJoin:   lj,
+						MiterLimit: 4,
+					},
+				})
+				if got := sp.Bounds(); !got.In(allow) {
+					t.Errorf("da=%g sign=%.0f join=%d: bounds %v exceeded %v", da, sign, lj, got, allow)
+				}
+			}
+		}
+	}
+}
+
+func TestStrokeRoundCapRendering(t *testing.T) {
+	dstRound := ggfx.NewImage(64, 64)
+	defer dstRound.Deallocate()
+	dstButt := ggfx.NewImage(64, 64)
+	defer dstButt.Deallocate()
+	dstSquare := ggfx.NewImage(64, 64)
+	defer dstSquare.Deallocate()
+
+	var p vector.Path
+	p.MoveTo(20, 32)
+	p.LineTo(44, 32)
+
+	vector.StrokePath(dstRound, &p, &vector.StrokeOptions{Width: 20, LineCap: vector.LineCapRound}, nil)
+	vector.StrokePath(dstButt, &p, &vector.StrokeOptions{Width: 20, LineCap: vector.LineCapButt}, nil)
+	vector.StrokePath(dstSquare, &p, &vector.StrokeOptions{Width: 20, LineCap: vector.LineCapSquare}, nil)
+
+	// Center of end cap (51, 32) and start cap (13, 32) are inside round & square caps, outside butt cap.
+	for _, pt := range []image.Point{{51, 32}, {13, 32}} {
+		if got, want := dstRound.At(pt.X, pt.Y).(color.RGBA), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {
+			t.Errorf("round cap at %v = %v, want %v", pt, got, want)
+		}
+		if got, want := dstButt.At(pt.X, pt.Y).(color.RGBA), (color.RGBA{}); got != want {
+			t.Errorf("butt cap at %v = %v, want %v", pt, got, want)
+		}
+	}
+	// Outer corner of square cap (52, 23) and (12, 23) (dist ~12.0 from endpoint > r=10) must be outside round cap, inside square cap.
+	for _, pt := range []image.Point{{52, 23}, {12, 23}} {
+		if got, want := dstRound.At(pt.X, pt.Y).(color.RGBA), (color.RGBA{}); got != want {
+			t.Errorf("round cap corner at %v = %v, want %v", pt, got, want)
+		}
+		if got, want := dstSquare.At(pt.X, pt.Y).(color.RGBA), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {
+			t.Errorf("square cap corner at %v = %v, want %v", pt, got, want)
+		}
+	}
+}
+
+func TestStrokeCubicArcRenderedNoSpikes(t *testing.T) {
+	// Render the 68% 3-cubic arc with LineJoinRound on an image and verify no stray pixels appear outside the ring.
+	const (
+		w, h  = 128, 128
+		cx    = 64.0
+		cy    = 64.0
+		r     = 10.0
+		width = 4.0
+	)
+	var p vector.Path
+	start := -math.Pi / 2
+	sweep := 2 * math.Pi * 0.68
+	n := 3
+	step := sweep / float64(n)
+	k := 4.0 / 3 * math.Tan(step/4) * r
+	p.MoveTo(float32(cx+r*math.Cos(start)), float32(cy+r*math.Sin(start)))
+	for i := range n {
+		a0, a1 := start+step*float64(i), start+step*float64(i+1)
+		sx, sy := cx+r*math.Cos(a0), cy+r*math.Sin(a0)
+		ex, ey := cx+r*math.Cos(a1), cy+r*math.Sin(a1)
+		p.CubicTo(
+			float32(sx-k*math.Sin(a0)), float32(sy+k*math.Cos(a0)),
+			float32(ex+k*math.Sin(a1)), float32(ey-k*math.Cos(a1)),
+			float32(ex), float32(ey),
+		)
+	}
+
+	dst := ggfx.NewImage(w, h)
+	defer dst.Deallocate()
+	op := &vector.DrawPathOptions{AntiAlias: true}
+	op.ColorScale.ScaleWithColor(color.White)
+	vector.StrokePath(dst, &p, &vector.StrokeOptions{Width: width, LineJoin: vector.LineJoinRound}, op)
+
+	maxR := r + width/2 + 2
+	var litCount int
+	for y := range h {
+		for x := range w {
+			c := dst.At(x, y).(color.RGBA)
+			if c.A == 0 {
+				continue
+			}
+			litCount++
+			dx := float64(x) + 0.5 - cx
+			dy := float64(y) + 0.5 - cy
+			if dist := math.Hypot(dx, dy); dist > maxR {
+				t.Fatalf("stray pixel at (%d, %d) with color %v (dist=%.2f > maxR=%.2f)", x, y, c, dist, maxR)
+			}
+		}
+	}
+	if litCount == 0 {
+		t.Fatalf("expected non-empty rendered ring")
 	}
 }

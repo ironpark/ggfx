@@ -109,11 +109,15 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 			p.subPaths[len(p.subPaths)-1].reset()
 		}
 
-		_, sp1, sp2, sp3, sp4 := strokeStartControlPositions(&normalized, options.Width/2)
+		startP := normalized.startAtOp(0)
+		startDir := normalized.startDir(0).inv().norm()
+		sp1, sp3, sp4 := strokeCapEndpoints(startP, startDir, options.Width/2)
 		p.MoveTo(sp4.x, sp4.y)
 
 		appendParalleledPathFromSubPath(p, &normalized, &options.StrokeOptions)
-		_, ep1, ep2, ep3, ep4 := strokeEndControlPositions(&normalized, options.Width/2)
+		endP := normalized.endAtOp(len(normalized.ops) - 1)
+		endDir := normalized.endDir(len(normalized.ops) - 1).norm()
+		ep1, ep3, ep4 := strokeCapEndpoints(endP, endDir, options.Width/2)
 		if normalized.closed {
 			p.Close()
 			p.MoveTo(ep4.x, ep4.y)
@@ -122,8 +126,11 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 			case LineCapButt:
 				p.LineTo(ep4.x, ep4.y)
 			case LineCapRound:
-				p.ArcTo(ep1.x, ep1.y, ep2.x, ep2.y, options.Width/2)
-				p.ArcTo(ep3.x, ep3.y, ep4.x, ep4.y, options.Width/2)
+				if isRegularPoint(endP) && isRegularF32(endDir.x) && isRegularF32(endDir.y) {
+					startAngle := math.Atan2(float64(endDir.x), float64(-endDir.y))
+					p.arcSweep(endP.x, endP.y, options.Width/2, startAngle, math.Pi, CounterClockwise)
+				}
+				p.LineTo(ep4.x, ep4.y)
 			case LineCapSquare:
 				p.LineTo(ep1.x, ep1.y)
 				p.LineTo(ep3.x, ep3.y)
@@ -136,8 +143,11 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 			case LineCapButt:
 				p.LineTo(sp4.x, sp4.y)
 			case LineCapRound:
-				p.ArcTo(sp1.x, sp1.y, sp2.x, sp2.y, options.Width/2)
-				p.ArcTo(sp3.x, sp3.y, sp4.x, sp4.y, options.Width/2)
+				if isRegularPoint(startP) && isRegularF32(startDir.x) && isRegularF32(startDir.y) {
+					startAngle := math.Atan2(float64(startDir.x), float64(-startDir.y))
+					p.arcSweep(startP.x, startP.y, options.Width/2, startAngle, math.Pi, CounterClockwise)
+				}
+				p.LineTo(sp4.x, sp4.y)
 			case LineCapSquare:
 				p.LineTo(sp1.x, sp1.y)
 				p.LineTo(sp3.x, sp3.y)
@@ -169,20 +179,12 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 	}
 }
 
-func strokeStartControlPositions(subPath *subPath, dist float32) (point, point, point, point, point) {
-	p := subPath.startAtOp(0)
-	dir := subPath.startDir(0).inv().norm().mul(dist)
-	dirPerp := dir.perp()
-	// TODO: These values are a little tricky. Refactor this.
-	return p.add(dirPerp), p.add(dir).add(dirPerp), p.add(dir), p.add(dir).add(dirPerp.inv()), p.add(dirPerp.inv())
-}
-
-func strokeEndControlPositions(subPath *subPath, dist float32) (point, point, point, point, point) {
-	p := subPath.endAtOp(len(subPath.ops) - 1)
-	dir := subPath.endDir(len(subPath.ops) - 1).norm().mul(dist)
-	dirPerp := dir.perp()
-	// TODO: These values are a little tricky. Refactor this.
-	return p.add(dirPerp), p.add(dir).add(dirPerp), p.add(dir), p.add(dir).add(dirPerp.inv()), p.add(dirPerp.inv())
+// strokeCapEndpoints returns the two outer corners of a square cap and the opposite-side endpoint
+// for a cap at p extending in unit direction dir by dist.
+func strokeCapEndpoints(p point, dir vec2, dist float32) (sq1, sq2, end point) {
+	d := dir.mul(dist)
+	perp := d.perp()
+	return p.add(d).add(perp), p.add(d).add(perp.inv()), p.add(perp.inv())
 }
 
 func appendParalleledPathFromSubPath(strokePath *Path, subPath *subPath, options *StrokeOptions) {
@@ -419,25 +421,49 @@ func addJoint(strokePath *Path, subPath *subPath, opIndex int, reverse bool, opt
 	v1 := dir1.perp().mul(options.Width / 2)
 	p1 := p.add(v1)
 
+	// Compute cross and dot products in float64 so products of float32 components are exact.
+	d0x, d0y := float64(dir0.x), float64(dir0.y)
+	d1x, d1y := float64(dir1.x), float64(dir1.y)
+	cross := d0x*d1y - d0y*d1x
+
 	// If the joint is an internal angle (< 180 degrees), the joint is not rendered. Just connect the two segments.
-	// [vec2.cross] has a precision issue. Use a comparison instead.
-	if dir0.x*dir1.y > dir0.y*dir1.x {
+	if cross > 0 {
 		strokePath.LineTo(p1.x, p1.y)
 		return
 	}
 
-	v0 := dir0.perp().mul(options.Width / 2)
-	p0 := p.add(v0)
+	dot := d0x*d1x + d0y*d1y
+	// Exterior turn angle da in [0, pi] (swept CounterClockwise from v0 to v1),
+	// and interior angle theta = pi - da in [0, pi].
+	var da, theta float64
+	if cross == 0 {
+		if dot >= 0 {
+			strokePath.LineTo(p1.x, p1.y)
+			return
+		}
+		da = math.Pi
+		theta = 0
+	} else {
+		// cross < 0 (or NaN, which propagates into da and theta).
+		da = math.Atan2(-cross, dot)
+		theta = math.Atan2(-cross, -dot)
+	}
 
 	// Add a joint.
 	switch options.LineJoin {
 	case LineJoinMiter:
-		dot := min(max(float64(dir0.x*(-dir1.x)+dir0.y*(-dir1.y)), -1.0), 1.0)
-		theta := math.Acos(dot)
-		exceed := float32(math.Abs(1/math.Sin(float64(theta/2)))) > options.MiterLimit
-		if !exceed {
-			cp := crossingPointForTwoLines(p0, p0.add(dir0), p1, p1.add(dir1))
-			if isRegularF32(cp.x) && isRegularF32(cp.y) {
+		sinHalfTheta := math.Sin(theta / 2)
+		exceed := float32(1/sinHalfTheta) > options.MiterLimit
+		if !exceed && sinHalfTheta > 0 && isRegularPoint(p) {
+			r := float64(options.Width) / 2
+			t := r * math.Sin(da/2) / sinHalfTheta
+			// Miter vertex relative to p: p + r*perp(dir0) + t*dir0, computed in float64
+			// to avoid catastrophic cancellation at large coordinates or small turn angles.
+			cp := point{
+				x: float32(float64(p.x) + r*(-d0y) + t*d0x),
+				y: float32(float64(p.y) + r*d0x + t*d0y),
+			}
+			if isRegularPoint(cp) {
 				strokePath.LineTo(cp.x, cp.y)
 			}
 		}
@@ -445,18 +471,10 @@ func addJoint(strokePath *Path, subPath *subPath, opIndex int, reverse bool, opt
 	case LineJoinBevel:
 		strokePath.LineTo(p1.x, p1.y)
 	case LineJoinRound:
-		dir := vec2{
-			x: dir0.x - dir1.x,
-			y: dir0.y - dir1.y,
-		}.norm()
-		cp := p.add(dir.mul(options.Width / 2))
-		cp0 := crossingPointForTwoLines(p0, p0.add(dir0), cp, cp.add(dir.perp()))
-		cp1 := crossingPointForTwoLines(p1, p1.add(dir1), cp, cp.add(dir.perp()))
-		if isRegularF32(cp.x) && isRegularF32(cp.y) && isRegularF32(cp0.x) && isRegularF32(cp0.y) && isRegularF32(cp1.x) && isRegularF32(cp1.y) {
-			strokePath.ArcTo(cp0.x, cp0.y, cp.x, cp.y, options.Width/2)
-			strokePath.ArcTo(cp1.x, cp1.y, p1.x, p1.y, options.Width/2)
-		} else {
-			strokePath.LineTo(p1.x, p1.y)
+		if isRegularPoint(p) && !math.IsNaN(da) && !math.IsInf(da, 0) && da > 0 {
+			startAngle := math.Atan2(d0x, -d0y)
+			strokePath.arcSweep(p.x, p.y, options.Width/2, startAngle, da, CounterClockwise)
 		}
+		strokePath.LineTo(p1.x, p1.y)
 	}
 }
