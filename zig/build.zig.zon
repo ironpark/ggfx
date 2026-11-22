@@ -1,0 +1,13 @@
+.{
+    .name = .ggfx_driver,
+    .version = "0.1.0",
+    .fingerprint = 0x4a61b71b6df4b01,
+    .minimum_zig_version = "0.17.1",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "include",
+        "src",
+        "tests",
+    },
+}

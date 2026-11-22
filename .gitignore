@@ -12,3 +12,5 @@ go.work.sum
 !dummy.fxc
 *.metallib
 !dummy.metallib
+.zig-cache/
+zig-out/
