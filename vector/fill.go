@@ -274,7 +274,7 @@ func (f *fillPathsState) reset() {
 
 // addPath adds a copy of path, or its stroke if stroke is not nil.
 func (f *fillPathsState) addPath(path *Path, stroke *AddStrokeOptions, bounds image.Rectangle, clr ggfx.ColorScale) {
-	if path == nil && stroke == nil {
+	if path == nil || (stroke != nil && stroke.Width <= 0) {
 		return
 	}
 

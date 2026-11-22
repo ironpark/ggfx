@@ -218,7 +218,7 @@ var gridScenes = []batchScene{
 	}},
 }
 
-const manyPathCount = 500
+const manyPathCount = 800
 
 func manyPath(r *rand.Rand) *vector.Path {
 	return gridPolygon(r, 145+r.Float32()*10, 145+r.Float32()*10, 60+r.Float32()*80, 3+r.IntN(20))

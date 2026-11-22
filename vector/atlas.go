@@ -138,7 +138,7 @@ func (a *atlas) layout(now int64, dstBounds image.Rectangle, rbs []image.Rectang
 		}
 	}
 
-	w, h := dstBounds.Dx(), dstBounds.Dy()
+	w, h := roundUp16(dstBounds.Dx()), roundUp16(dstBounds.Dy())
 	// For antialiasing, doubled regions in the X direction are used.
 	if antialias {
 		w *= 2
@@ -189,17 +189,16 @@ func (a *atlas) layout(now int64, dstBounds image.Rectangle, rbs []image.Rectang
 			if i == 0 {
 				currentRowHeight = s.Y
 			} else if currentPosition.X+s.X > maxImageSize {
-				// Try the next row.
+				// Try the next row. Regions are sorted in descending height, so s.Y is
+				// the tallest item of the new row.
 				currentPosition.X = 0
 				currentPosition.Y += currentRowHeight
 				if currentPosition.Y+s.Y > maxImageSize {
 					atlasImageIndex++
 					a.atlasSizes = append(a.atlasSizes, image.Point{})
 					currentPosition.Y = 0
-					currentRowHeight = s.Y
-				} else {
-					currentRowHeight = max(currentRowHeight, s.Y)
 				}
+				currentRowHeight = s.Y
 			}
 			a.atlasRegions[i].imageIndex = atlasImageIndex
 			a.atlasRegions[i].imageBounds = image.Rectangle{

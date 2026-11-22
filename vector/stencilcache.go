@@ -64,6 +64,11 @@ const (
 	stencilCacheMaxBytes  = 32 << 20
 	stencilMaxRegionSize  = 4093
 	stencilMaxRegionBytes = stencilCacheMaxBytes / 2
+
+	// maxFreeStencilEntries and maxRetainedStencilKeyCap bound the CPU-side reuse pools so a burst
+	// of many or huge paths does not pin memory indefinitely after pages are evicted.
+	maxFreeStencilEntries    = 1024
+	maxRetainedStencilKeyCap = 256
 )
 
 // disableStencilCacheForTesting makes every path go to theAtlas, as before the cache.
@@ -263,7 +268,14 @@ func (c *stencilCache) alloc(now int64, s image.Point) *stencilEntry {
 				return nil
 			}
 		}
-		if s.X <= victim.size.X && s.Y <= victim.size.Y {
+		// Reuse the victim page in place if s fits, unless the victim is an oversized dedicated
+		// page (> stencilPageMaxSize) and s is much smaller, which would otherwise pin a large GPU
+		// texture for small paths.
+		victimOversized := victim.size.X > stencilPageMaxSize || victim.size.Y > stencilPageMaxSize
+		canReuse := s.X <= victim.size.X && s.Y <= victim.size.Y &&
+			(!victimOversized || ((s.X > stencilPageMaxSize || s.Y > stencilPageMaxSize) &&
+				int64(victim.size.X)*int64(victim.size.Y) <= recent.ShrinkFactor*int64(s.X)*int64(s.Y)))
+		if canReuse {
 			c.evict(victim)
 			clearStencilImage(victim.img)
 			r, _ := victim.alloc(s)
@@ -335,7 +347,14 @@ func (c *stencilCache) evict(pg *stencilPage) {
 		c.unlink(e)
 		e.page = nil
 		e.next = nil
-		c.free = append(c.free, e)
+		if cap(e.key) > maxRetainedStencilKeyCap {
+			e.key = nil
+		} else {
+			e.key = e.key[:0]
+		}
+		if len(c.free) < maxFreeStencilEntries {
+			c.free = append(c.free, e)
+		}
 	}
 	clear(pg.entries)
 	pg.entries = pg.entries[:0]
@@ -378,6 +397,13 @@ func (c *stencilCache) expire(now int64) {
 			c.remove(pg)
 		}
 	}
+	if len(c.pages) == 0 {
+		c.free = nil
+		c.entries = nil
+		if cap(c.key) > maxRetainedStencilKeyCap {
+			c.key = nil
+		}
+	}
 }
 
 // stencilSweepInterval is how many frames apart sweepStencils looks at the stencil images.
@@ -408,6 +434,9 @@ func (c *stencilCache) dispose() {
 	for len(c.pages) > 0 {
 		c.remove(c.pages[len(c.pages)-1])
 	}
+	c.free = nil
+	c.entries = nil
+	c.key = nil
 }
 
 // alloc allocates a region of size s on the page, on the lowest shelf not much taller than s, or

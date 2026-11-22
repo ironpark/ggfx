@@ -81,7 +81,7 @@ type AddStrokeOptions struct {
 //
 // The added stroke path must be rendered with FillRuleNonZero.
 func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
-	if options == nil {
+	if src == nil || options == nil {
 		return
 	}
 	if options.Width <= 0 {
@@ -99,6 +99,14 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 		normalizeSubPath(&normalized, &src.subPaths[i])
 		if len(normalized.ops) == 0 {
 			continue
+		}
+
+		// If p ends with an empty sub-path from before AddStroke, append a fresh sub-path
+		// so MoveTo does not overwrite p.subPaths[origN-1] (which would skip GeoM and
+		// corrupt src when p == src).
+		if len(p.subPaths) == origN && origN > 0 && len(p.subPaths[origN-1].ops) == 0 {
+			p.addSubPaths(1)
+			p.subPaths[len(p.subPaths)-1].reset()
 		}
 
 		_, sp1, sp2, sp3, sp4 := strokeStartControlPositions(&normalized, options.Width/2)
@@ -256,6 +264,11 @@ func appendParalleledLineForQuadIfNeeded(path *Path, p0, p1, p2 point, dist floa
 	}
 	// This curve is a line as p0, p1, and p2 are on the same line.
 	if (p1.x-p0.x)*(p2.y-p0.y)-(p2.x-p0.x)*(p1.y-p0.y) == 0 {
+		if tip, ok := collinearQuadFoldTip(p0, p1, p2); ok && tip != p0 && tip != p2 {
+			appendParalleledLine(path, p0, tip, dist)
+			appendParalleledLine(path, tip, p2, dist)
+			return true
+		}
 		appendParalleledLine(path, p0, p2, dist)
 		return true
 	}
@@ -318,8 +331,7 @@ func doAppendParalleledQuad(path *Path, p0, p1, p2 point, dist float32, level in
 		return
 	}
 
-	minAllowance := max(dist*63/64, 0)
-	maxAllowance := dist * 65 / 64
+	allowance := dist / 64
 
 	var needSplit bool
 	for _, t := range []float32{0.25, 0.75} {
@@ -333,13 +345,12 @@ func doAppendParalleledQuad(path *Path, p0, p1, p2 point, dist float32, level in
 			y: (1-t)*(p1.y-p0.y) + t*(p2.y-p1.y),
 		}
 		v := dir.perp().norm().mul(dist)
-		p := point{
+		expectedP := point{
 			x: (1-t)*(1-t)*p0.x + 2*(1-t)*t*p1.x + t*t*p2.x + v.x,
 			y: (1-t)*(1-t)*p0.y + 2*(1-t)*t*p1.y + t*t*p2.y + v.y,
 		}
-		expectedP := p.add(v)
 
-		if !arePointsInRange(gotP, expectedP, minAllowance, maxAllowance) {
+		if !arePointsInRange(gotP, expectedP, 0, allowance) {
 			needSplit = true
 			break
 		}

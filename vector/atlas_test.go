@@ -225,3 +225,22 @@ func TestRoundUpAtlasSize(t *testing.T) {
 		}
 	}
 }
+
+func TestStencilAtlasRowHeightResetsOnNewRow(t *testing.T) {
+	// One tall row (2048px) followed by many short paths (32px) must fit on a single 4093x4093
+	// atlas image because subsequent rows reset their height to 32px instead of keeping 2048px.
+	dst := image.Rect(0, 0, 4093, 4093)
+	var rects []image.Rectangle
+	// Fill row 0 with two 2048x2048 regions.
+	rects = append(rects, image.Rect(0, 0, 2048, 2048), image.Rect(0, 0, 2048, 2048))
+	// Add 100 short 1024x32 regions (4 per row -> 25 rows * 32px = 800px, total height 2848 <= 4093).
+	for range 100 {
+		rects = append(rects, image.Rect(0, 0, 1024, 32))
+	}
+	a := vector.NewStencilAtlas()
+	defer a.Dispose()
+	setRectsNoAA(a, dst, rects...)
+	if got := a.ActiveImageCount(); got != 1 {
+		t.Errorf("ActiveImageCount = %d, want 1 (rows should not keep previous tall row height)", got)
+	}
+}

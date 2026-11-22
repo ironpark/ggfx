@@ -255,3 +255,40 @@ func TestStrokeCircleThickStrokeNonAntiAlias(t *testing.T) {
 		t.Errorf("got: %v, want: %v", got, want)
 	}
 }
+
+func TestStrokePathNilAndDegenerateUtils(t *testing.T) {
+	dst := ggfx.NewImage(32, 32)
+	defer dst.Deallocate()
+
+	// Must not panic on nil path.
+	vector.StrokePath(dst, nil, &vector.StrokeOptions{Width: 4}, nil)
+
+	// Degenerate non-AA strokes must draw nothing.
+	vector.StrokeLine(dst, 4, 4, 28, 4, -2, color.White, false)
+	vector.StrokeLine(dst, 4, 4, 28, 4, 0, color.White, false)
+	vector.StrokeRect(dst, 16, 16, 0, 0, 4, color.White, false)
+	vector.StrokeCircle(dst, 16, 16, 0, 4, color.White, false)
+	vector.StrokeCircle(dst, 16, 16, -2, 8, color.White, false)
+	for y := range 32 {
+		for x := range 32 {
+			if got := dst.At(x, y).(color.RGBA); got != (color.RGBA{}) {
+				t.Fatalf("unexpected pixel at (%d, %d): %v", x, y, got)
+			}
+		}
+	}
+
+	// Negative width/height StrokeRect must normalize to the same stroked outline as positive.
+	dstNeg := ggfx.NewImage(32, 32)
+	defer dstNeg.Deallocate()
+	dstPos := ggfx.NewImage(32, 32)
+	defer dstPos.Deallocate()
+	vector.StrokeRect(dstNeg, 24, 24, -16, -16, 2, color.White, false)
+	vector.StrokeRect(dstPos, 8, 8, 16, 16, 2, color.White, false)
+	for y := range 32 {
+		for x := range 32 {
+			if dstNeg.At(x, y) != dstPos.At(x, y) {
+				t.Fatalf("StrokeRect negative mismatch at (%d,%d): got %v, want %v", x, y, dstNeg.At(x, y), dstPos.At(x, y))
+			}
+		}
+	}
+}

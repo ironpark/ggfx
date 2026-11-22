@@ -289,6 +289,7 @@ func (p *Path) QuadTo(x1, y1, x2, y2 float32) {
 func (p *Path) CubicTo(x1, y1, x2, y2, x3, y3 float32) {
 	cur, ok := p.currentPosition()
 	if !ok {
+		p.MoveTo(x1, y1)
 		cur = point{x: x1, y: y1}
 	}
 	minX := min(cur.x, x1, x2, x3)
@@ -468,12 +469,6 @@ func (p *Path) ArcTo(x1, y1, x2, y2, radius float32) {
 		p0 = point{x: x1, y: y1}
 	}
 
-	// If the start and end points are too close, just add a line segment to avoid strange rendering results.
-	if arePointsInRange(p0, point{x: x2, y: y2}, 0, radius) {
-		p.LineTo(x2, y2)
-		return
-	}
-
 	d0 := vec2{
 		x: p0.x - x1,
 		y: p0.y - y1,
@@ -482,7 +477,7 @@ func (p *Path) ArcTo(x1, y1, x2, y2, radius float32) {
 		x: x2 - x1,
 		y: y2 - y1,
 	}
-	if d0 == (vec2{}) || d1 == (vec2{}) {
+	if radius == 0 || d0 == (vec2{}) || d1 == (vec2{}) {
 		p.LineTo(x1, y1)
 		return
 	}
@@ -501,8 +496,10 @@ func (p *Path) ArcTo(x1, y1, x2, y2, radius float32) {
 
 	// dist is the distance between the control point and the arc's beginning and ending points.
 	dist := radius / float32(math.Tan(theta/2))
-
-	// TODO: What if dist is too big?
+	if !isRegularF32(dist) {
+		p.LineTo(x2, y2)
+		return
+	}
 
 	// (ax0, ay0) is the start of the arc.
 	ax0 := x1 + d0.x*dist
@@ -537,77 +534,86 @@ func (p *Path) ArcTo(x1, y1, x2, y2, radius float32) {
 	p.Arc(cx, cy, radius, a0, a1, dir)
 }
 
-func euclideanMod(a, b float32) float32 {
-	return a - b*float32(math.Floor(float64(a)/float64(b)))
-}
-
 // Arc adds an arc to the path.
 // (x, y) is the center of the arc.
 // radius must be non-negative. A negative radius produces an undefined result.
 func (p *Path) Arc(x, y, radius, startAngle, endAngle float32, dir Direction) {
-	origStartAngle := startAngle
-	origEndAngle := endAngle
-
-	// Adjust the angles.
-	var da float64
-	if dir == Clockwise {
-		endAngle = startAngle + float32(euclideanMod(endAngle-startAngle, 2*math.Pi))
-		da = float64(endAngle - startAngle)
-	} else {
-		startAngle = endAngle + float32(euclideanMod(startAngle-endAngle, 2*math.Pi))
-		da = float64(startAngle - endAngle)
+	if !isRegularF32(startAngle) || !isRegularF32(endAngle) {
+		p.arc(x, y, radius, float64(startAngle), float64(endAngle), dir)
+		return
 	}
 
-	if da == 0 && origStartAngle != origEndAngle {
-		da = 2 * math.Pi
-		if dir == Clockwise {
-			endAngle = startAngle + 2*math.Pi
-		} else {
-			startAngle = endAngle + 2*math.Pi
-		}
+	s := float64(startAngle)
+	e := float64(endAngle)
+
+	// Compute the sweep angle da in [0, 2*pi] in float64 so huge finite angles cannot
+	// lose precision or stall the subdivision loop.
+	const twoPi = 2 * math.Pi
+	diff := e - s
+	if dir == CounterClockwise {
+		diff = s - e
+	}
+	da := math.Mod(diff, twoPi)
+	if da < 0 {
+		da += twoPi
+	}
+	// A float32 caller passing 2*math.Pi passes float32(2*math.Pi) ≈ 6.2831855, which is
+	// slightly larger than float64(2*math.Pi). Treat a full-turn difference within float32
+	// precision of a multiple of 2*pi as a full circle rather than wrapping to ~1.9e-7 rad.
+	if startAngle != endAngle && (da == 0 || (diff >= twoPi && da < 1e-5)) {
+		da = twoPi
 	}
 
-	// If the angle is big, split this into multiple arcs.
+	// Reduce large base angles modulo 2*pi so step additions never lose precision.
+	if math.Abs(s) > 2*math.Pi {
+		s = math.Mod(s, 2*math.Pi)
+	}
+
+	// If the angle is big, split this into multiple arcs using an integer segment count.
 	if da > math.Pi/2 {
-		const delta = math.Pi / 3
-		a := float64(startAngle)
-		if dir == Clockwise {
-			for {
-				p.arc(x, y, radius, float32(a), float32(min(a+delta, float64(endAngle))), dir)
-				if a+delta >= float64(endAngle) {
-					break
+		n := max(1, int(math.Ceil(da/(math.Pi/3))))
+		step := da / float64(n)
+		for i := range n {
+			var a0, a1 float64
+			if dir == Clockwise {
+				a0 = s + step*float64(i)
+				a1 = s + step*float64(i+1)
+				if i == n-1 {
+					a1 = s + da
 				}
-				a += delta
-			}
-		} else {
-			for {
-				p.arc(x, y, radius, float32(a), float32(max(a-delta, float64(endAngle))), dir)
-				if a-delta <= float64(endAngle) {
-					break
+			} else {
+				a0 = s - step*float64(i)
+				a1 = s - step*float64(i+1)
+				if i == n-1 {
+					a1 = s - da
 				}
-				a -= delta
 			}
+			p.arc(x, y, radius, a0, a1, dir)
 		}
 		return
 	}
 
-	p.arc(x, y, radius, startAngle, endAngle, dir)
+	if dir == Clockwise {
+		p.arc(x, y, radius, s, s+da, dir)
+	} else {
+		p.arc(x, y, radius, s, s-da, dir)
+	}
 }
 
 // arc adds an arc to the path without splitting it.
 // startAngle and endAngle must be already adjusted so that the arc sweeps from startAngle to endAngle in the direction dir.
-func (p *Path) arc(x, y, radius, startAngle, endAngle float32, dir Direction) {
+func (p *Path) arc(x, y, radius float32, startAngle, endAngle float64, dir Direction) {
 	var da float64
 	if dir == Clockwise {
-		da = float64(endAngle - startAngle)
+		da = endAngle - startAngle
 	} else {
-		da = float64(startAngle - endAngle)
+		da = startAngle - endAngle
 	}
 
-	sin0, cos0 := math.Sincos(float64(startAngle))
+	sin0, cos0 := math.Sincos(startAngle)
 	x0 := x + radius*float32(cos0)
 	y0 := y + radius*float32(sin0)
-	sin1, cos1 := math.Sincos(float64(endAngle))
+	sin1, cos1 := math.Sincos(endAngle)
 	x1 := x + radius*float32(cos1)
 	y1 := y + radius*float32(sin1)
 
@@ -681,8 +687,36 @@ func (p *Path) AddPath(src *Path, options *AddPathOptions) {
 	}
 }
 
-// countCusps counts the number of cusps in subPath, which are quadratic curves whose start and end points are the same
-// and whose control point differs from them.
+// collinearQuadFoldTip reports whether a collinear quadratic Bézier (p0, p1, p2)
+// with p0 != p1, p1 != p2, and p0 != p2 folds back on itself, and if so returns
+// the extremum tip where its velocity reverses.
+func collinearQuadFoldTip(p0, p1, p2 point) (point, bool) {
+	ax, ay := float64(p0.x), float64(p0.y)
+	bx, by := float64(p1.x), float64(p1.y)
+	cx, cy := float64(p2.x), float64(p2.y)
+	d0x, d0y := bx-ax, by-ay
+	d1x, d1y := cx-bx, cy-by
+	if d0x*d1x+d0y*d1y >= 0 {
+		return point{}, false
+	}
+	var t float64
+	if math.Abs(d0x-d1x) >= math.Abs(d0y-d1y) {
+		t = d0x / (d0x - d1x)
+	} else {
+		t = d0y / (d0y - d1y)
+	}
+	if !(t > 0 && t < 1) {
+		return point{}, false
+	}
+	mt := 1 - t
+	return point{
+		x: float32(mt*mt*ax + 2*mt*t*bx + t*t*cx),
+		y: float32(mt*mt*ay + 2*mt*t*by + t*t*cy),
+	}, true
+}
+
+// countCusps counts the number of cusps and collinear fold-backs in subPath, which
+// normalizeSubPath splits into two lines.
 func countCusps(subPath *subPath) int {
 	var n int
 	cur := subPath.start
@@ -693,6 +727,11 @@ func countCusps(subPath *subPath) int {
 		case opTypeQuadTo:
 			if cur == op.p2 && cur != op.p1 {
 				n++
+			} else if cur != op.p1 && op.p1 != op.p2 &&
+				(op.p1.x-cur.x)*(op.p2.y-cur.y)-(op.p2.x-cur.x)*(op.p1.y-cur.y) == 0 {
+				if _, ok := collinearQuadFoldTip(cur, op.p1, op.p2); ok {
+					n++
+				}
 			}
 			cur = op.p2
 		}
@@ -703,7 +742,7 @@ func countCusps(subPath *subPath) int {
 // normalizeSubPath normalizes src by removing unnecessary operations, and stores the result into dst.
 // dst must not be src.
 func normalizeSubPath(dst *subPath, src *subPath) {
-	// A cusp is converted into two lines, which increases the number of operations.
+	// A cusp or collinear fold-back is converted into two lines, which increases the number of operations.
 	ops := slices.Grow(dst.ops[:0], len(src.ops)+countCusps(src))
 	cur := src.start
 	for _, op := range src.ops {
@@ -745,6 +784,13 @@ func normalizeSubPath(dst *subPath, src *subPath) {
 				op.p2 = point{}
 				cur = op.p1
 			case (op.p1.x-cur.x)*(op.p2.y-cur.y)-(op.p2.x-cur.x)*(op.p1.y-cur.y) == 0:
+				if tip, ok := collinearQuadFoldTip(cur, op.p1, op.p2); ok && tip != cur && tip != op.p2 {
+					first := op
+					first.typ = opTypeLineTo
+					first.p1 = tip
+					first.p2 = point{}
+					ops = append(ops, first)
+				}
 				op.typ = opTypeLineTo
 				op.p1 = op.p2
 				op.p2 = point{}

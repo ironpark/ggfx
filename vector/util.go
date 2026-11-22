@@ -93,6 +93,10 @@ func StrokeLine(dst *ggfx.Image, x0, y0, x1, y1 float32, strokeWidth float32, cl
 		return
 	}
 
+	if strokeWidth <= 0 || (x0 == x1 && y0 == y1) {
+		return
+	}
+
 	// Use a regular DrawImage for batching.
 	op := &ggfx.DrawImageOptions{}
 	op.GeoM.Scale(math.Hypot(float64(x1-x0), float64(y1-y0)), float64(strokeWidth))
@@ -153,8 +157,16 @@ func StrokeRect(dst *ggfx.Image, x, y, width, height float32, strokeWidth float3
 		return
 	}
 
-	if strokeWidth <= 0 {
+	if strokeWidth <= 0 || (width == 0 && height == 0) {
 		return
+	}
+	if width < 0 {
+		x += width
+		width = -width
+	}
+	if height < 0 {
+		y += height
+		height = -height
 	}
 
 	if strokeWidth >= width || strokeWidth >= height {
@@ -272,7 +284,7 @@ func StrokeCircle(dst *ggfx.Image, cx, cy, r float32, strokeWidth float32, clr c
 		return
 	}
 
-	if strokeWidth <= 0 {
+	if strokeWidth <= 0 || !(r > 0) || math.IsInf(float64(r), 0) {
 		return
 	}
 

@@ -876,3 +876,95 @@ func TestAddStrokeAllocs(t *testing.T) {
 		})
 	}
 }
+
+func TestArcHugeFiniteAnglesTerminate(t *testing.T) {
+	for _, tc := range []struct {
+		start, end float32
+		dir        vector.Direction
+	}{
+		{1e18, 1e18 + 1e12, vector.Clockwise},
+		{1e30, 1e30 + 1e24, vector.Clockwise},
+		{-1e30, -1e30 - 1e24, vector.CounterClockwise},
+		{float32(math.NaN()), 1, vector.Clockwise},
+		{0, float32(math.Inf(1)), vector.Clockwise},
+	} {
+		var p vector.Path
+		p.Arc(10, 10, 5, tc.start, tc.end, tc.dir)
+	}
+}
+
+func TestLineJoinRound90Degrees(t *testing.T) {
+	dstRound := ggfx.NewImage(64, 64)
+	defer dstRound.Deallocate()
+	dstBevel := ggfx.NewImage(64, 64)
+	defer dstBevel.Deallocate()
+
+	var p vector.Path
+	p.MoveTo(16, 32)
+	p.LineTo(32, 32)
+	p.LineTo(32, 48)
+
+	vector.StrokePath(dstRound, &p, &vector.StrokeOptions{Width: 20, LineJoin: vector.LineJoinRound}, nil)
+	vector.StrokePath(dstBevel, &p, &vector.StrokeOptions{Width: 20, LineJoin: vector.LineJoinBevel}, nil)
+
+	// At the outer 45-degree diagonal of the 90-degree corner (around (32+8, 32-8) = (40, 24)),
+	// a bevel cuts along x - y = 10*sqrt(2) ≈ 14.14 (distance 7.07 from corner), whereas a round
+	// join extends to radius 10 (distance 10 from corner, covering (39, 25) at distance ~9.9? Check (38, 26) at dist 8.48).
+	if got, want := dstRound.At(38, 26).(color.RGBA), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {
+		t.Errorf("round join at (38, 26) = %v, want %v", got, want)
+	}
+	if got, want := dstBevel.At(38, 26).(color.RGBA), (color.RGBA{}); got != want {
+		t.Errorf("bevel join at (38, 26) = %v, want %v", got, want)
+	}
+}
+
+func TestAddStrokeTrailingEmptySubPath(t *testing.T) {
+	var src vector.Path
+	src.MoveTo(10, 10)
+	src.LineTo(20, 10)
+
+	var dst vector.Path
+	dst.MoveTo(0, 0) // trailing empty sub-path
+	op := &vector.AddStrokeOptions{
+		StrokeOptions: vector.StrokeOptions{Width: 4},
+	}
+	op.GeoM.Translate(100, 200)
+	dst.AddStroke(&src, op)
+
+	if got, want := dst.Bounds(), image.Rect(110, 208, 120, 212); got != want {
+		t.Errorf("AddStroke with trailing empty sub-path + GeoM: got %v, want %v", got, want)
+	}
+
+	// Self-stroke with trailing empty sub-path must not double-stroke.
+	var self vector.Path
+	self.MoveTo(10, 10)
+	self.LineTo(20, 10)
+	self.MoveTo(50, 50)
+	self.AddStroke(&self, &vector.AddStrokeOptions{StrokeOptions: vector.StrokeOptions{Width: 4}})
+	if got, want := vector.SubPathCount(&self), 3; got != want {
+		t.Errorf("self AddStroke SubPathCount = %d, want %d", got, want)
+	}
+}
+
+func TestStrokeCollinearFoldBackQuad(t *testing.T) {
+	var p vector.Path
+	p.MoveTo(0, 10)
+	p.QuadTo(100, 10, 20, 10) // folds back at x = 500/9 ≈ 55.56
+
+	var sp vector.Path
+	sp.AddStroke(&p, &vector.AddStrokeOptions{StrokeOptions: vector.StrokeOptions{Width: 4}})
+	b := sp.Bounds()
+	if b.Max.X < 55 {
+		t.Errorf("stroked collinear fold-back quad bounds = %v, want Max.X >= 55", b)
+	}
+}
+
+func TestCubicToEmptyPath(t *testing.T) {
+	var p vector.Path
+	p.CubicTo(10, 20, 50, 100, 100, 20)
+	// Start of the cubic must remain (10, 20), so Bounds.Min.X == 10 and Bounds.Min.Y == 20.
+	b := p.Bounds()
+	if b.Min.X != 10 || b.Min.Y != 20 {
+		t.Errorf("CubicTo on empty path bounds = %v, want Min=(10, 20)", b)
+	}
+}
