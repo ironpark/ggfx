@@ -74,6 +74,17 @@ func (v *view) release() {
 		v.metalDisplayLinkDelegate.Send(objc.RegisterName("release"))
 		v.metalDisplayLinkDelegate = 0
 	}
+	if v.presentedHandler != 0 {
+		for start := time.Now(); v.queuedPresents.Load() > 0 && time.Since(start) < 100*time.Millisecond; {
+			time.Sleep(time.Millisecond)
+		}
+		v.presentedHandler.Release()
+		v.presentedHandler = 0
+	}
+	if v.ml != (ca.MetalLayer{}) {
+		v.ml.Release()
+		v.ml = ca.MetalLayer{}
+	}
 }
 
 // linkIdle is how long the display link runs with no frame waiting for it before it stops: a

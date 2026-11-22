@@ -401,6 +401,24 @@ func TestReplayRejects(t *testing.T) {
 			e.u32(2)
 			e.u32(math.MaxUint32)
 		},
+		"inverted write pixels rect": func(e *enc) {
+			e.u8(opNewImage)
+			e.u32(2)
+			e.u32(4)
+			e.u32(4)
+			e.u8(0)
+			e.u8(opWritePixels)
+			e.u32(2)
+			e.u32(1)
+			e.rect(image.Rectangle{Min: image.Pt(4, 4), Max: image.Pt(0, 0)})
+			e.bytes(nil)
+		},
+		"out of bounds scissor": func(e *enc) {
+			encodeTestShaderAndDraw(t, e, true, image.Rect(screenW+10, 0, screenW+10, 10), 0)
+		},
+		"inverted scissor": func(e *enc) {
+			encodeTestShaderAndDraw(t, e, true, image.Rectangle{Min: image.Pt(20, 20), Max: image.Pt(10, 10)}, 6)
+		},
 	}
 	for name, f := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -408,6 +426,122 @@ func TestReplayRejects(t *testing.T) {
 				t.Error("the replay took it")
 			}
 		})
+	}
+}
+
+func encodeTestShaderAndDraw(t *testing.T, e *enc, withSetup bool, region image.Rectangle, indexCount uint32) {
+	t.Helper()
+	src, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withSetup {
+		e.u8(opNewScreenImage)
+		e.u32(1)
+		e.u32(screenW)
+		e.u32(screenH)
+		e.u8(opNewShader)
+		e.u32(2)
+		e.u32(uint32(src.TextureCount))
+		e.bytes(src.Source)
+		vs, is := quads(1)
+		e.u8(opSetVertices)
+		e.f32s(vs)
+		e.u32s(is)
+	}
+	e.u8(opDrawTriangles)
+	e.u32(1) // screen
+	for range graphics.ShaderSrcImageCount {
+		e.u32(0)
+	}
+	e.u32(2) // shader
+	e.u32(1) // dstRegions count
+	e.rect(region)
+	e.u32(indexCount)
+	e.u32(0) // indexOffset
+	b := graphicsdriver.BlendSourceOver
+	e.u8(uint8(b.BlendFactorSourceRGB))
+	e.u8(uint8(b.BlendFactorSourceAlpha))
+	e.u8(uint8(b.BlendFactorDestinationRGB))
+	e.u8(uint8(b.BlendFactorDestinationAlpha))
+	e.u8(uint8(b.BlendOperationRGB))
+	e.u8(uint8(b.BlendOperationAlpha))
+	e.u64(1)
+	e.u64(1)
+	e.u32s(uniformsFor(src, screenW, screenH, 1))
+}
+
+func TestReplayResetsVerticesBetweenBatches(t *testing.T) {
+	src, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := fakedriver.New()
+	target := newTarget(g)
+	r := NewReplayer()
+
+	var b1 enc
+	b1.header(Header{Screen: 1, Width: screenW, Height: screenH})
+	b1.u8(opNewScreenImage)
+	b1.u32(1)
+	b1.u32(screenW)
+	b1.u32(screenH)
+	b1.u8(opNewShader)
+	b1.u32(2)
+	b1.u32(uint32(src.TextureCount))
+	b1.bytes(src.Source)
+	vs, is := quads(1)
+	b1.u8(opSetVertices)
+	b1.f32s(vs)
+	b1.u32s(is)
+	if _, err := r.Replay(g, b1.b, target); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second batch draws without setting vertices; must fail rather than reusing batch 1's counts.
+	var b2 enc
+	b2.header(Header{Screen: 1, Width: screenW, Height: screenH})
+	encodeTestShaderAndDraw(t, &b2, false, image.Rect(0, 0, 10, 10), 6)
+	if _, err := r.Replay(g, b2.b, target); err == nil {
+		t.Error("Replay drew using stale vertices/indices from a previous batch")
+	}
+}
+
+func TestSingleSurfaceUntilDispose(t *testing.T) {
+	rec := &recorder{}
+	g := NewGraphics(testInfo, rec)
+	s1, err := g.NewSurface(SurfaceTarget{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.NewSurface(SurfaceTarget{}, false); err == nil {
+		t.Error("second concurrent NewSurface must fail")
+	}
+	s1.Dispose()
+	s2, err := g.NewSurface(SurfaceTarget{}, false)
+	if err != nil {
+		t.Fatalf("NewSurface after Dispose failed: %v", err)
+	}
+	s2.Dispose()
+}
+
+func TestReadPixelsScreenPaddingRejected(t *testing.T) {
+	g := fakedriver.New()
+	target := newTarget(g)
+	target.InternalWidth, target.InternalHeight = 256, 128
+	r := NewReplayer()
+	var e enc
+	e.header(Header{Screen: 1, Width: screenW, Height: screenH})
+	e.u8(opNewScreenImage)
+	e.u32(1)
+	e.u32(screenW)
+	e.u32(screenH)
+	if _, err := r.Replay(g, e.b, target); err != nil {
+		t.Fatal(err)
+	}
+	dst := make([]byte, 4)
+	if err := r.ReadPixels(1, []image.Rectangle{image.Rect(screenW, 0, screenW+1, 1)}, [][]byte{dst}, target); err == nil {
+		t.Error("ReadPixels on screen past logical width must fail")
 	}
 }
 

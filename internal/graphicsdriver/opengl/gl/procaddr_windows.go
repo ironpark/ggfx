@@ -37,7 +37,8 @@ func (c *defaultContext) getProcAddress(namea string) (uintptr, error) {
 	}
 
 	r, _, err := procWglGetProcAddress.Call(uintptr(unsafe.Pointer(cname)))
-	if r != 0 {
+	// wglGetProcAddress may return 0, 1, 2, 3, or -1 on failure (e.g. for OpenGL 1.1 core functions).
+	if r != 0 && r != 1 && r != 2 && r != 3 && r != ^uintptr(0) {
 		return r, nil
 	}
 	if err != nil && err != windows.ERROR_SUCCESS && err != windows.ERROR_PROC_NOT_FOUND {

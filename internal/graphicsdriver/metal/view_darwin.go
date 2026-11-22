@@ -142,36 +142,38 @@ func (v *view) colorPixelFormat() mtl.PixelFormat {
 
 func (v *view) initialize(device mtl.Device, colorSpace color.ColorSpace) error {
 	v.device = device
-
-	ml, err := ca.NewMetalLayer(colorSpace)
-	if err != nil {
-		return fmt.Errorf("metal: ca.NewMetalLayer failed: %w", err)
-	}
-	v.ml = ml
-	v.ml.SetDevice(v.device)
-	// https://developer.apple.com/documentation/quartzcore/cametallayer/1478155-pixelformat
-	//
-	// The pixel format for a Metal layer must be MTLPixelFormatBGRA8Unorm,
-	// MTLPixelFormatBGRA8Unorm_sRGB, MTLPixelFormatRGBA16Float, MTLPixelFormatBGRA10_XR, or
-	// MTLPixelFormatBGRA10_XR_sRGB.
 	v.pixelFormat = mtl.PixelFormatBGRA8UNorm
-	v.ml.SetPixelFormat(v.pixelFormat)
-
-	// Presents wait for the display. The layer's default might differ (#1364).
-	v.ml.SetDisplaySyncEnabled(true)
-	// Not framebuffer only: the next frame copies the drawable presented last (see Kept).
-	v.ml.SetFramebufferOnly(false)
-
-	// presentsWithTransaction is disabled at first, and updated at every frame on macOS
-	// (see updatePresentationState). This is always disabled on iOS.
-	v.ml.SetPresentsWithTransaction(false)
-
-	v.ml.SetMaximumDrawableCount(maximumDrawableCount)
 
 	if useSwapChain {
 		if c, err := newSwapChain(device, colorSpace); err == nil {
 			v.chain = c
 		}
+	}
+
+	if v.chain == nil {
+		ml, err := ca.NewMetalLayer(colorSpace)
+		if err != nil {
+			return fmt.Errorf("metal: ca.NewMetalLayer failed: %w", err)
+		}
+		v.ml = ml
+		v.ml.SetDevice(v.device)
+		// https://developer.apple.com/documentation/quartzcore/cametallayer/1478155-pixelformat
+		//
+		// The pixel format for a Metal layer must be MTLPixelFormatBGRA8Unorm,
+		// MTLPixelFormatBGRA8Unorm_sRGB, MTLPixelFormatRGBA16Float, MTLPixelFormatBGRA10_XR, or
+		// MTLPixelFormatBGRA10_XR_sRGB.
+		v.ml.SetPixelFormat(v.pixelFormat)
+
+		// Presents wait for the display. The layer's default might differ (#1364).
+		v.ml.SetDisplaySyncEnabled(true)
+		// Not framebuffer only: the next frame copies the drawable presented last (see Kept).
+		v.ml.SetFramebufferOnly(false)
+
+		// presentsWithTransaction is disabled at first, and updated at every frame on macOS
+		// (see updatePresentationState). This is always disabled on iOS.
+		v.ml.SetPresentsWithTransaction(false)
+
+		v.ml.SetMaximumDrawableCount(maximumDrawableCount)
 	}
 
 	if err := v.initializeOS(); err != nil {

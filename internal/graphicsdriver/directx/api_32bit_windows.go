@@ -56,3 +56,11 @@ type _D3D12_ROOT_PARAMETER struct {
 	_                [4]byte                      // Padding
 	ShaderVisibility _D3D12_SHADER_VISIBILITY
 }
+
+type _D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex struct {
+	_                structs.HostLayout
+	pResource        *_ID3D12Resource
+	Type             _D3D12_TEXTURE_COPY_TYPE
+	SubresourceIndex uint32
+	_                [unsafe.Sizeof(_D3D12_PLACED_SUBRESOURCE_FOOTPRINT{}) - unsafe.Sizeof(uint32(0))]byte // Padding for union
+}

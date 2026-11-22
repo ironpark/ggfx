@@ -65,6 +65,9 @@ type Info struct {
 
 // MarshalBinary encodes info with the version of this package.
 func (info Info) MarshalBinary() ([]byte, error) {
+	if info.ColorSpace > 2 {
+		return nil, fmt.Errorf("remote: invalid color space %d", info.ColorSpace)
+	}
 	if info.MaxImageSize <= 0 || info.MaxImageSize > math.MaxInt32 {
 		return nil, fmt.Errorf("remote: invalid max image size %d", info.MaxImageSize)
 	}
@@ -112,6 +115,9 @@ func (info *Info) UnmarshalBinary(b []byte) error {
 		FlipsY:       flags&1 != 0,
 		A8:           flags&2 != 0,
 		MaxImageSize: int(binary.LittleEndian.Uint32(b[8:])),
+	}
+	if info.ColorSpace > 2 {
+		return fmt.Errorf("remote: invalid color space %d", info.ColorSpace)
 	}
 	if info.MaxImageSize <= 0 || info.MaxImageSize > math.MaxInt32 {
 		return fmt.Errorf("remote: invalid max image size %d", info.MaxImageSize)
@@ -261,7 +267,7 @@ func (d *dec) u64() uint64 {
 func (d *dec) rect() image.Rectangle {
 	x0, y0 := int32(d.u32()), int32(d.u32())
 	x1, y1 := int32(d.u32()), int32(d.u32())
-	return image.Rect(int(x0), int(y0), int(x1), int(y1))
+	return image.Rectangle{Min: image.Pt(int(x0), int(y0)), Max: image.Pt(int(x1), int(y1))}
 }
 
 // count reads a count of items each at least size bytes long, and checks that they can fit in

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/color"
@@ -51,7 +52,8 @@ type Graphics struct {
 	drawCalled bool
 
 	// surfaces are the presentation targets, in creation order.
-	surfaces []*Surface
+	surfacesMu sync.Mutex
+	surfaces   []*Surface
 
 	// drawingContext is the context everything is drawn in. It is nil in a browser, where the one
 	// context is always current.
@@ -106,9 +108,21 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 
 // present swaps the buffers of every surface drawn to since the previous present, and makes the
 // drawing context current again.
-func (g *Graphics) present() error {
+func (g *Graphics) present() (retErr error) {
+	g.surfacesMu.Lock()
+	surfaces := append([]*Surface(nil), g.surfaces...)
+	g.surfacesMu.Unlock()
+
 	var presented bool
-	for _, s := range g.surfaces {
+	var switched bool
+	defer func() {
+		if switched {
+			if err := g.makeContextCurrent(); err != nil {
+				retErr = errors.Join(retErr, err)
+			}
+		}
+	}()
+	for _, s := range surfaces {
 		if !s.drawn {
 			continue
 		}
@@ -119,6 +133,7 @@ func (g *Graphics) present() error {
 		if err := s.presenter.MakeContextCurrent(); err != nil {
 			return err
 		}
+		switched = true
 		s.copyScreen()
 
 		// Only the first swap of a frame waits for the display. Waiting on every window would
@@ -141,9 +156,6 @@ func (g *Graphics) present() error {
 			return err
 		}
 		presented = true
-	}
-	if presented {
-		return g.makeContextCurrent()
 	}
 	return nil
 }
@@ -229,6 +241,8 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 	if err != nil {
 		return nil, err
 	}
+	g.surfacesMu.Lock()
+	defer g.surfacesMu.Unlock()
 	if p == nil && len(g.surfaces) > 0 {
 		return nil, errors.New("opengl: only one surface is supported without a Presenter")
 	}
@@ -293,7 +307,9 @@ func (s *Surface) copyScreen() {
 // destroys.
 func (s *Surface) Dispose() {
 	g := s.graphics
+	g.surfacesMu.Lock()
 	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *Surface) bool { return t == s })
+	g.surfacesMu.Unlock()
 }
 
 func (g *Graphics) Initialize() error {

@@ -15,6 +15,8 @@
 package directx
 
 import (
+	"errors"
+	"fmt"
 	"image"
 	"unsafe"
 
@@ -64,15 +66,27 @@ func (i *image11) disposeBuffers() {
 }
 
 func (i *image11) ReadPixels(args []graphicsdriver.PixelsArgs) error {
+	if i.screen {
+		return errors.New("directx: ReadPixels cannot be called on the screen")
+	}
 	var unionRegion image.Rectangle
 	for _, a := range args {
+		if got, want := len(a.Pixels), 4*a.Region.Dx()*a.Region.Dy(); got != want {
+			return fmt.Errorf("directx: len(pixels) must be %d but %d at ReadPixels", want, got)
+		}
+		if a.Region.Empty() {
+			continue
+		}
 		unionRegion = unionRegion.Union(a.Region)
+	}
+	if unionRegion.Empty() {
+		return nil
 	}
 
 	staging, err := i.graphics.device.CreateTexture2D(&_D3D11_TEXTURE2D_DESC{
 		Width:     uint32(unionRegion.Dx()),
 		Height:    uint32(unionRegion.Dy()),
-		MipLevels: 0,
+		MipLevels: 1,
 		ArraySize: 1,
 		Format:    _DXGI_FORMAT_R8G8B8A8_UNORM,
 		SampleDesc: _DXGI_SAMPLE_DESC{
@@ -102,10 +116,14 @@ func (i *image11) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 	if err := i.graphics.deviceContext.Map(unsafe.Pointer(staging), 0, _D3D11_MAP_READ, 0, &mapped); err != nil {
 		return err
 	}
+	defer i.graphics.deviceContext.Unmap(unsafe.Pointer(staging), 0)
 
 	stride := int(mapped.RowPitch)
 	srcPix := unsafe.Slice((*byte)(mapped.pData), stride*unionRegion.Dy())
 	for _, a := range args {
+		if a.Region.Empty() {
+			continue
+		}
 		w := a.Region.Dx()
 		if unionRegion == a.Region && stride == 4*w {
 			copy(a.Pixels, srcPix)
@@ -117,13 +135,22 @@ func (i *image11) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 		}
 	}
 
-	i.graphics.deviceContext.Unmap(unsafe.Pointer(staging), 0)
-
 	return nil
 }
 
 func (i *image11) WritePixels(args []graphicsdriver.PixelsArgs) error {
+	if i.screen {
+		return errors.New("directx: WritePixels cannot be called on the screen")
+	}
 	for _, a := range args {
+		if got, want := len(a.Pixels), 4*a.Region.Dx()*a.Region.Dy(); got != want {
+			return fmt.Errorf("directx: len(pixels) must be %d but %d at WritePixels", want, got)
+		}
+	}
+	for _, a := range args {
+		if a.Region.Empty() {
+			continue
+		}
 		i.graphics.deviceContext.UpdateSubresource(unsafe.Pointer(i.texture), 0, &_D3D11_BOX{
 			left:   uint32(a.Region.Min.X),
 			top:    uint32(a.Region.Min.Y),

@@ -345,6 +345,9 @@ func (v *view) releaseDisplayLink() {
 func displayLinkOutputCallback(displayLink uintptr, inNow, inOutputTime uintptr, flagsIn uint64, flagsOut *uint64, displayLinkContext uintptr) int32 {
 	h := viewHandle(displayLinkContext)
 	view := h.Value()
+	if view == nil {
+		return 0
+	}
 	view.fence.advance()
 	return 0
 }
@@ -356,6 +359,10 @@ func (v *view) updatePresentationState() {
 	if v.liveResizing.Load() != inLiveResize {
 		v.liveResizing.Store(inLiveResize)
 		v.updateMetalDisplayLink()
+	}
+
+	if v.chain != nil {
+		return
 	}
 
 	// presentsWithTransaction is enabled unless the window is in the fullscreen mode (#1745,

@@ -69,6 +69,8 @@ type swapChain struct {
 	bufs          [2]swapBuffer
 	front         int // the buffer on the screen, or -1
 	drawing       int // the buffer the frame draws into, or -1
+	dropped       bool
+	released      bool
 	idleTimer     *time.Timer
 }
 
@@ -90,12 +92,12 @@ var ioSurface struct {
 	once sync.Once
 	err  error
 
-	create, isInUse, setPurgeable, setValue   uintptr
-	cfRelease, dictCreate, dictSet, numCreate uintptr
-	keyCallbacks, valueCallbacks              uintptr
-	kWidth, kHeight, kBytesPerElement         uintptr
-	kPixelFormat, kColorSpace                 uintptr
-	kSRGB, kDisplayP3                         uintptr
+	create, isInUse, setPurgeable, setValue             uintptr
+	cfRetain, cfRelease, dictCreate, dictSet, numCreate uintptr
+	keyCallbacks, valueCallbacks                        uintptr
+	kWidth, kHeight, kBytesPerElement                   uintptr
+	kPixelFormat, kColorSpace                           uintptr
+	kSRGB, kDisplayP3                                   uintptr
 }
 
 const (
@@ -147,6 +149,7 @@ func loadIOSurface() error {
 		s.kBytesPerElement = constant("IOSurface", "kIOSurfaceBytesPerElement")
 		s.kPixelFormat = constant("IOSurface", "kIOSurfacePixelFormat")
 		s.kColorSpace = constant("IOSurface", "kIOSurfaceColorSpace")
+		s.cfRetain = fn("CoreFoundation", "CFRetain")
 		s.cfRelease = fn("CoreFoundation", "CFRelease")
 		s.dictCreate = fn("CoreFoundation", "CFDictionaryCreateMutable")
 		s.dictSet = fn("CoreFoundation", "CFDictionarySetValue")
@@ -245,10 +248,11 @@ const mostInUseWait = 20 * time.Millisecond
 // changed need be copied to bring it up to it.
 func (c *swapChain) acquire(width, height int) (tex mtl.Texture, previous bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if width <= 0 || height <= 0 {
+	if c.released || width <= 0 || height <= 0 {
+		c.mu.Unlock()
 		return mtl.Texture{}, false
 	}
+	c.dropped = false
 	if c.width != width || c.height != height {
 		// The layer keeps what it shows until the first frame of the new size replaces it.
 		c.freeLocked(0)
@@ -263,6 +267,7 @@ func (c *swapChain) acquire(width, height int) (tex mtl.Texture, previous bool) 
 	if b.surface == 0 {
 		nb, ok := c.newSurface(width, height)
 		if !ok {
+			c.mu.Unlock()
 			return mtl.Texture{}, false
 		}
 		*b = nb
@@ -279,13 +284,26 @@ func (c *swapChain) acquire(width, height int) (tex mtl.Texture, previous bool) 
 	}
 	previous = b.shown && c.front >= 0
 	b.shown = false // drawn into from now on
+	surf := b.surface
+	tex = b.tex
+	c.drawing = i
+	purego.SyscallN(ioSurface.cfRetain, surf)
+	c.mu.Unlock()
+
+	// Wait for the window server without holding c.mu so drop() on the main thread does not stall.
 	for start := time.Now(); time.Since(start) < mostInUseWait; time.Sleep(250 * time.Microsecond) {
-		if r, _, _ := purego.SyscallN(ioSurface.isInUse, b.surface); r&0xff == 0 {
+		if r, _, _ := purego.SyscallN(ioSurface.isInUse, surf); r&0xff == 0 {
 			break
 		}
 	}
-	c.drawing = i
-	return b.tex, previous
+	purego.SyscallN(ioSurface.cfRelease, surf)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.released || c.drawing != i || c.bufs[i].surface != surf {
+		return mtl.Texture{}, false
+	}
+	return tex, previous
 }
 
 // present shows the buffer the frame drew into once cb, committed, is scheduled, or on the main
@@ -295,11 +313,14 @@ func (c *swapChain) present(cb mtl.CommandBuffer, onMainThread func(func())) {
 	c.mu.Lock()
 	i := c.drawing
 	c.drawing = -1
-	if i < 0 || c.bufs[i].surface == 0 {
+	if c.released || i < 0 || c.bufs[i].surface == 0 {
 		c.mu.Unlock()
 		return
 	}
 	surface := c.bufs[i].surface
+	layer := c.layer
+	purego.SyscallN(ioSurface.cfRetain, surface)
+	layer.Send(sel_retain)
 	c.bufs[i].shown = true
 	c.front = i
 	if c.idleTimer == nil {
@@ -310,12 +331,23 @@ func (c *swapChain) present(cb mtl.CommandBuffer, onMainThread func(func())) {
 	c.mu.Unlock()
 
 	show := func() {
-		objc.ID(class_CATransaction).Send(sel_begin)
-		objc.ID(class_CATransaction).Send(sel_setDisableActions, true)
-		c.layer.Send(sel_setContents, surface)
-		objc.ID(class_CATransaction).Send(sel_commit)
-		// The rendering thread has no run loop to commit its implicit transaction.
-		ca.FlushTransaction()
+		defer func() {
+			purego.SyscallN(ioSurface.cfRelease, surface)
+			layer.Send(sel_release)
+		}()
+		c.mu.Lock()
+		valid := !c.released && !c.dropped && c.layer == layer && c.front == i && c.bufs[i].surface == surface
+		if valid {
+			objc.ID(class_CATransaction).Send(sel_begin)
+			objc.ID(class_CATransaction).Send(sel_setDisableActions, true)
+			layer.Send(sel_setContents, surface)
+			objc.ID(class_CATransaction).Send(sel_commit)
+		}
+		c.mu.Unlock()
+		if valid {
+			// The rendering thread has no run loop to commit its implicit transaction.
+			ca.FlushTransaction()
+		}
 	}
 	if onMainThread != nil {
 		onMainThread(func() {
@@ -349,11 +381,14 @@ func (c *swapChain) idle() {
 func (c *swapChain) drop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.drawing >= 0 {
+	if c.released || c.drawing >= 0 {
 		// A frame is being drawn; the window hides after it.
 		return
 	}
-	c.layer.Send(sel_setContents, uintptr(0))
+	c.dropped = true
+	if c.layer != 0 {
+		c.layer.Send(sel_setContents, uintptr(0))
+	}
 	c.freeLocked(0)
 	c.freeLocked(1)
 	c.front = -1
@@ -363,6 +398,7 @@ func (c *swapChain) drop() {
 func (c *swapChain) release() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.released = true
 	if c.idleTimer != nil {
 		c.idleTimer.Stop()
 	}

@@ -264,6 +264,9 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 	}
 	copy(unsafe.Slice((*uint32)(unsafe.Pointer(cpu)), len(internal)), internal)
 	if len(user) > 0 {
+		if uint32(len(user)*4) > userSize {
+			return fmt.Errorf("directx: user uniform block (%d bytes) exceeds shader size (%d bytes)", len(user)*4, userSize)
+		}
 		copy(unsafe.Slice((*uint32)(unsafe.Pointer(cpu+uintptr(internalSize))), len(user)), user)
 	}
 

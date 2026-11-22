@@ -37,7 +37,7 @@ type image12 struct {
 	surface *surface12
 	screen  bool
 
-	states            [frameCount]_D3D12_RESOURCE_STATES
+	resState          _D3D12_RESOURCE_STATES
 	texture           *_ID3D12Resource
 	rtvDescriptorHeap *_ID3D12DescriptorHeap
 
@@ -65,14 +65,27 @@ func (i *image12) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 	if i.screen {
 		return errors.New("directx: ReadPixels cannot be called on the screen")
 	}
+	if i.texture == nil {
+		return errors.New("directx: the image is already disposed")
+	}
+
+	bpp := i.format.BytesPerPixel()
+	var unionRegion image.Rectangle
+	for _, a := range args {
+		if a.Region.Empty() {
+			continue
+		}
+		if len(a.Pixels) != bpp*a.Region.Dx()*a.Region.Dy() {
+			return fmt.Errorf("directx: len(Pixels) must be %d, but %d", bpp*a.Region.Dx()*a.Region.Dy(), len(a.Pixels))
+		}
+		unionRegion = unionRegion.Union(a.Region)
+	}
+	if unionRegion.Empty() {
+		return nil
+	}
 
 	if err := i.graphics.flushCommandList(i.graphics.drawCommandList); err != nil {
 		return err
-	}
-
-	var unionRegion image.Rectangle
-	for _, a := range args {
-		unionRegion = unionRegion.Union(a.Region)
 	}
 
 	desc := _D3D12_RESOURCE_DESC{
@@ -81,7 +94,7 @@ func (i *image12) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 		Width:            uint64(unionRegion.Dx()),
 		Height:           uint32(unionRegion.Dy()),
 		DepthOrArraySize: 1,
-		MipLevels:        0,
+		MipLevels:        1,
 		Format:           dxgiFormat(i.format),
 		SampleDesc: _DXGI_SAMPLE_DESC{
 			Count:   1,
@@ -95,17 +108,16 @@ func (i *image12) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		readingStagingBuffer.Release()
-	}()
-
-	if rb, ok := i.transiteState(_D3D12_RESOURCE_STATE_COPY_SOURCE); ok {
-		i.graphics.copyCommandList.ResourceBarrier([]_D3D12_RESOURCE_BARRIER_Transition{rb})
-	}
+	defer readingStagingBuffer.Release()
 
 	m, err := readingStagingBuffer.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
 	if err != nil {
 		return err
+	}
+	defer readingStagingBuffer.Unmap(0, nil)
+
+	if rb, ok := i.transiteState(_D3D12_RESOURCE_STATE_COPY_SOURCE); ok {
+		i.graphics.copyCommandList.ResourceBarrier([]_D3D12_RESOURCE_BARRIER_Transition{rb})
 	}
 
 	dst := _D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint{
@@ -133,13 +145,13 @@ func (i *image12) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 		return err
 	}
 
-	bpp := i.format.BytesPerPixel()
 	srcPix := unsafe.Slice((*byte)(unsafe.Pointer(m)), totalBytes)
 	for _, a := range args {
+		if a.Region.Empty() {
+			continue
+		}
 		copyFromFootprint(a.Pixels, a.Region, srcPix, unionRegion.Min, int(layouts.Footprint.RowPitch), bpp)
 	}
-
-	readingStagingBuffer.Unmap(0, nil)
 
 	return nil
 }
@@ -148,9 +160,8 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	if i.screen {
 		return errors.New("directx: WritePixels cannot be called on the screen")
 	}
-
-	if err := i.graphics.flushCommandList(i.graphics.drawCommandList); err != nil {
-		return err
+	if i.texture == nil {
+		return errors.New("directx: the image is already disposed")
 	}
 
 	// Each region has a copy footprint of its own in the upload buffer, rather than all sharing one
@@ -161,24 +172,35 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		if a.Region.Empty() {
 			continue
 		}
+		if len(a.Pixels) != bpp*a.Region.Dx()*a.Region.Dy() {
+			return fmt.Errorf("directx: len(Pixels) must be %d, but %d", bpp*a.Region.Dx()*a.Region.Dy(), len(a.Pixels))
+		}
 		_, _, totalBytes = placeFootprint(totalBytes, a.Region.Dx(), a.Region.Dy(), bpp)
 	}
 	if totalBytes == 0 {
 		return nil
 	}
+
+	if err := i.graphics.flushCommandList(i.graphics.drawCommandList); err != nil {
+		return err
+	}
+
 	uploadingStagingBuffer, err := createBuffer(i.graphics.device, totalBytes, _D3D12_HEAP_TYPE_UPLOAD)
 	if err != nil {
 		return err
 	}
+
+	m, err := uploadingStagingBuffer.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
+	if err != nil {
+		uploadingStagingBuffer.Release()
+		return err
+	}
+	defer uploadingStagingBuffer.Unmap(0, nil)
+
 	i.uploadingStagingBuffers = append(i.uploadingStagingBuffers, uploadingStagingBuffer)
 
 	if rb, ok := i.transiteState(_D3D12_RESOURCE_STATE_COPY_DEST); ok {
 		i.graphics.copyCommandList.ResourceBarrier([]_D3D12_RESOURCE_BARRIER_Transition{rb})
-	}
-
-	m, err := uploadingStagingBuffer.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
-	if err != nil {
-		return err
 	}
 
 	i.graphics.needFlushCopyCommandList = true
@@ -223,8 +245,6 @@ func (i *image12) WritePixels(args []graphicsdriver.PixelsArgs) error {
 				back:   1,
 			})
 	}
-
-	uploadingStagingBuffer.Unmap(0, nil)
 
 	return nil
 }
@@ -278,17 +298,17 @@ func (i *image12) resource() *_ID3D12Resource {
 
 func (i *image12) state() _D3D12_RESOURCE_STATES {
 	if i.screen {
-		return i.states[i.surface.backBufferIndex]
+		return i.surface.states[i.surface.backBufferIndex]
 	}
-	return i.states[0]
+	return i.resState
 }
 
 func (i *image12) setState(newState _D3D12_RESOURCE_STATES) {
 	if i.screen {
-		i.states[i.surface.backBufferIndex] = newState
+		i.surface.states[i.surface.backBufferIndex] = newState
 		return
 	}
-	i.states[0] = newState
+	i.resState = newState
 }
 
 func (i *image12) transiteState(newState _D3D12_RESOURCE_STATES) (_D3D12_RESOURCE_BARRIER_Transition, bool) {

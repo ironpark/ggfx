@@ -332,8 +332,11 @@ func (g *graphics11) SupportsDirectComposition() bool {
 }
 
 func (g *graphics11) SetVertices(vertices []float32, indices []uint32) error {
+	if len(vertices) == 0 || len(indices) == 0 {
+		return nil
+	}
 	// The buffers are mapped with WRITE_DISCARD, so replacing one does not wait for the GPU.
-	if size := uint32(g.vertexBufferUse.Capacity(int(g.vertexBufferSizeInBytes), len(vertices)*int(unsafe.Sizeof(vertices[0])), graphicsdriver.MinVertexBufferBytes)); g.vertexBuffer == nil || g.vertexBufferSizeInBytes != size {
+	if size := uint32(g.vertexBufferUse.Capacity(int(g.vertexBufferSizeInBytes), len(vertices)*int(unsafe.Sizeof(float32(0))), graphicsdriver.MinVertexBufferBytes)); g.vertexBuffer == nil || g.vertexBufferSizeInBytes != size {
 		if g.vertexBuffer != nil {
 			g.vertexBuffer.Release()
 			g.vertexBuffer = nil
@@ -350,9 +353,9 @@ func (g *graphics11) SetVertices(vertices []float32, indices []uint32) error {
 		g.vertexBuffer = b
 		g.vertexBufferSizeInBytes = size
 		g.deviceContext.IASetVertexBuffers(0, []*_ID3D11Buffer{g.vertexBuffer},
-			[]uint32{graphics.VertexFloatCount * uint32(unsafe.Sizeof(vertices[0]))}, []uint32{0})
+			[]uint32{graphics.VertexFloatCount * uint32(unsafe.Sizeof(float32(0)))}, []uint32{0})
 	}
-	if size := uint32(g.indexBufferUse.Capacity(int(g.indexBufferSizeInBytes), len(indices)*int(unsafe.Sizeof(indices[0])), graphicsdriver.MinVertexBufferBytes)); g.indexBuffer == nil || g.indexBufferSizeInBytes != size {
+	if size := uint32(g.indexBufferUse.Capacity(int(g.indexBufferSizeInBytes), len(indices)*int(unsafe.Sizeof(uint32(0))), graphicsdriver.MinVertexBufferBytes)); g.indexBuffer == nil || g.indexBufferSizeInBytes != size {
 		if g.indexBuffer != nil {
 			g.indexBuffer.Release()
 			g.indexBuffer = nil
@@ -401,6 +404,7 @@ func (g *graphics11) SupportsPixelFormat(format graphicsdriver.PixelFormat) bool
 }
 
 func (g *graphics11) NewImage(width, height int, format graphicsdriver.PixelFormat) (graphicsdriver.Image, error) {
+	graphicsdriver.CheckSize("directx", width, height, g.MaxImageSize())
 	if format != graphicsdriver.PixelFormatRGBA8 {
 		return nil, fmt.Errorf("directx: unsupported pixel format %s", format)
 	}

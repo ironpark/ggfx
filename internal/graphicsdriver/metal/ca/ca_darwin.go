@@ -149,6 +149,13 @@ func (ml MetalLayer) Layer() unsafe.Pointer {
 	return *(*unsafe.Pointer)(unsafe.Pointer(&ml.metalLayer))
 }
 
+// Release releases the underlying CAMetalLayer.
+func (ml MetalLayer) Release() {
+	if ml.metalLayer != 0 {
+		cocoa.MsgSend0(ml.metalLayer, sel_release)
+	}
+}
+
 // PixelFormat returns the pixel format of textures for rendering layer content.
 //
 // Reference: https://developer.apple.com/documentation/quartzcore/cametallayer/1478155-pixelformat?language=objc.

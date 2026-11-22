@@ -163,6 +163,9 @@ func (c *defaultContext) BufferInit(target uint32, size int, usage uint32) {
 }
 
 func (c *defaultContext) BufferSubData(target uint32, offset int, data []byte) {
+	if len(data) == 0 {
+		return
+	}
 	purego.SyscallN(c.gpBufferSubData, uintptr(target), uintptr(offset), uintptr(len(data)), uintptr(unsafe.Pointer(&data[0])))
 	runtime.KeepAlive(data)
 }
@@ -279,12 +282,16 @@ func (c *defaultContext) GetInteger(pname uint32) int {
 
 func (c *defaultContext) GetProgramInfoLog(program uint32) string {
 	bufSize := c.GetProgrami(program, INFO_LOG_LENGTH)
-	if bufSize == 0 {
+	if bufSize <= 0 {
 		return ""
 	}
 	infoLog := make([]byte, bufSize)
-	purego.SyscallN(c.gpGetProgramInfoLog, uintptr(program), uintptr(bufSize), 0, uintptr(unsafe.Pointer(&infoLog[0])))
-	return string(infoLog)
+	var written int32
+	purego.SyscallN(c.gpGetProgramInfoLog, uintptr(program), uintptr(bufSize), uintptr(unsafe.Pointer(&written)), uintptr(unsafe.Pointer(&infoLog[0])))
+	if written < 0 || int(written) > bufSize {
+		written = int32(bufSize)
+	}
+	return string(infoLog[:written])
 }
 
 func (c *defaultContext) GetProgrami(program uint32, pname uint32) int {
@@ -295,12 +302,16 @@ func (c *defaultContext) GetProgrami(program uint32, pname uint32) int {
 
 func (c *defaultContext) GetShaderInfoLog(shader uint32) string {
 	bufSize := c.getShaderi(shader, INFO_LOG_LENGTH)
-	if bufSize == 0 {
+	if bufSize <= 0 {
 		return ""
 	}
 	infoLog := make([]byte, bufSize)
-	purego.SyscallN(c.gpGetShaderInfoLog, uintptr(shader), uintptr(bufSize), 0, uintptr(unsafe.Pointer(&infoLog[0])))
-	return string(infoLog)
+	var written int32
+	purego.SyscallN(c.gpGetShaderInfoLog, uintptr(shader), uintptr(bufSize), uintptr(unsafe.Pointer(&written)), uintptr(unsafe.Pointer(&infoLog[0])))
+	if written < 0 || int(written) > bufSize {
+		written = int32(bufSize)
+	}
+	return string(infoLog[:written])
 }
 
 func (c *defaultContext) getShaderi(shader uint32, pname uint32) int {
@@ -330,6 +341,9 @@ func (c *defaultContext) PixelStorei(pname uint32, param int32) {
 }
 
 func (c *defaultContext) ReadPixels(dst []byte, x int32, y int32, width int32, height int32, format uint32, xtype uint32) {
+	if len(dst) == 0 || width <= 0 || height <= 0 {
+		return
+	}
 	purego.SyscallN(c.gpReadPixels, uintptr(x), uintptr(y), uintptr(width), uintptr(height), uintptr(format), uintptr(xtype), uintptr(unsafe.Pointer(&dst[0])))
 	runtime.KeepAlive(dst)
 }
@@ -358,6 +372,9 @@ func (c *defaultContext) TexParameteri(target uint32, pname uint32, param int32)
 }
 
 func (c *defaultContext) TexSubImage2D(target uint32, level int32, xoffset int32, yoffset int32, width int32, height int32, format uint32, xtype uint32, pixels []byte) {
+	if len(pixels) == 0 || width <= 0 || height <= 0 {
+		return
+	}
 	purego.SyscallN(c.gpTexSubImage2D, uintptr(target), uintptr(level), uintptr(xoffset), uintptr(yoffset), uintptr(width), uintptr(height), uintptr(format), uintptr(xtype), uintptr(unsafe.Pointer(&pixels[0])))
 	runtime.KeepAlive(pixels)
 }

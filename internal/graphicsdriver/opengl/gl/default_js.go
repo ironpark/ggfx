@@ -405,6 +405,9 @@ func (c *defaultContext) GetProgrami(program uint32, pname uint32) int {
 			return TRUE
 		}
 		return FALSE
+	case js.TypeNull, js.TypeUndefined:
+		// WebGL returns null on context loss.
+		return FALSE
 	default:
 		panic(fmt.Sprintf("gl: unexpected return type at GetProgrami: %v", v))
 	}
@@ -416,6 +419,9 @@ func (c *defaultContext) GetShaderInfoLog(shader uint32) string {
 
 func (c *defaultContext) GetUniformLocation(program uint32, name string) int32 {
 	location := c.fnGetUniformLocation.Invoke(c.programs.get(program), name)
+	if location.IsNull() || location.IsUndefined() {
+		return -1
+	}
 
 	// A location ID must be unique in the whole context, not only in the program, as Uniform*
 	// functions take a location ID without a program.

@@ -279,6 +279,9 @@ func (c *context) framebufferPixels(buf []byte, f *framebuffer, region image.Rec
 	if got, want := len(buf), format.BytesPerPixel()*region.Dx()*region.Dy(); got != want {
 		return fmt.Errorf("opengl: len(buf) must be %d but was %d at framebufferPixels", want, got)
 	}
+	if region.Empty() {
+		return nil
+	}
 
 	c.ctx.Flush()
 	c.bindFramebuffer(f.native)

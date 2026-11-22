@@ -60,16 +60,16 @@ type graphics12 struct {
 	copyCommandAllocators [frameCount]*_ID3D12CommandAllocator
 
 	// drawCommandList is a command list for a 3D engine (DrawIndexedInstanced).
-	drawCommandList *_ID3D12GraphicsCommandList
-
+	drawCommandList          *_ID3D12GraphicsCommandList
+	drawCommandListOpen      bool
 	needFlushDrawCommandList bool
 
 	// drawListState is the state set on drawCommandList since its last Reset.
 	drawListState drawListState12
 
 	// copyCommandList is a command list for a copy engine (CopyTextureRegion).
-	copyCommandList *_ID3D12GraphicsCommandList
-
+	copyCommandList          *_ID3D12GraphicsCommandList
+	copyCommandListOpen      bool
 	needFlushCopyCommandList bool
 
 	// drawCommandList and copyCommandList are exclusive: if one is not empty, the other must be empty.
@@ -414,6 +414,7 @@ type surface12 struct {
 
 	rtvDescriptorHeap *_ID3D12DescriptorHeap
 	renderTargets     [frameCount]*_ID3D12Resource
+	states            [frameCount]_D3D12_RESOURCE_STATES
 
 	// backBufferIndex is the index of the swap chain's current back buffer, which the screen image
 	// renders into and which present flips. It is updated when the swap chain is created, resized,
@@ -546,12 +547,18 @@ func (g *graphics12) updateSwapChainImpl(s *surface12, width, height int) error 
 	return nil
 }
 
-func (g *graphics12) initSwapChainDesktop(s *surface12, width, height int) error {
+func (g *graphics12) initSwapChainDesktop(s *surface12, width, height int) (ferr error) {
 	sc, err := g.graphicsInfra.newSwapChain(width, height, unsafe.Pointer(g.commandQueue), s.window)
 	if err != nil {
 		return err
 	}
 	s.swapChain = sc
+	defer func() {
+		if ferr != nil {
+			s.swapChain.release()
+			s.swapChain = nil
+		}
+	}()
 
 	if err := g.createRenderTargetViewsDesktop(s); err != nil {
 		return err
@@ -562,6 +569,7 @@ func (g *graphics12) initSwapChainDesktop(s *surface12, width, height int) error
 		return err
 	}
 	s.backBufferIndex = idx
+	s.states = [frameCount]_D3D12_RESOURCE_STATES{}
 
 	return nil
 }
@@ -578,11 +586,17 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 	if err := g.flushCommandList(g.drawCommandList); err != nil {
 		return err
 	}
-	if err := g.copyCommandList.Close(); err != nil {
-		return g.withDeviceRemovedReason(err)
+	if g.copyCommandListOpen {
+		g.copyCommandListOpen = false
+		if err := g.copyCommandList.Close(); err != nil {
+			return g.withDeviceRemovedReason(err)
+		}
 	}
-	if err := g.drawCommandList.Close(); err != nil {
-		return g.withDeviceRemovedReason(err)
+	if g.drawCommandListOpen {
+		g.drawCommandListOpen = false
+		if err := g.drawCommandList.Close(); err != nil {
+			return g.withDeviceRemovedReason(err)
+		}
 	}
 
 	// Signaling the command queue and waiting for it makes the GPU idle, since the queue executes
@@ -614,6 +628,7 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 		return err
 	}
 	s.backBufferIndex = idx
+	s.states = [frameCount]_D3D12_RESOURCE_STATES{}
 
 	// Re-open the command lists so the rest of the frame can keep recording. The GPU is already idle,
 	// so resetting the allocators is safe.
@@ -626,10 +641,12 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 	if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
 		return err
 	}
+	g.drawCommandListOpen = true
 	g.drawListState = drawListState12{}
 	if err := g.copyCommandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
 		return err
 	}
+	g.copyCommandListOpen = true
 
 	return nil
 }
@@ -678,6 +695,18 @@ func (g *graphics12) ColorSpace() color.ColorSpace {
 
 func (g *graphics12) Begin() error {
 	if g.prevBeginFrameIndex != g.frameIndex {
+		if g.drawCommandListOpen {
+			g.drawCommandListOpen = false
+			if err := g.drawCommandList.Close(); err != nil {
+				return g.withDeviceRemovedReason(err)
+			}
+		}
+		if g.copyCommandListOpen {
+			g.copyCommandListOpen = false
+			if err := g.copyCommandList.Close(); err != nil {
+				return g.withDeviceRemovedReason(err)
+			}
+		}
 		if err := g.drawCommandAllocators[g.frameIndex].Reset(); err != nil {
 			return err
 		}
@@ -687,12 +716,18 @@ func (g *graphics12) Begin() error {
 	}
 	g.prevBeginFrameIndex = g.frameIndex
 
-	if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
-		return err
+	if !g.drawCommandListOpen {
+		if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
+			return err
+		}
+		g.drawCommandListOpen = true
+		g.drawListState = drawListState12{}
 	}
-	g.drawListState = drawListState12{}
-	if err := g.copyCommandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
-		return err
+	if !g.copyCommandListOpen {
+		if err := g.copyCommandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
+			return err
+		}
+		g.copyCommandListOpen = true
 	}
 	return nil
 }
@@ -710,26 +745,32 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 	if err := g.flushCommandList(g.copyCommandList); err != nil {
 		return err
 	}
-	if err := g.copyCommandList.Close(); err != nil {
-		return g.withDeviceRemovedReason(err)
-	}
-
-	// Transition the back buffers to present. There might be no surfaces in tests.
-	if mode == graphicsdriver.FlushModePresent {
-		for _, s := range g.surfaces {
-			if !g.shouldPresent(s) {
-				continue
-			}
-			if rb, ok := s.screenImage.transiteState(_D3D12_RESOURCE_STATE_PRESENT); ok {
-				g.drawCommandList.ResourceBarrier([]_D3D12_RESOURCE_BARRIER_Transition{rb})
-			}
+	if g.copyCommandListOpen {
+		g.copyCommandListOpen = false
+		if err := g.copyCommandList.Close(); err != nil {
+			return g.withDeviceRemovedReason(err)
 		}
 	}
 
-	if err := g.drawCommandList.Close(); err != nil {
-		return g.withDeviceRemovedReason(err)
+	if g.drawCommandListOpen {
+		// Transition the back buffers to present. There might be no surfaces in tests.
+		if mode == graphicsdriver.FlushModePresent {
+			for _, s := range g.surfaces {
+				if !g.shouldPresent(s) {
+					continue
+				}
+				if rb, ok := s.screenImage.transiteState(_D3D12_RESOURCE_STATE_PRESENT); ok {
+					g.drawCommandList.ResourceBarrier([]_D3D12_RESOURCE_BARRIER_Transition{rb})
+				}
+			}
+		}
+
+		g.drawCommandListOpen = false
+		if err := g.drawCommandList.Close(); err != nil {
+			return g.withDeviceRemovedReason(err)
+		}
+		g.commandQueue.ExecuteCommandLists([]*_ID3D12GraphicsCommandList{g.drawCommandList})
 	}
-	g.commandQueue.ExecuteCommandLists([]*_ID3D12GraphicsCommandList{g.drawCommandList})
 
 	// Release vertices and indices buffers when too many ones were created.
 	// The threshold is an arbitrary number.
@@ -896,15 +937,17 @@ func (g *graphics12) resetVerticesAndIndices(frameIndex int, release bool) {
 func (g *graphics12) flushCommandList(commandList *_ID3D12GraphicsCommandList) error {
 	switch commandList {
 	case g.drawCommandList:
-		if !g.needFlushDrawCommandList {
+		if !g.needFlushDrawCommandList || !g.drawCommandListOpen {
 			return nil
 		}
 		g.needFlushDrawCommandList = false
+		g.drawCommandListOpen = false
 	case g.copyCommandList:
-		if !g.needFlushCopyCommandList {
+		if !g.needFlushCopyCommandList || !g.copyCommandListOpen {
 			return nil
 		}
 		g.needFlushCopyCommandList = false
+		g.copyCommandListOpen = false
 	}
 
 	if err := commandList.Close(); err != nil {
@@ -925,6 +968,7 @@ func (g *graphics12) flushCommandList(commandList *_ID3D12GraphicsCommandList) e
 		if err := commandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
 			return err
 		}
+		g.drawCommandListOpen = true
 		g.drawListState = drawListState12{}
 		// The GPU is idle, so the frame's uniform ring and descriptors can be reused.
 		g.pipelineStates.resetFrame(g.frameIndex)
@@ -935,6 +979,7 @@ func (g *graphics12) flushCommandList(commandList *_ID3D12GraphicsCommandList) e
 		if err := commandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
 			return err
 		}
+		g.copyCommandListOpen = true
 
 		for img := range g.images {
 			img.releaseUploadingStagingBuffers()
@@ -984,6 +1029,10 @@ func (g *graphics12) SupportsDirectComposition() bool {
 }
 
 func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr error) {
+	if len(vertices) == 0 || len(indices) == 0 {
+		return nil
+	}
+
 	// Create buffers if necessary.
 	vidx := len(g.vertices[g.frameIndex])
 	if cap(g.vertices[g.frameIndex]) > vidx {
@@ -991,12 +1040,17 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	} else {
 		g.vertices[g.frameIndex] = append(g.vertices[g.frameIndex], nil)
 	}
+	defer func() {
+		if ferr != nil {
+			g.vertices[g.frameIndex] = g.vertices[g.frameIndex][:vidx]
+		}
+	}()
 	// The slot's buffer was last used by a frame the GPU has completed, so it can be replaced.
 	var curvsize int
 	if b := g.vertices[g.frameIndex][vidx]; b != nil {
 		curvsize = int(b.sizeInBytes)
 	}
-	vsize := uint32(g.verticesUse.Capacity(curvsize, len(vertices)*int(unsafe.Sizeof(vertices[0])), graphicsdriver.MinVertexBufferBytes))
+	vsize := uint32(g.verticesUse.Capacity(curvsize, len(vertices)*int(unsafe.Sizeof(float32(0))), graphicsdriver.MinVertexBufferBytes))
 	if g.vertices[g.frameIndex][vidx] != nil && g.vertices[g.frameIndex][vidx].sizeInBytes != vsize {
 		g.vertices[g.frameIndex][vidx].release()
 		g.vertices[g.frameIndex][vidx] = nil
@@ -1025,12 +1079,17 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 	} else {
 		g.indices[g.frameIndex] = append(g.indices[g.frameIndex], nil)
 	}
+	defer func() {
+		if ferr != nil {
+			g.indices[g.frameIndex] = g.indices[g.frameIndex][:iidx]
+		}
+	}()
 	// The slot's buffer was last used by a frame the GPU has completed, so it can be replaced.
 	var curisize int
 	if b := g.indices[g.frameIndex][iidx]; b != nil {
 		curisize = int(b.sizeInBytes)
 	}
-	isize := uint32(g.indicesUse.Capacity(curisize, len(indices)*int(unsafe.Sizeof(indices[0])), graphicsdriver.MinVertexBufferBytes))
+	isize := uint32(g.indicesUse.Capacity(curisize, len(indices)*int(unsafe.Sizeof(uint32(0))), graphicsdriver.MinVertexBufferBytes))
 	if g.indices[g.frameIndex][iidx] != nil && g.indices[g.frameIndex][iidx].sizeInBytes != isize {
 		g.indices[g.frameIndex][iidx].release()
 		g.indices[g.frameIndex][iidx] = nil
@@ -1087,13 +1146,14 @@ func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelForm
 	if !g.SupportsPixelFormat(format) {
 		return nil, fmt.Errorf("directx: unsupported pixel format %s", format)
 	}
+	graphicsdriver.CheckSize("directx", width, height, g.MaxImageSize())
 	desc := _D3D12_RESOURCE_DESC{
 		Dimension:        _D3D12_RESOURCE_DIMENSION_TEXTURE2D,
 		Alignment:        0,
 		Width:            uint64(graphics.InternalImageSize(width)),
 		Height:           uint32(graphics.InternalImageSize(height)),
 		DepthOrArraySize: 1,
-		MipLevels:        0,
+		MipLevels:        1,
 		Format:           dxgiFormat(format),
 		SampleDesc: _DXGI_SAMPLE_DESC{
 			Count:   1,
@@ -1121,7 +1181,7 @@ func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelForm
 		height:   height,
 		format:   format,
 		texture:  t,
-		states:   [frameCount]_D3D12_RESOURCE_STATES{state},
+		resState: state,
 	}
 	g.addImage(i)
 	return i, nil
@@ -1145,7 +1205,6 @@ func (g *graphics12) newScreenImage(s *surface12, width, height int) (graphicsdr
 		height:   height,
 		screen:   true,
 		surface:  s,
-		states:   [frameCount]_D3D12_RESOURCE_STATES{0, 0},
 	}
 	g.addImage(i)
 	s.screenImage = i
@@ -1226,6 +1285,18 @@ func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics
 	}
 
 	dst := dstImage.(*image12)
+	var srcImages [graphics.ShaderSrcImageCount]*image12
+	for i, s := range srcs {
+		if s == nil {
+			continue
+		}
+		src := s.(*image12)
+		if src == dst {
+			return errors.New("directx: destination and source images must be different")
+		}
+		srcImages[i] = src
+	}
+
 	if dst.surface != nil {
 		dst.surface.drawn = true
 	}
@@ -1234,13 +1305,10 @@ func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics
 		resourceBarriers = append(resourceBarriers, rb)
 	}
 
-	var srcImages [graphics.ShaderSrcImageCount]*image12
-	for i, s := range srcs {
-		if s == nil {
+	for _, src := range srcImages {
+		if src == nil {
 			continue
 		}
-		src := s.(*image12)
-		srcImages[i] = src
 		if rb, ok := src.transiteState(_D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); ok {
 			resourceBarriers = append(resourceBarriers, rb)
 		}

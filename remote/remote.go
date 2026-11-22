@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"math"
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/atlas"
@@ -74,7 +75,7 @@ type Result = rd.Result
 // its batches through t. It is called before host.Init. The process then opens no GPU device: the
 // platform's driver is linked but never made.
 func Install(info Info, t Transport) error {
-	if info.MaxImageSize <= 0 {
+	if info.MaxImageSize <= 0 || info.MaxImageSize > math.MaxInt32 {
 		return fmt.Errorf("remote: invalid max image size %d", info.MaxImageSize)
 	}
 	if t == nil {

@@ -263,3 +263,40 @@ fn fragment(v: Vertex) -> vec4f { return vec4f(u.x); }
 	}()
 	u.Set("x", float32(1))
 }
+
+// TestShaderLargeUniforms verifies user uniform blocks larger than Metal's 4 KiB
+// setFragmentBytes inline limit (falling back to a buffer).
+func TestShaderLargeUniforms(t *testing.T) {
+	const w, h = 4, 4
+	dst := ggfx.NewImage(w, h)
+	defer dst.Deallocate()
+	s, err := ggfx.NewShader([]byte(`
+struct Uniforms {
+	entries: array<vec4f, 260>,
+}
+@group(1) @binding(0) var<uniform> u: Uniforms;
+fn fragment(v: Vertex) -> vec4f {
+	return u.entries[259];
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Dispose()
+
+	entries := make([]float32, 260*4)
+	entries[259*4+0] = 0.25
+	entries[259*4+1] = 0.5
+	entries[259*4+2] = 0.75
+	entries[259*4+3] = 1.0
+
+	op := &ggfx.DrawRectShaderOptions{
+		Uniforms: map[string]any{"entries": entries},
+	}
+	dst.DrawRectShader(w, h, s, op)
+
+	want := color.RGBA{R: 0x40, G: 0x80, B: 0xbf, A: 0xff}
+	if got := dst.At(2, 2).(color.RGBA); !sameColors(got, want, 1) {
+		t.Errorf("dst.At(2, 2) = %v, want %v", got, want)
+	}
+}

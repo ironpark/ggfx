@@ -1056,8 +1056,14 @@ func (rce RenderCommandEncoder) SetVertexBytes(bytes unsafe.Pointer, length uint
 	cocoa.MsgSend3(rce.commandEncoder, sel_setVertexBytes_length_atIndex, uintptr(bytes), length, uintptr(index))
 }
 
+var sel_setFragmentBuffer_offset_atIndex = objc.RegisterName("setFragmentBuffer:offset:atIndex:")
+
 func (rce RenderCommandEncoder) SetFragmentBytes(bytes unsafe.Pointer, length uintptr, index int) {
 	cocoa.MsgSend3(rce.commandEncoder, sel_setFragmentBytes_length_atIndex, uintptr(bytes), length, uintptr(index))
+}
+
+func (rce RenderCommandEncoder) SetFragmentBuffer(buffer Buffer, offset, index int) {
+	cocoa.MsgSend3(rce.commandEncoder, sel_setFragmentBuffer_offset_atIndex, uintptr(buffer.buffer), uintptr(offset), uintptr(index))
 }
 
 // SetFragmentTexture sets a texture for the fragment function at an index in the texture argument table.
@@ -1222,6 +1228,9 @@ func (t Texture) GetBytes(pixels []byte, bytesPerRow int, region Region, level i
 	if err := checkPixelsForTransfer(pixels, bytesPerRow, region, "GetBytes"); err != nil {
 		return err
 	}
+	if len(pixels) == 0 || region.Size.Width == 0 || region.Size.Height == 0 {
+		return nil
+	}
 	t.texture.Send(sel_getBytes_bytesPerRow_fromRegion_mipmapLevel, &pixels[0], uintptr(bytesPerRow), region, level)
 	return nil
 }
@@ -1234,6 +1243,9 @@ func (t Texture) GetBytes(pixels []byte, bytesPerRow int, region Region, level i
 func (t Texture) ReplaceRegion(region Region, level int, pixels []byte, bytesPerRow int) error {
 	if err := checkPixelsForTransfer(pixels, bytesPerRow, region, "ReplaceRegion"); err != nil {
 		return err
+	}
+	if len(pixels) == 0 || region.Size.Width == 0 || region.Size.Height == 0 {
+		return nil
 	}
 	t.texture.Send(sel_replaceRegion_mipmapLevel_withBytes_bytesPerRow, region, level, unsafe.Pointer(&pixels[0]), bytesPerRow)
 	return nil

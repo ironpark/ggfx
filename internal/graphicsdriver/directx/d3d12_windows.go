@@ -737,13 +737,11 @@ type _D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint struct {
 	PlacedFootprint _D3D12_PLACED_SUBRESOURCE_FOOTPRINT
 }
 
-type _D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex struct {
-	_                structs.HostLayout
-	pResource        *_ID3D12Resource
-	Type             _D3D12_TEXTURE_COPY_TYPE
-	SubresourceIndex uint32
-	_                [unsafe.Sizeof(_D3D12_PLACED_SUBRESOURCE_FOOTPRINT{}) - unsafe.Sizeof(uint32(0))]byte // A padding for union
-}
+// Verify that both D3D12_TEXTURE_COPY_LOCATION union variants agree on size and union offset.
+var _ [unsafe.Sizeof(_D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex{}) - unsafe.Sizeof(_D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint{})]struct{}
+var _ [unsafe.Sizeof(_D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint{}) - unsafe.Sizeof(_D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex{})]struct{}
+var _ [unsafe.Offsetof(_D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex{}.SubresourceIndex) - unsafe.Offsetof(_D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint{}.PlacedFootprint)]struct{}
+var _ [unsafe.Offsetof(_D3D12_TEXTURE_COPY_LOCATION_PlacedFootPrint{}.PlacedFootprint) - unsafe.Offsetof(_D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex{}.SubresourceIndex)]struct{}
 
 type _D3D12_VERTEX_BUFFER_VIEW struct {
 	_              structs.HostLayout
@@ -777,10 +775,10 @@ func _D3D12CreateDevice(pAdapter unsafe.Pointer, minimumFeatureLevel _D3D_FEATUR
 		pv = &v
 	}
 	r, _, _ := procD3D12CreateDevice.Call(uintptr(pAdapter), uintptr(minimumFeatureLevel), uintptr(unsafe.Pointer(riid)), uintptr(unsafe.Pointer(pv)))
-	if v == nil && uint32(r) != uint32(windows.S_FALSE) {
+	if !createDevice && uint32(r) != uint32(windows.S_FALSE) {
 		return nil, fmt.Errorf("directx: D3D12CreateDevice failed: %w", handleError(windows.Handle(uint32(r))))
 	}
-	if v != nil && uint32(r) != uint32(windows.S_OK) {
+	if createDevice && uint32(r) != uint32(windows.S_OK) {
 		return nil, fmt.Errorf("directx: D3D12CreateDevice failed: %w", handleError(windows.Handle(uint32(r))))
 	}
 	return v, nil
@@ -799,9 +797,11 @@ func _D3D12SerializeRootSignature(pRootSignature *_D3D12_ROOT_SIGNATURE_DESC, ve
 	var blob *_ID3DBlob
 	var errorBlob *_ID3DBlob
 	r, _, _ := procD3D12SerializeRootSignature.Call(uintptr(unsafe.Pointer(pRootSignature)), uintptr(version), uintptr(unsafe.Pointer(&blob)), uintptr(unsafe.Pointer(&errorBlob)))
+	if errorBlob != nil {
+		defer errorBlob.Release()
+	}
 	if uint32(r) != uint32(windows.S_OK) {
 		if errorBlob != nil {
-			defer errorBlob.Release()
 			return nil, fmt.Errorf("directx: D3D12SerializeRootSignature failed: %s: %w", errorBlob.String(), handleError(windows.Handle(uint32(r))))
 		}
 		return nil, fmt.Errorf("directx: D3D12SerializeRootSignature failed: %w", handleError(windows.Handle(uint32(r))))
@@ -1281,7 +1281,7 @@ func (i *_ID3D12Device) CreateShaderResourceView(pResource *_ID3D12Resource, pDe
 	runtime.KeepAlive(pDesc)
 }
 
-func (i *_ID3D12Device) GetCopyableFootprints(pResourceDesc *_D3D12_RESOURCE_DESC, firstSubresource uint32, numSubresources uint32, baseOffset uint64) (layouts _D3D12_PLACED_SUBRESOURCE_FOOTPRINT, numRows uint, rowSizeInBytes uint64, totalBytes uint64) {
+func (i *_ID3D12Device) GetCopyableFootprints(pResourceDesc *_D3D12_RESOURCE_DESC, firstSubresource uint32, numSubresources uint32, baseOffset uint64) (layouts _D3D12_PLACED_SUBRESOURCE_FOOTPRINT, numRows uint32, rowSizeInBytes uint64, totalBytes uint64) {
 	if is64bit {
 		_, _, _ = syscall.Syscall9(i.vtbl.GetCopyableFootprints, 9, uintptr(unsafe.Pointer(i)),
 			uintptr(unsafe.Pointer(pResourceDesc)), uintptr(firstSubresource), uintptr(numSubresources),

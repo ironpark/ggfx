@@ -160,3 +160,96 @@ func TestScreenFlushesPendingVectorAtFrameEnd(t *testing.T) {
 		t.Errorf("screen pixel after Frame.End with pending vector fill = %v, want %v", got, red)
 	}
 }
+
+// TestScreenDamageNilAndIntermediateFlush checks that:
+//  1. SetDamage(nil) after a partial-damage frame updates the entire surface rather than retaining
+//     the previous partial damage rect.
+//  2. Presenting after a mid-frame offscreen ReadPixels (which flushes the Metal command buffer
+//     early) still presents the surface.
+func TestScreenDamageNilAndIntermediateFlush(t *testing.T) {
+	if viewSurface == nil {
+		t.Skipf("no Metal surface: %v", viewSurfaceErr)
+	}
+	red := color.RGBA{0xff, 0, 0, 0xff}
+	green := color.RGBA{0, 0xff, 0, 0xff}
+	blue := color.RGBA{0, 0, 0xff, 0xff}
+
+	off := ggfx.NewImage(4, 4)
+	defer off.Deallocate()
+	off.Fill(green)
+
+	dst := ggfx.NewImage(16, 16)
+	defer dst.Deallocate()
+
+	// Frame 1: fill red with full damage.
+	fr, err := host.BeginFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := fr.Screen(viewSurface, 16, 16)
+	viewSurface.SetDamage(nil)
+	screen.Fill(red)
+	if err := fr.End(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame 2: partial damage (0,0)-(4,4) only.
+	fr, err = host.BeginFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen = fr.Screen(viewSurface, 16, 16)
+	viewSurface.SetDamage([]image.Rectangle{image.Rect(0, 0, 4, 4)})
+	screen.SubImage(image.Rect(0, 0, 4, 4)).(*ggfx.Image).Fill(green)
+	if err := fr.End(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame 3: clear damage to nil (full damage), draw blue, then trigger an intermediate flush
+	// via off.At(0, 0) before Frame.End + Flush(true).
+	fr, err = host.BeginFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen = fr.Screen(viewSurface, 16, 16)
+	viewSurface.SetDamage(nil)
+	screen.Fill(blue)
+	if got := off.At(0, 0).(color.RGBA); got != green {
+		t.Fatalf("off.At(0, 0) = %v, want %v", got, green)
+	}
+	if err := fr.End(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame 4: read back the kept screen at (12, 12) (outside Frame 2's partial damage).
+	fr, err = host.BeginFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen = fr.Screen(viewSurface, 16, 16)
+	kept := viewSurface.Kept()
+	dst.DrawImage(screen, &ggfx.DrawImageOptions{Blend: ggfx.BlendCopy})
+	if err := fr.End(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+	if !kept {
+		t.Skip("surface did not keep previous frame")
+	}
+	var got color.RGBA
+	frame(t, func() { got = dst.At(12, 12).(color.RGBA) })
+	if got != blue {
+		t.Errorf("screen(12,12) after SetDamage(nil) + intermediate flush = %v, want %v", got, blue)
+	}
+}

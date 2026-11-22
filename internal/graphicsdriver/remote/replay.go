@@ -138,6 +138,9 @@ func (r *Replayer) Replay(g graphicsdriver.Graphics, batch []byte, target *Targe
 	if h.Screen != 0 && (target == nil || target.Width != h.Width || target.Height != h.Height) {
 		return Result{}, fmt.Errorf("remote: the batch draws to a screen of %dx%d, which the target is not", h.Width, h.Height)
 	}
+	// Reset vertex/index counts on each Replay: between replays the viewer may overwrite or clear
+	// the driver's vertex and index buffers.
+	r.vertices, r.indices = 0, 0
 	d := &dec{b: batch, p: HeaderSize}
 	for d.more() {
 		op := d.u8()
@@ -360,10 +363,21 @@ func (r *Replayer) op(g graphicsdriver.Graphics, d *dec, op uint8, target *Targe
 }
 
 func checkPixels(i *replayedImage, region image.Rectangle, n int) error {
-	if !region.In(i.bounds()) {
-		return fmt.Errorf("remote: pixels at %v, out of an image of %v", region, i.bounds())
+	if region.Min.X > region.Max.X || region.Min.Y > region.Max.Y {
+		return fmt.Errorf("remote: inverted pixel region %v", region)
 	}
-	if want := i.format.BytesPerPixel() * region.Dx() * region.Dy(); n != want {
+	bounds := i.bounds()
+	if region.Empty() {
+		if n != 0 {
+			return fmt.Errorf("remote: %d bytes of pixels for empty region %v, not 0", n, region)
+		}
+		return nil
+	}
+	if !region.In(bounds) {
+		return fmt.Errorf("remote: pixels at %v, out of an image of %v", region, bounds)
+	}
+	want := uint64(i.format.BytesPerPixel()) * uint64(region.Dx()) * uint64(region.Dy())
+	if n < 0 || uint64(n) != want {
 		return fmt.Errorf("remote: %d bytes of pixels for %v, not %d", n, region, want)
 	}
 	return nil
@@ -412,23 +426,26 @@ func (r *Replayer) draw(g graphicsdriver.Graphics, d *dec, target *Target, res *
 
 	bounds := dst.bounds()
 	regions := make([]graphicsdriver.DstRegion, n)
-	indices := 0
+	var indices uint64
 	for k := range regions {
-		regions[k].Region = d.rect()
+		reg := d.rect()
 		c := d.u32()
 		if d.err != nil {
 			return d.err
 		}
-		if !regions[k].Region.In(bounds) {
-			return fmt.Errorf("remote: a draw to %v, out of an image of %v", regions[k].Region, bounds)
+		if reg.Min.X < bounds.Min.X || reg.Min.Y < bounds.Min.Y || reg.Max.X > bounds.Max.X || reg.Max.Y > bounds.Max.Y || reg.Min.X > reg.Max.X || reg.Min.Y > reg.Max.Y {
+			return fmt.Errorf("remote: a draw to %v, out of an image of %v", reg, bounds)
 		}
-		indices += int(c)
-		if indices > r.indices {
+		indices += uint64(c)
+		if indices > uint64(r.indices) {
 			return fmt.Errorf("remote: a draw of more indices than the %d set", r.indices)
 		}
-		regions[k].IndexCount = int(c)
+		regions[k] = graphicsdriver.DstRegion{
+			Region:     reg,
+			IndexCount: int(c),
+		}
 	}
-	offset := int(d.u32())
+	offset := uint64(d.u32())
 	var b [6]uint8
 	for k := range b {
 		b[k] = d.u8()
@@ -438,7 +455,7 @@ func (r *Replayer) draw(g graphicsdriver.Graphics, d *dec, target *Target, res *
 	if d.err != nil {
 		return d.err
 	}
-	if offset < 0 || offset > r.indices-indices {
+	if offset > uint64(r.indices)-indices {
 		return fmt.Errorf("remote: a draw from index %d past the %d set", offset, r.indices)
 	}
 	for k := range 4 {
@@ -474,7 +491,7 @@ func (r *Replayer) draw(g graphicsdriver.Graphics, d *dec, target *Target, res *
 		User:     r.version(user, false),
 	}
 	res.Draws++
-	return g.DrawTriangles(dstImg, srcs, sh.shader, regions, offset, blend, uniforms, versions)
+	return g.DrawTriangles(dstImg, srcs, sh.shader, regions, int(offset), blend, uniforms, versions)
 }
 
 // retarget returns a copy of uniforms written for a screen of the target's size rewritten for the
@@ -512,7 +529,7 @@ func (r *Replayer) ReadPixels(id uint32, regions []image.Rectangle, dsts [][]byt
 	}
 	args := make([]graphicsdriver.PixelsArgs, 0, len(regions))
 	for k, region := range regions {
-		if err := checkPixels(&replayedImage{width: i.width, height: i.height, format: format}, region, len(dsts[k])); err != nil {
+		if err := checkPixels(&replayedImage{width: i.width, height: i.height, format: format, screen: i.screen}, region, len(dsts[k])); err != nil {
 			return err
 		}
 		if !region.Empty() {

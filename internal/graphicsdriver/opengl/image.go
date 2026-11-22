@@ -18,6 +18,7 @@ package opengl
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
@@ -119,6 +120,19 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	if len(args) == 0 {
 		return nil
 	}
+	bpp := i.format.BytesPerPixel()
+	hasWrites := false
+	for _, a := range args {
+		if got, want := len(a.Pixels), bpp*a.Region.Dx()*a.Region.Dy(); got != want {
+			return fmt.Errorf("opengl: len(pixels) must be %d but %d at WritePixels", want, got)
+		}
+		if !a.Region.Empty() {
+			hasWrites = true
+		}
+	}
+	if !hasWrites {
+		return nil
+	}
 
 	// Some drivers process glTexSubImage2D without waiting for pending draw commands, even though
 	// commands in a single context must be processed in order (#211, #593, #3487).
@@ -140,6 +154,9 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		defer ctx.PixelStorei(gl.UNPACK_ALIGNMENT, 4)
 	}
 	for _, a := range args {
+		if a.Region.Empty() {
+			continue
+		}
 		x := int32(a.Region.Min.X)
 		y := int32(a.Region.Min.Y)
 		width := int32(a.Region.Dx())

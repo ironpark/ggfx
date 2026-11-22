@@ -51,3 +51,12 @@ type _D3D12_ROOT_PARAMETER struct {
 	DescriptorTable  _D3D12_ROOT_DESCRIPTOR_TABLE // Union
 	ShaderVisibility _D3D12_SHADER_VISIBILITY
 }
+
+type _D3D12_TEXTURE_COPY_LOCATION_SubresourceIndex struct {
+	_                structs.HostLayout
+	pResource        *_ID3D12Resource
+	Type             _D3D12_TEXTURE_COPY_TYPE
+	_                [4]byte // Padding so the union matches 8-byte aligned D3D12_PLACED_SUBRESOURCE_FOOTPRINT
+	SubresourceIndex uint32
+	_                [unsafe.Sizeof(_D3D12_PLACED_SUBRESOURCE_FOOTPRINT{}) - unsafe.Sizeof(uint32(0))]byte // Padding for union
+}

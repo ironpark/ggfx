@@ -50,9 +50,14 @@ type Graphics struct {
 	drawn  bool
 
 	// damageM guards the damage, which the app sets on its own goroutine while it draws a frame.
-	damageM sync.Mutex
-	damage  []image.Rectangle
-	damaged bool
+	// presentDamage is swapped with damage under damageM so End never reads a backing array that
+	// SetDamage is concurrently overwriting.
+	damageM       sync.Mutex
+	damage        []image.Rectangle
+	presentDamage []image.Rectangle
+	damaged       bool
+
+	hasSurface bool
 }
 
 var _ graphicsdriver.Graphics = (*Graphics)(nil)
@@ -123,7 +128,8 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	if present {
 		g.damageM.Lock()
 		damage, damaged := g.damage, g.damaged
-		g.damage, g.damaged = g.damage[:0], false
+		g.damage, g.presentDamage = g.presentDamage[:0], damage
+		g.damaged = false
 		g.damageM.Unlock()
 		g.e.u8(opPresent)
 		g.e.u32(g.screen.id)
@@ -167,6 +173,10 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 	if transparent {
 		return nil, errors.New("remote: a transparent window is not supported")
 	}
+	if g.hasSurface {
+		return nil, errors.New("remote: only one surface is supported")
+	}
+	g.hasSurface = true
 	return &Surface{g: g}, nil
 }
 
@@ -239,7 +249,9 @@ func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error
 // FlipsY reports the viewer's answer for an offscreen image: the target is one.
 func (s *Surface) FlipsY() bool { return s.g.info.FlipsY }
 
-func (s *Surface) Dispose() {}
+func (s *Surface) Dispose() {
+	s.g.hasSurface = false
+}
 
 // Kept reports true: the viewer's target keeps the last frame.
 func (s *Surface) Kept() bool { return true }

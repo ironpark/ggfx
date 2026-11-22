@@ -40,7 +40,8 @@ type Graphics struct {
 	device mtl.Device
 
 	// surfaces are the presentation targets, in creation order.
-	surfaces []*Surface
+	surfacesMu sync.Mutex
+	surfaces   []*Surface
 
 	// runOnMainThread runs a function on the main thread synchronously. It is set at most once.
 	runOnMainThread func(f func())
@@ -177,6 +178,11 @@ type Surface struct {
 func (s *Surface) SetDamage(rects []image.Rectangle) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if rects == nil {
+		s.damage = s.damage[:0]
+		s.damaged = false
+		return
+	}
 	s.damage = append(s.damage[:0], rects...)
 	s.damaged = true
 }
@@ -258,7 +264,7 @@ func (s *Surface) presented(tex mtl.Texture) {
 	}
 	s.last = tex
 	// What this frame changed is what the next, drawn into the buffer before it, copies.
-	if s.damaged && !s.coversLocked(tex.Width(), tex.Height()) {
+	if s.damaged && len(s.damage) > 0 && !s.coversLocked(tex.Width(), tex.Height()) {
 		s.lastDamage = append(s.lastDamage[:0], s.damage...)
 	} else {
 		s.lastDamage = nil
@@ -287,12 +293,15 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 		s.view.release()
 		return nil, err
 	}
-	s.view.ml.SetOpaque(!transparent)
 	if s.view.chain != nil {
 		s.view.chain.setOpaque(!transparent)
+	} else {
+		s.view.ml.SetOpaque(!transparent)
 	}
 	s.view.setNSView(uintptr(nsView))
+	g.surfacesMu.Lock()
 	g.surfaces = append(g.surfaces, s)
+	g.surfacesMu.Unlock()
 	return s, nil
 }
 
@@ -339,7 +348,9 @@ func (s *Surface) Dispose() {
 		s.drawable, s.drawableTex = ca.MetalDrawable{}, mtl.Texture{}
 	}
 	s.view.release()
+	g.surfacesMu.Lock()
 	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *Surface) bool { return t == s })
+	g.surfacesMu.Unlock()
 }
 
 // texture returns the drawable's texture for the current frame, acquiring a drawable if needed.
@@ -379,11 +390,20 @@ func (g *Graphics) ColorSpace() color.ColorSpace {
 	return g.colorSpace
 }
 
+func (g *Graphics) snapshotSurfaces() []*Surface {
+	g.surfacesMu.Lock()
+	defer g.surfacesMu.Unlock()
+	if len(g.surfaces) == 0 {
+		return nil
+	}
+	return append([]*Surface(nil), g.surfaces...)
+}
+
 func (g *Graphics) Begin() error {
 	// NSAutoreleasePool is required to release drawable correctly (#847).
 	// https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/Drawables.html
 	g.pool = cocoa.NSAutoreleasePool_new()
-	for _, s := range g.surfaces {
+	for _, s := range g.snapshotSurfaces() {
 		s.view.updatePresentationState()
 	}
 	return nil
@@ -407,7 +427,7 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 // current frame ends, like during window resizing.
 func (g *Graphics) SetMainThreadRunner(f func(func())) {
 	g.runOnMainThread = f
-	for _, s := range g.surfaces {
+	for _, s := range g.snapshotSurfaces() {
 		s.view.runOnMainThread = f
 	}
 }
@@ -446,9 +466,9 @@ loop:
 			continue
 		}
 
-		// Check if all command buffers for the frame are completed.
+		// Check if all command buffers for the frame have finished (completed or errored).
 		for _, cb := range r.cbs {
-			if cb.Status() != mtl.CommandBufferStatusCompleted {
+			if cb.Status() < mtl.CommandBufferStatusCompleted {
 				kept = append(kept, r)
 				continue loop
 			}
@@ -514,24 +534,51 @@ func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
 }
 
 func (g *Graphics) SetVertices(vertices []float32, indices []uint32) error {
-	vbSize := unsafe.Sizeof(vertices[0]) * uintptr(len(vertices))
-	ibSize := unsafe.Sizeof(indices[0]) * uintptr(len(indices))
+	if len(vertices) == 0 || len(indices) == 0 {
+		return nil
+	}
+	vbSize := unsafe.Sizeof(float32(0)) * uintptr(len(vertices))
+	ibSize := unsafe.Sizeof(uint32(0)) * uintptr(len(indices))
 
-	g.vb = g.availableBuffer(vbSize)
+	vb := g.availableBuffer(vbSize)
+	if vb == (mtl.Buffer{}) {
+		return fmt.Errorf("metal: NewBufferWithLength(%d) failed for vertices", vbSize)
+	}
+	g.vb = vb
 	g.vb.CopyToContents(unsafe.Pointer(&vertices[0]), vbSize)
 
-	g.ib = g.availableBuffer(ibSize)
+	ib := g.availableBuffer(ibSize)
+	if ib == (mtl.Buffer{}) {
+		return fmt.Errorf("metal: NewBufferWithLength(%d) failed for indices", ibSize)
+	}
+	g.ib = ib
 	g.ib.CopyToContents(unsafe.Pointer(&indices[0]), ibSize)
 
 	return nil
 }
 
 func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
+	surfaces := g.snapshotSurfaces()
 	if g.cb == (mtl.CommandBuffer{}) {
 		if g.rce != (mtl.RenderCommandEncoder{}) {
 			panic("metal: render command encoder must be empty if command buffer is empty")
 		}
-		return
+		if !present {
+			return
+		}
+		var hasPending bool
+		for _, s := range surfaces {
+			if s.chained || s.drawable != (ca.MetalDrawable{}) {
+				hasPending = true
+				break
+			}
+		}
+		if !hasPending {
+			return
+		}
+		// An intermediate flush (e.g. ReadPixels) already committed the draws to the screen;
+		// create a command buffer so the pending drawable/swap-buffer is still presented.
+		g.ensureCommandBuffer()
 	}
 
 	g.flushRenderCommandEncoderIfNeeded()
@@ -540,7 +587,7 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 	var withTransaction []*Surface
 	var chained []*Surface
 	if present {
-		for _, s := range g.surfaces {
+		for _, s := range surfaces {
 			if s.chained {
 				chained = append(chained, s)
 				continue
@@ -621,6 +668,9 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 		td.Usage |= mtl.TextureUsagePixelFormatView
 	}
 	t := g.device.NewTextureWithDescriptor(td)
+	if t == (mtl.Texture{}) {
+		return nil, fmt.Errorf("metal: NewTextureWithDescriptor(%dx%d, %s) failed", width, height, format)
+	}
 	i := &Image{
 		graphics: g,
 		width:    width,
@@ -638,6 +688,10 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 			Blue:  mtl.TextureSwizzleRed,
 			Alpha: mtl.TextureSwizzleRed,
 		})
+		if i.sampled == (mtl.Texture{}) {
+			t.Release()
+			return nil, fmt.Errorf("metal: NewTextureViewWithSwizzle(%dx%d) failed", width, height)
+		}
 	}
 	return i, nil
 }
@@ -732,8 +786,23 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 			continue
 		}
 		srcTextures[i] = src.sampledTexture()
-		if src.screen && srcTextures[i] == (mtl.Texture{}) {
-			return nil
+		if src.screen {
+			if srcTextures[i] == (mtl.Texture{}) {
+				return nil
+			}
+			// If a non-kept screen is sampled before any draw targeted it, clear it first so it
+			// reads as transparent black rather than undefined swap-buffer pixels.
+			if !src.surface.cleared {
+				g.flushRenderCommandEncoderIfNeeded()
+				var rpd mtl.RenderPassDescriptor
+				rpd.ColorAttachments[0].LoadAction = mtl.LoadActionClear
+				rpd.ColorAttachments[0].StoreAction = mtl.StoreActionStore
+				rpd.ColorAttachments[0].Texture = srcTextures[i]
+				rpd.ColorAttachments[0].ClearColor = mtl.ClearColor{}
+				rce := g.encoderCommandBuffer().RenderCommandEncoderWithDescriptor(rpd)
+				rce.EndEncoding()
+				src.surface.cleared = true
+			}
 		}
 	}
 
@@ -817,7 +886,21 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		st.fragmentInternalVersion = versions.Internal
 	}
 	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 && st.userVersion != versions.User {
-		g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), unsafe.Sizeof(user[0])*uintptr(len(user)), userUniformBufferIndex)
+		const maxInlineBytes = 4096
+		nbytes := unsafe.Sizeof(user[0]) * uintptr(len(user))
+		if nbytes <= maxInlineBytes {
+			g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), nbytes, userUniformBufferIndex)
+		} else {
+			buf, offset := g.uploadSpace(alignUploadOffset(nbytes))
+			if buf == (mtl.Buffer{}) {
+				return fmt.Errorf("metal: allocating uniform buffer (%d bytes) failed", nbytes)
+			}
+			dst := unsafe.Slice((*byte)(buf.Contents()), offset+nbytes)
+			src := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(user))), nbytes)
+			copy(dst[offset:], src)
+			buf.DidModifyRange(offset, nbytes)
+			g.rce.SetFragmentBuffer(buf, int(offset), userUniformBufferIndex)
+		}
 		st.userVersion = versions.User
 	}
 
@@ -965,6 +1048,16 @@ func (i *Image) internalSize() (int, int) {
 }
 
 func (i *Image) Dispose() {
+	g := i.graphics
+	if g.lastDst == i {
+		g.flushRenderCommandEncoderIfNeeded()
+		g.lastDst = nil
+	}
+	for k, t := range g.rceState.textures {
+		if (i.texture != (mtl.Texture{}) && t == i.texture) || (i.sampled != (mtl.Texture{}) && t == i.sampled) {
+			g.rceState.textures[k] = mtl.Texture{}
+		}
+	}
 	if i.sampled != (mtl.Texture{}) {
 		i.sampled.Release()
 		i.sampled = mtl.Texture{}
@@ -995,12 +1088,21 @@ func (i *Image) syncTexture() {
 }
 
 func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
+	if i.screen {
+		return fmt.Errorf("metal: ReadPixels cannot be called on the screen")
+	}
+	if i.texture == (mtl.Texture{}) {
+		return fmt.Errorf("metal: ReadPixels on a disposed image")
+	}
 	i.syncTexture()
 
 	bpp := i.format.BytesPerPixel()
 	for _, arg := range args {
 		if got, want := len(arg.Pixels), bpp*arg.Region.Dx()*arg.Region.Dy(); got != want {
 			return fmt.Errorf("metal: len(buf) must be %d but %d at ReadPixels", want, got)
+		}
+		if arg.Region.Empty() {
+			continue
 		}
 		if err := i.texture.GetBytes(arg.Pixels, bpp*arg.Region.Dx(), mtl.Region{
 			Origin: mtl.Origin{X: arg.Region.Min.X, Y: arg.Region.Min.Y},
@@ -1013,6 +1115,12 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 }
 
 func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
+	if i.screen {
+		return fmt.Errorf("metal: WritePixels cannot be called on the screen")
+	}
+	if i.texture == (mtl.Texture{}) {
+		return fmt.Errorf("metal: WritePixels on a disposed image")
+	}
 	g := i.graphics
 
 	bpp := i.format.BytesPerPixel()

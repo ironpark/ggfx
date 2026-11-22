@@ -163,10 +163,14 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 	}
 
 	// Note that the vertices and the indices passed to BufferSubData is not under GC management in the gl package.
-	vs := unsafe.Slice((*byte)(unsafe.Pointer(&vertices[0])), len(vertices)*int(unsafe.Sizeof(vertices[0])))
-	context.ctx.BufferSubData(gl.ARRAY_BUFFER, 0, vs)
-	is := unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*int(unsafe.Sizeof(indices[0])))
-	context.ctx.BufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, is)
+	if len(vertices) > 0 {
+		vs := unsafe.Slice((*byte)(unsafe.Pointer(&vertices[0])), len(vertices)*int(unsafe.Sizeof(float32(0))))
+		context.ctx.BufferSubData(gl.ARRAY_BUFFER, 0, vs)
+	}
+	if len(indices) > 0 {
+		is := unsafe.Slice((*byte)(unsafe.Pointer(&indices[0])), len(indices)*int(unsafe.Sizeof(uint32(0))))
+		context.ctx.BufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, is)
+	}
 }
 
 func (s *openGLState) resetLastUniforms() {
