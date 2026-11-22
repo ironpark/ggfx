@@ -436,9 +436,7 @@ var _ [len(DrawTrianglesShaderOptions{}.Images) - graphics.ShaderSrcImageCount]s
 //
 // For the details about shaders, see docs/shaders.md.
 //
-// the size of the image at index 0 of the specified images.
-// If the image at index 0 is nil, its size is treated as (0, 0) for this comparison.
-// If one of the specified image is non-nil and is disposed, DrawTrianglesShader panics.
+// If one of the specified images is non-nil and is disposed, DrawTrianglesShader panics.
 //
 // If len(vertices) is more than MaxVertexCount, the exceeding part is ignored.
 //

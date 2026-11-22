@@ -196,7 +196,6 @@ func (b *backend) compact() {
 	b.page = page
 	b.width = newW
 	b.height = newH
-	b.restoreInfo = restoreInfo{}
 	for k, i := range imgs {
 		i.node = nodes[k]
 	}

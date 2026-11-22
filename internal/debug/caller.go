@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build ggfxdebug || ebitenginedebug || ebitendebug
+
 package debug
 
 import (
@@ -28,15 +30,7 @@ var (
 	ebitengineFileDirOnce sync.Once
 )
 
-type CallerType int
-
-const (
-	CallerTypeNone CallerType = iota
-	CallerTypeRegular
-	CallerTypeInternal
-)
-
-// FirstCaller returns the file and line number of the first caller outside of Ebitengine.
+// FirstCaller returns the file and line number of the first caller outside of ggfx.
 func FirstCaller() (file string, line int, callerType CallerType) {
 	ebitengineFileDirOnce.Do(func() {
 		pkg, err := build.Default.Import("github.com/ironpark/ggfx", "", build.FindOnly)

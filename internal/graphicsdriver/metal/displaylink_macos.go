@@ -17,56 +17,16 @@
 package metal
 
 import (
-	"fmt"
-	"log/slog"
-	"runtime"
-	"structs"
-	"sync"
 	"time"
 
 	"github.com/ebitengine/purego"
-	"github.com/ebitengine/purego/objc"
 
-	"github.com/ironpark/ggfx/internal/cocoa"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
 )
 
-// useMetalDisplayLink is whether a view takes its drawables from a CAMetalDisplayLink where the
-// OS has one. Such a display link keeps a pool of drawables of its own, four whatever the layer's
-// maximumDrawableCount and its preferredFrameLatency, and one of them waits in its callback for
-// the next frame however long that is: 92 MB for a window 3000 by 2000 pixels, where the layer's
-// own nextDrawable and a CVDisplayLink keep maximumDrawableCount, 46 MB.
-const useMetalDisplayLink = false
-
 func (v *view) initDisplayLink() error {
-	if useMetalDisplayLink && isCAMetalDisplayLinkAvailable() {
-		if err := v.initCAMetalDisplayLink(); err != nil {
-			return err
-		}
-		return nil
-	}
-	if err := v.initCADisplayLink(); err != nil {
-		return err
-	}
-	return nil
+	return v.initCADisplayLink()
 }
-
-var (
-	sel_processInfo            = objc.RegisterName("processInfo")
-	sel_operatingSystemVersion = objc.RegisterName("operatingSystemVersion")
-	sel_release                = objc.RegisterName("release")
-
-	class_NSProcessInfo = objc.GetClass("NSProcessInfo")
-)
-
-type nsOperatingSystemVersion struct {
-	_            structs.HostLayout
-	majorVersion int
-	minorVersion int
-	patchVersion int
-}
-
-var nsClassFromString func(str cocoa.NSString) objc.Class
 
 var (
 	cvDisplayLinkCreateWithActiveCGDisplays func(displayLinkOut *uintptr) int32
@@ -77,12 +37,6 @@ var (
 )
 
 func init() {
-	foundation, err := purego.Dlopen("/System/Library/Frameworks/Foundation.framework/Foundation", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
-	if err != nil {
-		panic(err)
-	}
-	purego.RegisterLibFunc(&nsClassFromString, foundation, "NSClassFromString")
-
 	coreVideo, err := purego.Dlopen("/System/Library/Frameworks/CoreVideo.framework/CoreVideo", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
 	if err != nil {
 		panic(err)
@@ -92,208 +46,6 @@ func init() {
 	purego.RegisterLibFunc(&cvDisplayLinkStart, coreVideo, "CVDisplayLinkStart")
 	purego.RegisterLibFunc(&cvDisplayLinkStop, coreVideo, "CVDisplayLinkStop")
 	purego.RegisterLibFunc(&cvDisplayLinkRelease, coreVideo, "CVDisplayLinkRelease")
-}
-
-func isCAMetalDisplayLinkAvailable() bool {
-	version := objc.Send[nsOperatingSystemVersion](objc.ID(class_NSProcessInfo).Send(sel_processInfo), sel_operatingSystemVersion)
-	if version.majorVersion >= 14 {
-		s := cocoa.NSString_alloc().InitWithUTF8String("CAMetalDisplayLink")
-		defer s.ID.Send(sel_release)
-		return nsClassFromString(s) != 0
-	}
-	return false
-}
-
-var (
-	class_EbitengineCAMetalDisplayLinkDelegate objc.Class
-
-	// The delegate class is registered once for the process; each view has its own delegate
-	// instance, and the callback finds the view through delegateViews.
-	registerDelegateClassOnce sync.Once
-	registerDelegateClassErr  error
-
-	delegateViewsMu sync.Mutex
-	delegateViews   = map[objc.ID]*view{}
-)
-
-func viewForDelegate(id objc.ID) *view {
-	delegateViewsMu.Lock()
-	defer delegateViewsMu.Unlock()
-	return delegateViews[id]
-}
-
-func registerDelegateClass() error {
-	registerDelegateClassOnce.Do(func() {
-		c, err := objc.RegisterClass(
-			"EbitengineCAMetalDisplayLinkDelegate",
-			objc.GetClass("NSObject"),
-			[]*objc.Protocol{objc.GetProtocol("CAMetalDisplayLinkDelegate")},
-			nil,
-			[]objc.MethodDef{
-				{
-					Cmd: objc.RegisterName("metalDisplayLink:needsUpdate:"),
-					Fn: func(id objc.ID, cmd objc.SEL, metalDisplayLink objc.ID, needsUpdate objc.ID) {
-						v := viewForDelegate(id)
-						if v == nil {
-							return
-						}
-						// There is a case where this callback is invoked from the main run loop (#3353).
-						// This is very mysterious, but this causes a deadlock.
-						// As a workaround, return this immediately when the current run loop is the main run loop.
-						if cocoa.NSRunLoop_currentRunLoop() == cocoa.NSRunLoop_mainRunLoop() {
-							slog.Debug("metal: metalDisplayLink:needsUpdate: is unexpectedly called from the main run loop")
-							return
-						}
-						// liveResizing or released becomes true before the display link is invalidated
-						// (see updateMetalDisplayLink).
-						// Return without sending a drawable so that the run loop can execute the invalidation block.
-						if v.liveResizing.Load() || v.released.Load() {
-							return
-						}
-						drawable := ca.MetalDisplayLinkUpdate{ID: needsUpdate}.Drawable()
-						if drawable == (ca.MetalDrawable{}) {
-							return
-						}
-						v.drawableCh <- drawable
-						<-v.drawableDoneCh
-					},
-				},
-			},
-		)
-		if err != nil {
-			registerDelegateClassErr = fmt.Errorf("metal: objc.RegisterClass for EbitengineCAMetalDisplayLinkDelegate failed: %w", err)
-			return
-		}
-		class_EbitengineCAMetalDisplayLinkDelegate = c
-	})
-	return registerDelegateClassErr
-}
-
-func (v *view) initCAMetalDisplayLink() error {
-	v.drawableCh = make(chan ca.MetalDrawable)
-	v.drawableDoneCh = make(chan struct{})
-	v.metalDisplayLinkRunLoop = createThreadWithRunLoop()
-
-	if err := registerDelegateClass(); err != nil {
-		return err
-	}
-
-	v.updateMetalDisplayLink()
-
-	return nil
-}
-
-// updateMetalDisplayLink creates or destroys CAMetalDisplayLink for the current live-resize
-// state.
-func (v *view) updateMetalDisplayLink() {
-	// A zero run loop means CAMetalDisplayLink is not used: either the OS doesn't support it,
-	// or the display link is not initialized yet. In the latter case, initCAMetalDisplayLink
-	// calls this function after creating the run loop.
-	if v.metalDisplayLinkRunLoop.ID == 0 {
-		return
-	}
-
-	// Destroy the display link while the window is being resized. CAMetalLayer's nextDrawable is
-	// not available while CAMetalDisplayLink exists for the layer, and drawables must be obtained
-	// directly from the Metal layer then (see nextDrawable): the display link creates a drawable
-	// before invoking the delegate callback, so the drawable often has a stale size while the
-	// drawable size keeps changing, and waiting for a drawable with the correct size wastes the
-	// tight drawable pool. A drawable obtained directly from the Metal layer always has the
-	// current drawable size (#3478).
-	if v.liveResizing.Load() || v.released.Load() {
-		if v.metalDisplayLink == 0 {
-			return
-		}
-		dl := ca.MetalDisplayLink{ID: objc.ID(v.metalDisplayLink)}
-		v.metalDisplayLink = 0
-
-		// If a drawable from the display link is still in use, the delegate callback that delivered it is
-		// blocked until the drawable usage finishes. Unblock the callback. The drawable remains usable and
-		// presentable.
-		if v.drawableFromDisplayLink {
-			v.drawableFromDisplayLink = false
-			v.drawableDoneCh <- struct{}{}
-		}
-
-		done := make(chan struct{})
-		b := objc.NewBlock(func(block objc.Block) {
-			dl.Invalidate()
-			dl.Release()
-			close(done)
-		})
-		defer b.Release()
-		v.metalDisplayLinkRunLoop.PerformBlock(b)
-
-		// A delegate callback might be blocked to send a drawable, preventing the run loop from executing
-		// the block above. Receive drawables until the display link is invalidated.
-		// New delegate callbacks return without sending a drawable as liveResizing or released is
-		// already true, so this loop always terminates.
-	loop:
-		for {
-			select {
-			case <-v.drawableCh:
-				v.drawableDoneCh <- struct{}{}
-			case <-done:
-				break loop
-			}
-		}
-		return
-	}
-
-	// Create the display link while the window is not being resized.
-	if v.metalDisplayLink != 0 {
-		return
-	}
-
-	// A display link on a layer without a drawable size fails to allocate drawables and logs a
-	// warning at every refresh. Wait for the first screen image (see applyDrawableSizeIfNeeded).
-	if v.drawableWidth == 0 || v.drawableHeight == 0 {
-		return
-	}
-
-	if v.metalDisplayLinkDelegate == 0 {
-		v.metalDisplayLinkDelegate = objc.ID(class_EbitengineCAMetalDisplayLinkDelegate).Send(objc.RegisterName("new"))
-		delegateViewsMu.Lock()
-		delegateViews[v.metalDisplayLinkDelegate] = v
-		delegateViewsMu.Unlock()
-	}
-
-	ch := make(chan uintptr)
-	b := objc.NewBlock(func(block objc.Block) {
-		dl := ca.NewMetalDisplayLink(v.ml)
-		dl.SetDelegate(v.metalDisplayLinkDelegate)
-		dl.AddToRunLoop(v.metalDisplayLinkRunLoop, cocoa.NSDefaultRunLoopMode)
-		dl.SetPaused(false)
-		ch <- uintptr(dl.ID)
-		close(ch)
-	})
-	defer b.Release()
-	v.metalDisplayLinkRunLoop.PerformBlock(b)
-	v.metalDisplayLink = <-ch
-}
-
-func createThreadWithRunLoop() cocoa.NSRunLoop {
-	ch := make(chan cocoa.NSRunLoop)
-	go func() {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-
-		runLoop := cocoa.NSRunLoop_currentRunLoop()
-		ch <- runLoop
-		close(ch)
-
-		// Add a dummy mach port to keep alive.
-		port := cocoa.NSMachPort_port()
-		runLoop.AddPort(port, cocoa.NSRunLoopCommonModes)
-
-		runLoop.Run()
-	}()
-
-	runLoop := <-ch
-	if runLoop.ID == 0 {
-		panic("metal: runLoop must be initialized")
-	}
-	return runLoop
 }
 
 var displayLinkOutputCallbackPtr = purego.NewCallback(displayLinkOutputCallback)
@@ -355,11 +107,7 @@ func displayLinkOutputCallback(displayLink uintptr, inNow, inOutputTime uintptr,
 // updatePresentationState takes the window state the window system last set (see setWindowState)
 // for the frame. This must be called at the beginning of a frame.
 func (v *view) updatePresentationState() {
-	inLiveResize := v.windowLiveResizing.Load()
-	if v.liveResizing.Load() != inLiveResize {
-		v.liveResizing.Store(inLiveResize)
-		v.updateMetalDisplayLink()
-	}
+	v.liveResizing.Store(v.windowLiveResizing.Load())
 
 	if v.chain != nil {
 		return
@@ -394,37 +142,6 @@ func (v *view) updatePresentationState() {
 
 func (v *view) nextDrawable() ca.MetalDrawable {
 	v.applyDrawableSizeIfNeeded()
-
-	if v.metalDisplayLink != 0 {
-		const wait = 100 * time.Millisecond
-		if v.drawableTimer == nil {
-			v.drawableTimer = time.NewTimer(wait)
-		} else {
-			v.drawableTimer.Reset(wait)
-		}
-		defer v.drawableTimer.Stop()
-		for {
-			select {
-			case d := <-v.drawableCh:
-				v.drawableFromDisplayLink = true
-				// The display link creates a drawable before invoking the delegate callback, so the
-				// drawable might have a stale size when the drawable size has just been changed e.g.
-				// by window resizing. Skip such a drawable and wait for one with the new size (#3478).
-				if v.drawableWidth != 0 && v.drawableHeight != 0 {
-					if t := d.Texture(); t.Width() != v.drawableWidth || t.Height() != v.drawableHeight {
-						v.finishDrawableUsage()
-						continue
-					}
-				}
-				return d
-			case <-v.drawableTimer.C:
-				// This happens when the main thread needs to execute the notification observer callback,
-				// or when the appliation goes to full screen (#3354).
-				return ca.MetalDrawable{}
-			}
-		}
-	}
-
 	v.waitForDisplayLinkOutputCallback()
 
 	d, err := v.ml.NextDrawable()
@@ -433,12 +150,4 @@ func (v *view) nextDrawable() ca.MetalDrawable {
 		return ca.MetalDrawable{}
 	}
 	return d
-}
-
-func (v *view) finishDrawableUsage() {
-	if !v.drawableFromDisplayLink {
-		return
-	}
-	v.drawableFromDisplayLink = false
-	v.drawableDoneCh <- struct{}{}
 }

@@ -132,22 +132,12 @@ type backend struct {
 	// sourceInThisFrame is reset every frame.
 	sourceInThisFrame bool
 
-	// restoreInfo is information for restoration from a context loss.
-	restoreInfo restoreInfo
-
 	// images are the images on the page, and usedArea the pixels their nodes cover, for a page.
 	images   []*imageImpl
 	usedArea int64
 
 	// lowSince is the frame since which the page has been mostly empty, or 0 (see compactPages).
 	lowSince int64
-}
-
-type restoreInfo struct {
-	valid  bool
-	screen bool
-	pixels *graphics.ManagedBytes
-	region image.Rectangle
 }
 
 func (b *backend) tryAlloc(width, height int) (*packing.Node, bool) {
@@ -206,8 +196,7 @@ var (
 	// If inFrame is false, function calls on an image should be deferred until the next BeginFrame.
 	inFrame bool
 
-	inited    atomic.Bool
-	suspended atomic.Bool
+	inited atomic.Bool
 
 	// theBackends is a set of atlases.
 	theBackends []*backend
@@ -559,13 +548,13 @@ func (i *Image) writePixels(pix []byte, region image.Rectangle) {
 	if l := i.format.BytesPerPixel() * region.Dx() * region.Dy(); len(pix) != l {
 		panic(fmt.Sprintf("atlas: len(p) must be %d but %d", l, len(pix)))
 	}
+	if region.Empty() {
+		return
+	}
 
 	i.resetUsedAsSourceCount()
 
 	if i.backend == nil {
-		if pix == nil {
-			return
-		}
 		// Allocate as a source as this image will likely be used as a source.
 		i.allocate(nil, i.imageType == ImageTypeRegular)
 	}
@@ -578,11 +567,6 @@ func (i *Image) writePixels(pix []byte, region image.Rectangle) {
 
 	if !region.Eq(image.Rect(0, 0, i.width, i.height)) || i.paddingSize() == 0 {
 		region = region.Add(r.Min)
-
-		if pix == nil {
-			i.backend.clear(region)
-			return
-		}
 
 		// Copy pixels in the case when pix is modified before the graphics command is executed.
 		pix2 := graphics.NewManagedBytes(bpp*region.Dx()*region.Dy(), func(bs []byte) {
@@ -728,7 +712,6 @@ func (i *imageImpl) deallocateImpl() {
 
 	i.backend.backendImage.Dispose()
 	i.backend.backendImage = nil
-	i.backend.restoreInfo = restoreInfo{}
 
 	for idx, sh := range theBackends {
 		if sh == i.backend {
@@ -1004,48 +987,6 @@ func EndFrame(graphicsDriver graphicsdriver.Graphics) error {
 	}
 	shrinkQuadIndices()
 
-	if theGPUResourcesState.isSavingGPUResourcesRequested() {
-		defer theGPUResourcesState.finishSavingGPUResources()
-
-		flushDeferred()
-		for _, b := range theBackends {
-			if b.backendImage == nil {
-				continue
-			}
-			var pixels *graphics.ManagedBytes
-			var region image.Rectangle
-			if !b.screen {
-				if b.page != nil {
-					region = b.page.AllocatedRegion()
-				} else {
-					// If a page doesn't exist, the image is not on an atlas.
-					region = image.Rect(0, 0, b.width, b.height)
-				}
-				if !region.Empty() {
-					var err error
-					pixels = graphics.NewManagedBytes(b.format.BytesPerPixel()*region.Dx()*region.Dy(), func(bytes []byte) {
-						args := []graphicsdriver.PixelsArgs{
-							{
-								Pixels: bytes,
-								Region: region,
-							},
-						}
-						err = b.backendImage.ReadPixels(graphicsDriver, args)
-					})
-					if err != nil {
-						return err
-					}
-				}
-			}
-			b.restoreInfo = restoreInfo{
-				valid:  true,
-				screen: b.screen,
-				pixels: pixels,
-				region: region,
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -1099,50 +1040,7 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 		return err
 	}
 
-	if theGPUResourcesState.startRestoringGPUResourcesIfNeeded() {
-		if err := graphicscommand.ResetGraphicsDriverState(graphicsDriver); err != nil {
-			return err
-		}
-
-		// Dispose all the internal shaders.
-		// The current internal shader objects might have references to old GPU resources.
-		theShadersWithInternalShader.deallocateInternalShaders()
-
-		// Dispose all the images.
-		// The current internal image objects might have references to old GPU resources.
-		for _, b := range theBackends {
-			if b.backendImage != nil {
-				b.backendImage.Dispose()
-				b.backendImage = nil
-			}
-		}
-
-		// Restore all the images.
-		for _, b := range theBackends {
-			if !b.restoreInfo.valid {
-				continue
-			}
-			if b.screen {
-				b.backendImage = graphicscommand.NewImage(b.width, b.height, b.surface, "")
-			} else {
-				b.backendImage = graphicscommand.NewImageWithFormat(b.width, b.height, b.format, "")
-			}
-			if b.restoreInfo.region != image.Rect(0, 0, b.width, b.height) {
-				b.clear(image.Rect(0, 0, b.width, b.height))
-			}
-			if b.restoreInfo.pixels != nil {
-				b.backendImage.WritePixels(b.restoreInfo.pixels, b.restoreInfo.region)
-			}
-		}
-	}
-
 	inFrame = true
-
-	// Discard restore info whichever restoration is done or not.
-	for _, b := range theBackends {
-		// Do not release pixels here, as the command buffer might not be flushed yet.
-		b.restoreInfo = restoreInfo{}
-	}
 
 	flushDeferred()
 	putImagesOnSourceBackend()
@@ -1165,44 +1063,6 @@ func TotalGPUImageMemoryUsageInBytes() int64 {
 		sum += int64(b.format.BytesPerPixel()) * int64(w) * int64(h)
 	}
 	return sum
-}
-
-// SaveGPUResources saves GPU resources (textures and shaders) in CPU memory.
-//
-// Until GPU resources are saved, the app becomes suspended
-// until [RestoreGPUResources] or [ResumeApp] is called.
-//
-// If [RestoreGPUResources] is called, the saved resources are restored in the next frame.
-// If [ResumeApp] is called but not [RestoreGPUResources], the saved resources are discarded.
-func SaveGPUResources() {
-	if !inited.Load() {
-		return
-	}
-	// Suspend the app. [IsSuspended] will return true after the GPU resources are actually saved.
-	suspended.Store(true)
-	theGPUResourcesState.requestToSaveGPUResources()
-}
-
-// IsSuspended reports whether the app is currently suspended.
-func IsSuspended() bool {
-	return suspended.Load() && theGPUResourcesState.areGPUResourcesSaved()
-}
-
-// AreGPUResourcesSaved reports whether GPU resources are currently saved.
-func AreGPUResourcesSaved() bool {
-	return theGPUResourcesState.areGPUResourcesSaved()
-}
-
-// ResumeApp unfreezes the app previously frozen by [SaveGPUResources].
-func ResumeApp() {
-	suspended.Store(false)
-}
-
-// RestoreGPUResources restores GPU resources in the next frame if needed.
-// RestoreGPUResources reports whether there are GPU resources to be restored or not.
-func RestoreGPUResources() bool {
-	suspended.Store(false)
-	return theGPUResourcesState.requestToRestoreGPUResources()
 }
 
 // BackendStats is one backend's GPU image: its size, the size the GPU keeps for it, and, for an

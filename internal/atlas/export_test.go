@@ -91,12 +91,6 @@ func ClearShaderForTesting() *Shader {
 	return clearShader()
 }
 
-func ShaderCountWithInternalShaderForTesting() int {
-	theShadersWithInternalShader.m.Lock()
-	defer theShadersWithInternalShader.m.Unlock()
-	return len(theShadersWithInternalShader.shaders)
-}
-
 // SetA8SupportedForTesting sets whether new A8 images are put on A8 backends, as if the driver
 // did or did not support A8, and returns a function that restores the previous setting.
 func SetA8SupportedForTesting(supported bool) (restore func()) {

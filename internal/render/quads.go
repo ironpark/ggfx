@@ -77,9 +77,6 @@ func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 		s.locked = locked[:0]
 	}()
 
-	if i.modifyCallback != nil {
-		i.modifyCallback()
-	}
 	i.lastBlend = blend
 
 	// As in drawTriangles, pending pixel writes go to the GPU first—once per unique image.

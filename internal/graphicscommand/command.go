@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"slices"
 	"strings"
 
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -214,12 +213,6 @@ func (c *drawTrianglesCommand) numIndices() int {
 // merged with c as far as those go: it can when its uniforms are c's too.
 func (c *drawTrianglesCommand) canMergeWithoutUniforms(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, blend graphicsdriver.Blend, shader *Shader) bool {
 	return c.shader == shader && c.dst == dst && c.srcs == srcs && c.blend == blend
-}
-
-// CanMergeWithDrawTrianglesCommand returns a boolean value indicating whether the other drawTrianglesCommand can be merged
-// with the drawTrianglesCommand c.
-func (c *drawTrianglesCommand) CanMergeWithDrawTrianglesCommand(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, blend graphicsdriver.Blend, shader *Shader, uniforms []uint32) bool {
-	return c.canMergeWithoutUniforms(dst, srcs, blend, shader) && slices.Equal(c.uniforms, uniforms)
 }
 
 // writePixelsCommand represents a command to replace pixels of an image.
@@ -471,7 +464,7 @@ func MaxImageSize(graphicsDriver graphicsdriver.Graphics) int {
 // FinishForcedFrame waits for a frame forced while the game loop is blocked to finish.
 // If the graphics driver doesn't have an API to wait, FinishForcedFrame does nothing.
 func FinishForcedFrame(graphicsDriver graphicsdriver.Graphics) error {
-	f, ok := graphicsDriver.(interface{ FinishForcedFrame() error })
+	f, ok := graphicsDriver.(graphicsdriver.ForcedFrameFinisher)
 	if !ok {
 		return nil
 	}

@@ -19,3 +19,11 @@ type FrameLogger interface {
 	FrameLogf(format string, args ...any)
 	Flush()
 }
+
+type CallerType int
+
+const (
+	CallerTypeNone CallerType = iota
+	CallerTypeRegular
+	CallerTypeInternal
+)

@@ -232,11 +232,8 @@ var (
 		for _, attr := range attrs {
 			switch attr.Name.Local {
 			case "id":
-				id := attr.Value
-				if len(id) >= 0 {
-					c.icon.Grads[id] = c.grad
-				} else {
-					return errZeroLengthID
+				if attr.Value != "" {
+					c.icon.Grads[attr.Value] = c.grad
 				}
 			case "x1":
 				c.grad.Points[0], err = readFraction(attr.Value)
@@ -264,11 +261,8 @@ var (
 		for _, attr := range attrs {
 			switch attr.Name.Local {
 			case "id":
-				id := attr.Value
-				if len(id) >= 0 {
-					c.icon.Grads[id] = c.grad
-				} else {
-					return errZeroLengthID
+				if attr.Value != "" {
+					c.icon.Grads[attr.Value] = c.grad
 				}
 			case "r":
 				c.grad.Points[4], err = readFraction(attr.Value)

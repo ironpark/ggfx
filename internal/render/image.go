@@ -74,10 +74,6 @@ type Image struct {
 	// lastBlend is the lastly-used blend for a draw to the image.
 	lastBlend graphicsdriver.Blend
 
-	// modifyCallback is a callback called when DrawTriangles or WritePixels is called.
-	// modifyCallback is useful to detect whether the image is manipulated or not after a certain time.
-	modifyCallback func()
-
 	tmpVerticesForFill []float32
 
 	// inLevelsRegistry reports whether the image is in theLevelsRegistry.
@@ -305,10 +301,6 @@ func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 
 // drawTriangles must be called with the mutexes of the image and the source images locked.
 func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *atlas.Shader, uniforms []uint32, canSkipMipmap bool) {
-	if i.modifyCallback != nil {
-		i.modifyCallback()
-	}
-
 	i.lastBlend = blend
 
 	if len(indices) == 0 {
@@ -375,9 +367,6 @@ func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if i.modifyCallback != nil {
-		i.modifyCallback()
-	}
 	if l := i.cache.bpp * region.Dx() * region.Dy(); len(pix) != l {
 		panic(fmt.Sprintf("render: len(pix) was %d but must be %d", len(pix), l))
 	}

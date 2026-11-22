@@ -32,19 +32,6 @@ func (p Point) String() string {
 	return fmt.Sprintf("(%f, %f)", p.X, p.Y)
 }
 
-func IsPointCloseToSegment(p, p0, p1 Point, allow float32) bool {
-	return isPointCloseToSegment(point{
-		x: p.X,
-		y: p.Y,
-	}, point{
-		x: p0.X,
-		y: p0.Y,
-	}, point{
-		x: p1.X,
-		y: p1.Y,
-	}, allow)
-}
-
 func CurrentPosition(path *Path) (Point, bool) {
 	p, ok := path.currentPosition()
 	if !ok {

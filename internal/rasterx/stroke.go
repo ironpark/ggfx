@@ -90,14 +90,8 @@ func NewStroker(width, height int, scanner Scanner) *Stroker {
 	r := new(Stroker)
 	r.Scanner = scanner
 	r.SetBounds(width, height)
-	//Defaults for stroking
+	// Defaults for stroking
 	r.SetWinding(true)
-	r.u = 2 << 6
-	r.mLimit = 4 << 6
-	r.JoinMode = MiterClip
-	r.JoinGap = RoundGap
-	r.CapL = RoundCap
-	r.CapT = RoundCap
 	r.SetStroke(1<<6, 4<<6, ButtCap, nil, FlatGap, MiterClip)
 	return r
 }

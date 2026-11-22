@@ -641,7 +641,6 @@ func (g *Graphics) flushCommandBufferIfNeeded(present bool) {
 		s.presented(s.drawableTex)
 		s.drawable.Release()
 		s.drawable, s.drawableTex = ca.MetalDrawable{}, mtl.Texture{}
-		s.view.finishDrawableUsage()
 	}
 }
 

@@ -29,24 +29,6 @@ type Surface struct {
 	kept    bool // the frame being drawn starts from the last
 }
 
-// keptSurface is a driver's surface that can start a frame from the last
-// one: the buffer the frame draws into is brought to what the last frame
-// presented, whichever buffer that is, and is not cleared.
-type keptSurface interface {
-	// Kept reports whether the next frame starts from the last, and has
-	// the driver make it so.
-	Kept() bool
-}
-
-// damagedSurface is a driver's surface that can present a part of a
-// frame.
-type damagedSurface interface {
-	// SetDamage gives the parts of the frame being drawn, in pixels, that
-	// differ from the frame presented before it, for the present to show
-	// those alone; nil when all of it may.
-	SetDamage(rects []image.Rectangle)
-}
-
 // NewSurface makes a surface for target: an NSView for Metal, an HWND for DirectX, the window's
 // own context for OpenGL on the desktop, which has MakeContextCurrent, SwapInterval and
 // SwapBuffers, and the canvas, a js.Value, in the browser, where the first surface creates the
@@ -81,7 +63,7 @@ func (s *Surface) Screen(width, height int) *Image {
 	s.kept = false
 	if s.screen == nil {
 		s.screen = NewScreenImage(width, height, s.surface)
-	} else if k, ok := s.surface.(keptSurface); ok {
+	} else if k, ok := s.surface.(graphicsdriver.KeptSurface); ok {
 		s.kept = k.Kept()
 	}
 	// A frame that starts from the last is drawn over it, not afresh.
@@ -101,7 +83,7 @@ func (s *Surface) Kept() bool { return s.kept }
 // differ from the frame presented before it, so that the present shows
 // those alone; nil, or a driver that cannot, presents all of it.
 func (s *Surface) SetDamage(rects []image.Rectangle) {
-	if d, ok := s.surface.(damagedSurface); ok {
+	if d, ok := s.surface.(graphicsdriver.DamagedSurface); ok {
 		d.SetDamage(rects)
 	}
 }
@@ -109,7 +91,7 @@ func (s *Surface) SetDamage(rects []image.Rectangle) {
 // FramebufferSize returns the size of the drawing buffer behind s, and whether the driver knows
 // it. Only WebGL does, whose canvas decides it.
 func (s *Surface) FramebufferSize() (width, height int, ok bool) {
-	g, ok := driver.(interface{ ScreenFramebufferSize() (int, int) })
+	g, ok := driver.(graphicsdriver.FramebufferSizer)
 	if !ok {
 		return 0, 0, false
 	}
@@ -117,15 +99,10 @@ func (s *Surface) FramebufferSize() (width, height int, ok bool) {
 	return width, height, true
 }
 
-// windowStateSetter is a driver's surface that asks what its window is doing.
-type windowStateSetter interface {
-	SetWindowState(liveResizing, fullscreen, hidden bool)
-}
-
 // SetWindowState tells the surface what its window is doing, for the frames after it. Only Metal
 // asks.
 func (s *Surface) SetWindowState(liveResizing, fullscreen, hidden bool) {
-	if w, ok := s.surface.(windowStateSetter); ok {
+	if w, ok := s.surface.(graphicsdriver.WindowStateSurface); ok {
 		w.SetWindowState(liveResizing, fullscreen, hidden)
 	}
 }

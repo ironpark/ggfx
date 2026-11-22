@@ -29,12 +29,13 @@ Keeping `atlas`, `graphicscommand`, `naga`, and `js/wasm` WebGL in Go lets the Z
 
 Before introducing the Zig driver, clean up the current `graphicsdriver` boundary:
 
-1. **Consolidate side-channel type assertions**: Replace the 12 ad-hoc structural interface assertions spread across `internal/render` and `internal/graphicscommand` (`SetMainThreadRunner`, `SetDrawingContext`, `IsES`, `SupportsDirectComposition`, `IsOccluded`, `FinishForcedFrame`, `ScreenFramebufferSize`, `Resetter`, `Kept`, `SetDamage`, `SetWindowState`, `Readable`) with explicit `DriverCaps` / `SurfaceCaps` structs and documented methods/optional interfaces in `internal/graphicsdriver`.
-2. **Add `Graphics.Close()`**: Provide deterministic teardown so Zig backends can release GPU devices/pipelines and run allocator leak detection in tests.
-3. **Decouple `NewShader` from Go `*naga/ir.Module`**: Pass backend-ready shader payloads (compiled MSL/HLSL/GLSL/SPIR-V source or bytecode + reflection metadata: `TextureCount`, `UniformDwordCount`, `FragmentReadsInternalUniforms`) rather than a Go-only IR pointer.
-4. **Typed native surface descriptors**: Replace `NewSurface(target any, transparent bool)` with a typed union/descriptor supporting `NSView`, `HWND`, X11 (`Display`, `Window`), Wayland (`wl_display`, `wl_surface`), WebGL `Canvas`, and `RemoteTarget`.
-5. **Centralize `InternalImageSize` rounding & `InternalUniforms` POD layout**: Remove duplicated 16-pixel rounding and 72-dword offset knowledge across drivers.
-6. **Enforce strict thread-confinement contracts**: Document and enforce which calls run on the render thread vs. main/caller thread (eliminating current races on `surfaces`, `damage`, and `Surface.Dispose`).
+1. **Consolidate side-channel type assertions** *(done in `internal/graphicsdriver/capabilities.go`)*: Optional `Graphics` and `Surface` capability interfaces (`MainThreadRunner`, `GLContextSetter`, `ESReporter`, `DirectCompositionReporter`, `OcclusionReporter`, `ForcedFrameFinisher`, `FramebufferSizer`, `Closer`, `KeptSurface`, `DamagedSurface`, `WindowStateSurface`, `ReadableSurface`) are now named and documented in `internal/graphicsdriver`.
+2. **Add `Graphics.Close()`** *(done via `graphicsdriver.Closer`)*: `render.Terminate()` invokes `Close()` after draining the render thread so native/Zig backends can release GPU handles cleanly.
+3. **Shared driver conformance suite** *(done in `internal/graphicsdriver/drivertest`)*: Reusable contract tests verify pixel round-trips (RGBA8 and A8), shader drawing, blend modes, scissor clipping, and uniform version caching against any `graphicsdriver.Graphics`.
+4. **Decouple `NewShader` from Go `*naga/ir.Module`** *(deferred to Plan A Phase 1)*: Pass backend-ready shader payloads (compiled MSL/HLSL/GLSL/SPIR-V source or bytecode + reflection metadata: `TextureCount`, `UniformDwordCount`, `FragmentReadsInternalUniforms`) rather than a Go-only IR pointer.
+5. **Typed native surface descriptors** *(deferred to Plan A Phase 1)*: Replace `NewSurface(target any, transparent bool)` with a typed union/descriptor supporting `NSView`, `HWND`, X11 (`Display`, `Window`), Wayland (`wl_display`, `wl_surface`), WebGL `Canvas`, and `RemoteTarget`.
+6. **Centralize `InternalImageSize` rounding & `InternalUniforms` POD layout** *(POD layout compile-time assertions added in `internal/graphicsdriver/capabilities.go`)*.
+7. **Enforce strict thread-confinement contracts** *(driver races on `surfaces`, `damage`, and `Surface.Dispose` fixed in Wave 2)*.
 
 ---
 

@@ -1,4 +1,4 @@
-// Copyright 2024 The Ebiten Authors
+// Copyright 2026 The ggfx Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,28 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mtl
+package fakedriver_test
 
 import (
-	"unsafe"
+	"testing"
 
-	"github.com/ebitengine/purego"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/drivertest"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/remote/fakedriver"
 )
 
-var libSystem uintptr
-
-var (
-	dispatchDataCreate func(buffer unsafe.Pointer, size uint, queue uintptr, destructor uintptr) uintptr
-	dispatchRelease    func(obj uintptr)
-)
-
-func init() {
-	lib, err := purego.Dlopen("/usr/lib/libSystem.B.dylib", purego.RTLD_LAZY|purego.RTLD_GLOBAL)
-	if err != nil {
-		panic(err)
-	}
-	libSystem = lib
-
-	purego.RegisterLibFunc(&dispatchDataCreate, libSystem, "dispatch_data_create")
-	purego.RegisterLibFunc(&dispatchRelease, libSystem, "dispatch_release")
+func TestDriverConformance(t *testing.T) {
+	drivertest.RunSuite(t, fakedriver.New(), drivertest.Options{
+		CheckDrawPixels: false,
+	})
 }

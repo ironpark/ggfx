@@ -80,6 +80,7 @@ var (
 
 	sel_layer             = objc.RegisterName("layer")
 	sel_retain            = objc.RegisterName("retain")
+	sel_release           = objc.RegisterName("release")
 	sel_setContents       = objc.RegisterName("setContents:")
 	sel_setOpaque         = objc.RegisterName("setOpaque:")
 	sel_begin             = objc.RegisterName("begin")

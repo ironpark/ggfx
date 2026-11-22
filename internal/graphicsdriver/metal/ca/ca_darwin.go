@@ -34,10 +34,8 @@ import (
 )
 
 var (
-	class_CAMetalLayer             = objc.GetClass("CAMetalLayer")
-	class_CAMetalDisplayLink       = objc.GetClass("CAMetalDisplayLink")
-	class_CAMetalDisplayLinkUpdate = objc.GetClass("CAMetalDisplayLinkUpdate")
-	class_CATransaction            = objc.GetClass("CATransaction")
+	class_CAMetalLayer  = objc.GetClass("CAMetalLayer")
+	class_CATransaction = objc.GetClass("CATransaction")
 )
 
 var (
@@ -56,14 +54,6 @@ var (
 	sel_setFramebufferOnly         = objc.RegisterName("setFramebufferOnly:")
 	sel_texture                    = objc.RegisterName("texture")
 	sel_present                    = objc.RegisterName("present")
-	sel_alloc                      = objc.RegisterName("alloc")
-	sel_initWithMetalLayer         = objc.RegisterName("initWithMetalLayer:")
-	sel_setDelegate                = objc.RegisterName("setDelegate:")
-	sel_addToRunLoop_forMode       = objc.RegisterName("addToRunLoop:forMode:")
-	sel_removeFromRunLoop_forMode  = objc.RegisterName("removeFromRunLoop:forMode:")
-	sel_setPaused                  = objc.RegisterName("setPaused:")
-	sel_invalidate                 = objc.RegisterName("invalidate")
-	sel_drawable                   = objc.RegisterName("drawable")
 	sel_release                    = objc.RegisterName("release")
 	sel_retain                     = objc.RegisterName("retain")
 	sel_addPresentedHandler        = objc.RegisterName("addPresentedHandler:")
@@ -300,72 +290,4 @@ func (md MetalDrawable) AddPresentedHandler(block objc.Block) {
 // CanAddPresentedHandler reports whether AddPresentedHandler is available.
 func (md MetalDrawable) CanAddPresentedHandler() bool {
 	return md.metalDrawable.Send(sel_respondsToSelector, sel_addPresentedHandler) != 0
-}
-
-// MetalDisplayLink is a class your Metal app uses to register for callbacks to synchronize its animations for a display.
-//
-// Reference: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink?language=objc
-type MetalDisplayLink struct {
-	objc.ID
-}
-
-// SetDelegate sets an instance of a type your app implements that responds to the system’s callbacks.
-//
-// Reference: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/delegate?language=objc
-func (m MetalDisplayLink) SetDelegate(delegate objc.ID) {
-	m.Send(sel_setDelegate, delegate)
-}
-
-// AddToRunLoop registers the display link with a run loop.
-//
-// Reference: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/add(to:formode:)?language=objc
-func (m MetalDisplayLink) AddToRunLoop(runLoop cocoa.NSRunLoop, mode cocoa.NSRunLoopMode) {
-	m.Send(sel_addToRunLoop_forMode, runLoop, mode)
-}
-
-// RemoveFromRunLoop removes a mode’s display link from a run loop.
-//
-// Reference: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/remove(from:formode:)?language=objc
-func (m MetalDisplayLink) RemoveFromRunLoop(runLoop cocoa.NSRunLoop, mode cocoa.NSRunLoopMode) {
-	m.Send(sel_removeFromRunLoop_forMode, runLoop, mode)
-}
-
-// SetPaused sets a Boolean value that indicates whether the system suspends the display link’s notifications to the target.
-//
-// https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/ispaused?language=objc
-func (m MetalDisplayLink) SetPaused(paused bool) {
-	m.Send(sel_setPaused, paused)
-}
-
-// Invalidate removes the display link from all run loop modes.
-//
-// Reference: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/invalidate()?language=objc
-func (m MetalDisplayLink) Invalidate() {
-	m.Send(sel_invalidate)
-}
-
-func (m MetalDisplayLink) Release() {
-	m.Send(sel_release)
-}
-
-// NewMetalDisplayLink creates a display link for Metal from a Core Animation layer.
-//
-// Reference: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/init(metallayer:)?language=objc
-func NewMetalDisplayLink(metalLayer MetalLayer) MetalDisplayLink {
-	displayLink := objc.ID(class_CAMetalDisplayLink).Send(sel_alloc).Send(sel_initWithMetalLayer, metalLayer.metalLayer)
-	return MetalDisplayLink{displayLink}
-}
-
-// MetalDisplayLinkUpdate stores information about a single update from a Metal display link instance.
-//
-// Reference: https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/update?language=objc
-type MetalDisplayLinkUpdate struct {
-	objc.ID
-}
-
-// Drawable returns the Metal drawable your app uses to render the next frame.
-//
-// https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/update/drawable?language=objc
-func (m MetalDisplayLinkUpdate) Drawable() MetalDrawable {
-	return MetalDrawable{objc.ID(cocoa.MsgSend0(m.ID, sel_drawable))}
 }

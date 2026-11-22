@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
-	"weak"
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -26,59 +25,9 @@ import (
 	"github.com/ironpark/ggfx/internal/shader"
 )
 
-// shadersWithInternalShader keeps track of shaders that have internal graphicscommand.Shader.
-type shadersWithInternalShader struct {
-	shaders map[weak.Pointer[Shader]]struct{}
-	m       sync.Mutex
-}
-
-func (s *shadersWithInternalShader) add(shader *Shader) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	if s.shaders == nil {
-		s.shaders = map[weak.Pointer[Shader]]struct{}{}
-	}
-	s.shaders[weak.Make(shader)] = struct{}{}
-}
-
-func (s *shadersWithInternalShader) remove(shader *Shader) {
-	s.removeWeak(weak.Make(shader))
-}
-
-// removeWeak removes the entry for the given weak pointer.
-//
-// removeWeak doesn't dereference the weak pointer, so this can be called from a cleanup function.
-func (s *shadersWithInternalShader) removeWeak(shader weak.Pointer[Shader]) {
-	s.m.Lock()
-	defer s.m.Unlock()
-	delete(s.shaders, shader)
-}
-
-func (s *shadersWithInternalShader) deallocateInternalShaders() {
-	s.m.Lock()
-	shaders := make([]weak.Pointer[Shader], 0, len(s.shaders))
-	for shader := range s.shaders {
-		shaders = append(shaders, shader)
-	}
-	s.m.Unlock()
-
-	for _, shader := range shaders {
-		// deallocate invokes the internal shader's Dispose method.
-		if shader := shader.Value(); shader != nil {
-			shader.deallocate()
-		}
-	}
-
-	s.m.Lock()
-	clear(s.shaders)
-	s.m.Unlock()
-}
-
-var theShadersWithInternalShader shadersWithInternalShader
-
 // Shader is a compiled program and the lifetime of its GPU shader: the command queue's shader is made
-// at the first draw, disposed with the queue's order kept outside a frame, and dropped when the
-// GPU resources are lost, to be made again at the next draw. The uniform layout is the program's.
+// at the first draw and disposed with the queue's order kept outside a frame. The uniform layout is
+// the program's.
 type Shader struct {
 	ir      *shader.Program
 	shader  *graphicscommand.Shader
@@ -99,30 +48,19 @@ func (s *Shader) Program() *shader.Program {
 	return s.ir
 }
 
-// shaderCleanupArg is an argument for a Shader's cleanup function.
-type shaderCleanupArg struct {
-	internalShader *graphicscommand.Shader
-	weakShader     weak.Pointer[Shader]
-}
-
 func (s *Shader) ensureShader() *graphicscommand.Shader {
 	if s.shader != nil {
 		return s.shader
 	}
 	s.shader = graphicscommand.NewShader(s.ir, s.name)
 	// The cleanup argument must not refer to s, or s would never be collected.
-	s.cleanup = runtime.AddCleanup(s, func(arg shaderCleanupArg) {
-		theShadersWithInternalShader.removeWeak(arg.weakShader)
+	s.cleanup = runtime.AddCleanup(s, func(internalShader *graphicscommand.Shader) {
 		// A function from cleanup must not be blocked, but disposing operation can be blocked.
 		// Defer this operation until it becomes safe. (#913)
 		appendDeferred(func() {
-			arg.internalShader.Dispose()
+			internalShader.Dispose()
 		})
-	}, shaderCleanupArg{
-		internalShader: s.shader,
-		weakShader:     weak.Make(s),
-	})
-	theShadersWithInternalShader.add(s)
+	}, s.shader)
 	return s.shader
 }
 
@@ -148,7 +86,6 @@ func (s *Shader) deallocate() {
 	}
 	s.shader.Dispose()
 	s.shader = nil
-	theShadersWithInternalShader.remove(s)
 }
 
 // The built-in shaders are compiled at their first use, so that importing atlas costs nothing.

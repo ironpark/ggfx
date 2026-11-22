@@ -59,21 +59,10 @@ func (v *view) initializeOS() error {
 
 // release releases the resources created at initialize.
 func (v *view) release() {
-	v.released.Store(true)
 	if v.chain != nil {
 		v.chain.release()
 	}
 	v.releaseDisplayLink()
-	if v.metalDisplayLinkRunLoop.ID != 0 {
-		v.updateMetalDisplayLink()
-	}
-	if v.metalDisplayLinkDelegate != 0 {
-		delegateViewsMu.Lock()
-		delete(delegateViews, v.metalDisplayLinkDelegate)
-		delegateViewsMu.Unlock()
-		v.metalDisplayLinkDelegate.Send(objc.RegisterName("release"))
-		v.metalDisplayLinkDelegate = 0
-	}
 	if v.presentedHandler != 0 {
 		for start := time.Now(); v.queuedPresents.Load() > 0 && time.Since(start) < 100*time.Millisecond; {
 			time.Sleep(time.Millisecond)
@@ -171,9 +160,6 @@ func (v *view) applyDrawableSizeIfNeeded() {
 	} else {
 		set()
 	}
-
-	// The display link waits for a drawable size (see updateMetalDisplayLink).
-	v.updateMetalDisplayLink()
 }
 
 // shouldPresentWithTransaction reports whether a drawable must be presented in sync with

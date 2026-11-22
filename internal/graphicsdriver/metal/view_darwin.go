@@ -22,7 +22,6 @@ import (
 
 	"github.com/ebitengine/purego/objc"
 
-	"github.com/ironpark/ggfx/internal/cocoa"
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
@@ -48,13 +47,8 @@ type view struct {
 	drawablesDropped atomic.Bool
 
 	// liveResizing reports whether the window is being resized by the user on macOS, as of the
-	// current frame. This is written on the rendering thread, and can be read from the thread for
-	// CAMetalDisplayLink. This is always false on iOS.
+	// current frame.
 	liveResizing atomic.Bool
-
-	// released reports whether the view was released. The display link is then invalidated and
-	// never created again.
-	released atomic.Bool
 
 	device mtl.Device
 	ml     ca.MetalLayer
@@ -67,10 +61,7 @@ type view struct {
 	// asks for it, and asking the layer is a message to it, allocating each time.
 	pixelFormat mtl.PixelFormat
 
-	once sync.Once
-
-	caDisplayLink    uintptr
-	metalDisplayLink uintptr
+	caDisplayLink uintptr
 
 	// queuedPresents is the number of drawables that are queued for presentation and not presented yet.
 	// This is used to wait for all the queued presentations before switching to transaction-synced
@@ -103,15 +94,7 @@ type view struct {
 	// This is set at most once at the initialization on macOS, and nil on iOS.
 	runOnMainThread func(f func())
 
-	// The following members are used only with CAMetalDisplayLink.
-	drawableCh               chan ca.MetalDrawable
-	drawableDoneCh           chan struct{}
-	drawableTimer            *time.Timer
-	drawableFromDisplayLink  bool
-	metalDisplayLinkRunLoop  cocoa.NSRunLoop
-	metalDisplayLinkDelegate objc.ID
-
-	// The following members are used only with CADisplayLink.
+	// The following members are used with CVDisplayLink.
 	handleToSelf viewHandle
 	fence        *fence
 	// linkStopped is whether the display link stopped for want of frames (see

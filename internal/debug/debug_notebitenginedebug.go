@@ -32,3 +32,7 @@ func (dummyFrameLogger) FrameLogf(format string, args ...any) {
 
 func (dummyFrameLogger) Flush() {
 }
+
+func FirstCaller() (file string, line int, callerType CallerType) {
+	return "", 0, CallerTypeNone
+}

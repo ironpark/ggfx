@@ -115,17 +115,10 @@ func (i *Image) Format() graphicsdriver.PixelFormat {
 	return i.format
 }
 
-// readableSurface is a surface whose screen image can be a rendering source.
-type readableSurface interface {
-	// Readable reports whether the screen image can be a rendering source within a frame: a
-	// draw from it reads what the frame drew to it before, in the order the commands are queued.
-	Readable() bool
-}
-
 // ScreenReadable reports whether the screen image of surface can be a rendering source. Only a
 // driver whose screen is a texture it can sample says so; the others' screens are never a source.
 func ScreenReadable(surface graphicsdriver.Surface) bool {
-	r, ok := surface.(readableSurface)
+	r, ok := surface.(graphicsdriver.ReadableSurface)
 	return ok && r.Readable()
 }
 

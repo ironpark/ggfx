@@ -28,7 +28,6 @@ type pathCursor struct {
 var (
 	errParamMismatch  = errors.New("param mismatch")
 	errCommandUnknown = errors.New("unknown command")
-	errZeroLengthID   = errors.New("zero length id")
 )
 
 // ReadFloat reads a floating point value and adds it to the cursor's points slice.

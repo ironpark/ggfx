@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package cocoa is the part of Foundation and AppKit the Metal driver uses: strings, errors,
-// autorelease pools, run loops and the view a layer is set on.
+// autorelease pools, and the view a layer is set on.
 package cocoa
 
 import (
@@ -28,8 +28,6 @@ import (
 var (
 	class_NSAutoreleasePool objc.Class
 	class_NSString          objc.Class
-	class_NSRunLoop         objc.Class
-	class_NSMachPort        objc.Class
 )
 
 func init() {
@@ -45,11 +43,6 @@ func init() {
 
 	class_NSAutoreleasePool = objc.GetClass("NSAutoreleasePool")
 	class_NSString = objc.GetClass("NSString")
-	class_NSRunLoop = objc.GetClass("NSRunLoop")
-	class_NSMachPort = objc.GetClass("NSMachPort")
-
-	NSRunLoopCommonModes = NSRunLoopMode(NSString_alloc().InitWithUTF8String("kCFRunLoopCommonModes"))
-	NSDefaultRunLoopMode = NSRunLoopMode(NSString_alloc().InitWithUTF8String("kCFRunLoopDefaultMode"))
 }
 
 var (
@@ -60,12 +53,6 @@ var (
 	sel_setLayer                     = objc.RegisterName("setLayer:")
 	sel_setWantsLayer                = objc.RegisterName("setWantsLayer:")
 	sel_setLayerContentsRedrawPolicy = objc.RegisterName("setLayerContentsRedrawPolicy:")
-	sel_mainRunLoop                  = objc.RegisterName("mainRunLoop")
-	sel_currentRunLoop               = objc.RegisterName("currentRunLoop")
-	sel_run                          = objc.RegisterName("run")
-	sel_performBlock                 = objc.RegisterName("performBlock:")
-	sel_port                         = objc.RegisterName("port")
-	sel_addPort_forMode              = objc.RegisterName("addPort:forMode:")
 )
 
 type CGFloat = float64
@@ -129,43 +116,4 @@ func (s NSString) InitWithUTF8String(utf8 string) NSString {
 
 func (s NSString) String() string {
 	return cstrings.NSStringToString(s.ID)
-}
-
-type NSRunLoop struct {
-	objc.ID
-}
-
-func NSRunLoop_mainRunLoop() NSRunLoop {
-	return NSRunLoop{objc.ID(class_NSRunLoop).Send(sel_mainRunLoop)}
-}
-
-func NSRunLoop_currentRunLoop() NSRunLoop {
-	return NSRunLoop{objc.ID(class_NSRunLoop).Send(sel_currentRunLoop)}
-}
-
-func (r NSRunLoop) AddPort(port NSMachPort, mode NSRunLoopMode) {
-	r.Send(sel_addPort_forMode, port.ID, mode)
-}
-
-func (r NSRunLoop) Run() {
-	r.Send(sel_run)
-}
-
-func (r NSRunLoop) PerformBlock(block objc.Block) {
-	r.Send(sel_performBlock, block)
-}
-
-type NSRunLoopMode NSString
-
-var (
-	NSRunLoopCommonModes NSRunLoopMode
-	NSDefaultRunLoopMode NSRunLoopMode
-)
-
-type NSMachPort struct {
-	objc.ID
-}
-
-func NSMachPort_port() NSMachPort {
-	return NSMachPort{objc.ID(class_NSMachPort).Send(sel_port)}
 }

@@ -132,7 +132,7 @@ func Init(o *Options) error {
 
 // setDriver makes g the graphics driver.
 func setDriver(g graphicsdriver.Graphics) {
-	if r, ok := g.(interface{ SetMainThreadRunner(func(func())) }); ok && options.MainThread != nil {
+	if r, ok := g.(graphicsdriver.MainThreadRunner); ok && options.MainThread != nil {
 		r.SetMainThreadRunner(options.MainThread)
 	}
 	driver = g
@@ -152,6 +152,9 @@ func Terminate() {
 		stopRenderThread()
 		<-renderThreadDone
 	}
+	if c, ok := driver.(graphicsdriver.Closer); ok {
+		_ = c.Close()
+	}
 }
 
 // Terminated reports whether Terminate was called.
@@ -163,9 +166,9 @@ func Terminated() bool {
 // with every surface's context and is never presented. A window system that uses OpenGL creates
 // it after Init, with what IsOpenGLES reports, and sets it before the first frame.
 func SetGLContext(c interface{ MakeContextCurrent() error }) {
-	driver.(interface {
-		SetDrawingContext(interface{ MakeContextCurrent() error })
-	}).SetDrawingContext(c)
+	if setter, ok := driver.(graphicsdriver.GLContextSetter); ok {
+		setter.SetDrawingContext(c)
+	}
 }
 
 // GraphicsDriver returns the graphics driver, or nil before Init.
@@ -181,21 +184,21 @@ func Library() GraphicsLibrary {
 // IsOpenGLES reports whether the OpenGL driver draws with OpenGL ES, which decides the context a
 // window system creates for it. It is false for the other drivers.
 func IsOpenGLES() bool {
-	g, ok := driver.(interface{ IsES() bool })
+	g, ok := driver.(graphicsdriver.ESReporter)
 	return ok && g.IsES()
 }
 
 // SupportsDirectComposition reports whether the DirectX driver presents through
 // DirectComposition, so that a window can be created without a redirection surface (#3489).
 func SupportsDirectComposition() bool {
-	d, ok := driver.(interface{ SupportsDirectComposition() bool })
+	d, ok := driver.(graphicsdriver.DirectCompositionReporter)
 	return ok && d.SupportsDirectComposition()
 }
 
 // Occluded reports whether the last present went to a swap chain nothing of which is visible,
 // and so returned without waiting for the display.
 func Occluded() bool {
-	o, ok := driver.(interface{ IsOccluded() bool })
+	o, ok := driver.(graphicsdriver.OcclusionReporter)
 	return ok && o.IsOccluded()
 }
 

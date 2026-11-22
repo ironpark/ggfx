@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build (freebsd || linux || netbsd) && !android && !nintendosdk && !playstation5
+//go:build (freebsd || linux || netbsd) && !android
 
 package opengl
 
