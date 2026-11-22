@@ -75,6 +75,12 @@ func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D, cache map[*clipUse]*
 	var parentMask *image.Alpha
 	if u.parent != nil {
 		parentMask = u.parent.maskImage(p, t, cache)
+		if parentMask.Rect.Empty() {
+			if cache != nil {
+				cache[u] = parentMask
+			}
+			return parentMask
+		}
 	}
 	b := p.Scanner.Dest.Bounds()
 	if p.clips == nil {
@@ -93,6 +99,16 @@ func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D, cache map[*clipUse]*
 	// over just those.
 	draw(nil)
 	area := c.Scanner.Touched
+	if parentMask != nil {
+		area = area.Intersect(parentMask.Rect.Add(b.Min))
+	}
+	if area.Empty() {
+		mask := &image.Alpha{}
+		if cache != nil {
+			cache[u] = mask
+		}
+		return mask
+	}
 	draw(c.scratch(area))
 	drawn := c.Scanner.Dest
 	c.Scanner.Dest = nil
@@ -110,16 +126,15 @@ func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D, cache map[*clipUse]*
 	// 0 at its corner, not in the image's.
 	mask.Rect = mask.Rect.Sub(b.Min)
 	if parentMask != nil {
-		inter := mask.Rect.Intersect(parentMask.Rect)
-		combined := image.NewAlpha(inter)
-		for y := inter.Min.Y; y < inter.Max.Y; y++ {
-			for x := inter.Min.X; x < inter.Max.X; x++ {
-				a := uint32(mask.AlphaAt(x, y).A)
-				pa := uint32(parentMask.AlphaAt(x, y).A)
-				combined.SetAlpha(x, y, color.Alpha{A: uint8((a*pa + 127) / 255)})
+		// area was already intersected with parentMask.Rect + b.Min, so mask.Rect ⊆ parentMask.Rect.
+		w := mask.Rect.Dx()
+		for y := mask.Rect.Min.Y; y < mask.Rect.Max.Y; y++ {
+			mRow := mask.Pix[mask.PixOffset(mask.Rect.Min.X, y) : mask.PixOffset(mask.Rect.Min.X, y)+w]
+			pRow := parentMask.Pix[parentMask.PixOffset(mask.Rect.Min.X, y) : parentMask.PixOffset(mask.Rect.Min.X, y)+w]
+			for x := range w {
+				mRow[x] = uint8((uint32(mRow[x])*uint32(pRow[x]) + 127) / 255)
 			}
 		}
-		mask = combined
 	}
 	if cache != nil {
 		cache[u] = mask

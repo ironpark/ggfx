@@ -227,14 +227,16 @@ func strokeArc(p Adder, a, s1, s2 fixed.Point26_6, clockwise bool, trimStart,
 	tde := trig.Tan(dTheta / 2)
 	alpha := fixed.Int26_6(trig.Sin(dTheta) * (math.Sqrt(4+float64(3*tde*tde)) - 1) * (64.0 / 3.0)) // Math is fun!
 	r := float64(Length(s1.Sub(a)))                                                                 // Note r is *64
-	ldp := fixed.Point26_6{X: -fixed.Int26_6(r * trig.Sin(theta1)), Y: fixed.Int26_6(r * trig.Cos(theta1))}
+	sin1, cos1 := trig.Sincos(theta1)
+	ldp := fixed.Point26_6{X: -fixed.Int26_6(r * sin1), Y: fixed.Int26_6(r * cos1)}
 	ds1 = ldp
 	ps1 = fixed.Point26_6{X: a.X + ldp.Y, Y: a.Y - ldp.X}
 	firstPoint(ps1)
 	s1 = ps1
 	for i := 1; i <= segs; i++ {
 		eta := theta1 + float64(dTheta*float64(i))
-		ds2 = fixed.Point26_6{X: -fixed.Int26_6(r * trig.Sin(eta)), Y: fixed.Int26_6(r * trig.Cos(eta))}
+		sinE, cosE := trig.Sincos(eta)
+		ds2 = fixed.Point26_6{X: -fixed.Int26_6(r * sinE), Y: fixed.Int26_6(r * cosE)}
 		ps2 = fixed.Point26_6{X: a.X + ds2.Y, Y: a.Y - ds2.X} // Using deriviative to calc new pt, because circle
 		p1 := s1.Add(ldp.Mul(alpha))
 		p2 := ps2.Sub(ds2.Mul(alpha))

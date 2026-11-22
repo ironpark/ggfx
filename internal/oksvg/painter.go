@@ -43,8 +43,15 @@ func NewPainter(width, height int, dest *image.RGBA, targ image.Rectangle) *Pain
 func (p *Painter) Release() {
 	p.Scanner.Dest = nil
 	p.Scanner.SetPaint(rasterx.Paint{})
+	const maxRetainedDrawnBytes = 4 * 1024 * 1024
+	if p.drawn != nil && cap(p.drawn.Pix) > maxRetainedDrawnBytes {
+		p.drawn = nil
+	}
+	if cap(p.dash) > 1024 {
+		p.dash = nil
+	}
 	if p.clips != nil {
-		p.clips.Scanner.SetPaint(rasterx.Paint{})
+		p.clips.Release()
 	}
 }
 

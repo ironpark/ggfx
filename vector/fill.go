@@ -23,6 +23,7 @@ import (
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/bridge"
 	"github.com/ironpark/ggfx/internal/pool"
+	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/render"
 )
 
@@ -310,9 +311,10 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 
 	vs := theVertices[:0]
 	is := theIndices[:0]
+	var maxVs, maxIs int
 	defer func() {
-		theVertices = vs
-		theIndices = is
+		theVertices = shrinkVectorBuf(vs, max(maxVs, len(vs)), &theVerticesUse, 4096)
+		theIndices = shrinkVectorBuf(is, max(maxIs, len(is)), &theIndicesUse, 8192)
 	}()
 
 	theRenderTarget = dst
@@ -379,6 +381,12 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 					vs, is = appendStencilTriangles(vs, is, path, oac, pp, s.buffer(f.antialias, oac.imageIndex).Min, bezier)
 				}
 			}
+			if len(vs) > maxVs {
+				maxVs = len(vs)
+			}
+			if len(is) > maxIs {
+				maxIs = len(is)
+			}
 			f.drawTrianglesShader(img, vs, is, shader, stencilOp)
 		}
 
@@ -399,6 +407,12 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 				}
 				if len(is) == 0 {
 					continue
+				}
+				if len(vs) > maxVs {
+					maxVs = len(vs)
+				}
+				if len(is) > maxIs {
+					maxIs = len(is)
 				}
 				stencilBufferImage := s.img.RecyclableSubImage(b)
 				f.drawTrianglesShader(stencilBufferImage, vs, is, shader, stencilOp)
@@ -451,6 +465,12 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 			source := slices.Index(coverOp.Images[:sources], atlasImage)
 			if source < 0 {
 				if sources == len(coverOp.Images) {
+					if len(vs) > maxVs {
+						maxVs = len(vs)
+					}
+					if len(is) > maxIs {
+						maxIs = len(is)
+					}
 					f.drawTrianglesShader(dst, vs, is, coverShader, coverOp)
 					vs, is = vs[:0], is[:0]
 					coverOp.Images = [len(coverOp.Images)]*ggfx.Image{}
@@ -518,8 +538,10 @@ func (f *fillPathsState) placeStencilBuffers(dstBounds image.Rectangle) {
 // paths, so the buffers are shared by all the states rather than grown again for each state taken
 // from the pool. They are protected by theFillPathM.
 var (
-	theVertices []ggfx.Vertex
-	theIndices  []uint32
+	theVertices    []ggfx.Vertex
+	theIndices     []uint32
+	theVerticesUse recent.Peak
+	theIndicesUse  recent.Peak
 	// theStencilImages are the images a flush draws stencil buffers to.
 	theStencilImages []*ggfx.Image
 	// theRenderingBounds are the rendering bounds of the paths of a flush, and theContained whether
@@ -527,6 +549,15 @@ var (
 	theRenderingBounds []image.Rectangle
 	theContained       []bool
 )
+
+func shrinkVectorBuf[T any](s []T, used int, use *recent.Peak, minRetained int) []T {
+	use.ObserveNow(used)
+	limit := max(use.Max(), minRetained)
+	if cap(s) > recent.ShrinkFactor*limit {
+		return nil
+	}
+	return s[:0]
+}
 
 // disableBatchingForTesting makes fillPaths draw every path one by one, as it does a clipped path.
 var disableBatchingForTesting bool

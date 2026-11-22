@@ -128,8 +128,20 @@ func (z *rasterizer) lineTo(ax, ay, bx, by float32) {
 				a1 := float32(s * (1.5 - x0f))
 				z.add(buf, x0i+1, float32(d*(a1-a0)))
 				dTimesS := float32(d * s)
-				for xi := x0i + 2; xi < x1i-1; xi++ {
-					z.add(buf, xi, dTimesS)
+				lo := x0i + 2
+				hi := x1i - 1
+				minX := int32(z.win.Min.X)
+				maxX := int32(z.win.Max.X)
+				if lo < minX {
+					leftEnd := min(hi, minX)
+					buf[0] += float32(float32(leftEnd-lo) * dTimesS)
+					lo = leftEnd
+				}
+				visEnd := min(hi, maxX)
+				if lo < visEnd {
+					for i, span := 0, buf[int(lo-minX):int(visEnd-minX)]; i < len(span); i++ {
+						span[i] += dTimesS
+					}
 				}
 				a2 := a1 + float32(s*float32(x1i-x0i-3))
 				z.add(buf, x1i-1, float32(d*(1-a2-am)))

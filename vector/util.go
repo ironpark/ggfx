@@ -22,6 +22,7 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/pool"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
 var (
@@ -40,15 +41,19 @@ func init() {
 }
 
 var (
-	theCachedVerticesForUtil []ggfx.Vertex
-	theCachedIndicesForUtil  []uint32
-	theCacheForUtilM         sync.Mutex
+	theCachedVerticesForUtil    []ggfx.Vertex
+	theCachedIndicesForUtil     []uint32
+	theCachedVerticesForUtilUse recent.Peak
+	theCachedIndicesForUtilUse  recent.Peak
+	theCacheForUtilM            sync.Mutex
 )
 
 func useCachedVerticesAndIndicesForUtil(fn func([]ggfx.Vertex, []uint32) (vs []ggfx.Vertex, is []uint32)) {
 	theCacheForUtilM.Lock()
 	defer theCacheForUtilM.Unlock()
-	theCachedVerticesForUtil, theCachedIndicesForUtil = fn(theCachedVerticesForUtil[:0], theCachedIndicesForUtil[:0])
+	vs, is := fn(theCachedVerticesForUtil[:0], theCachedIndicesForUtil[:0])
+	theCachedVerticesForUtil = shrinkVectorBuf(vs, len(vs), &theCachedVerticesForUtilUse, 4096)
+	theCachedIndicesForUtil = shrinkVectorBuf(is, len(is), &theCachedIndicesForUtilUse, 8192)
 }
 
 func circleVertexCount(r float32) int {

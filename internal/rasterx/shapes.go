@@ -32,18 +32,29 @@ func AddCircle(cx, cy, r float64, p Adder) {
 // AddEllipse adds an elipse with center at cx,cy, with the indicated
 // x and y radius, (rx, ry), rotated around the center by rot degrees.
 func AddEllipse(cx, cy, rx, ry, rot float64, p Adder) {
-	rotRads := rot * math.Pi / 180
-	px, py := Identity.
-		Translate(cx, cy).Rotate(rotRads).Translate(-cx, -cy).Transform(cx+rx, cy)
-	points := []float64{rx, ry, rot, 1.0, 0.0, px, py}
+	px, py := cx+rx, cy
+	if rot != 0 {
+		rotRads := rot * math.Pi / 180
+		px, py = Identity.
+			Translate(cx, cy).Rotate(rotRads).Translate(-cx, -cy).Transform(cx+rx, cy)
+	}
+	points := [7]float64{rx, ry, rot, 1.0, 0.0, px, py}
 	p.Start(ToFixedP(px, py))
-	AddArc(points, cx, cy, px, py, p)
+	AddArc(points[:], cx, cy, px, py, p)
 	p.Stop(true)
 }
 
 // AddRect adds a rectangle of the indicated size, rotated
 // around the center by rot degrees.
 func AddRect(minX, minY, maxX, maxY, rot float64, p Adder) {
+	if rot == 0 {
+		p.Start(ToFixedP(minX, minY))
+		p.Line(ToFixedP(maxX, minY))
+		p.Line(ToFixedP(maxX, maxY))
+		p.Line(ToFixedP(minX, maxY))
+		p.Stop(true)
+		return
+	}
 	rot *= math.Pi / 180
 	cx, cy := (minX+maxX)/2, (minY+maxY)/2
 	m := Identity.Translate(cx, cy).Rotate(rot).Translate(-cx, -cy)
@@ -113,8 +124,10 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 	arcBig := math.Abs(deltaTheta) > math.Pi
 
 	// Approximate ellipse using cubic bezeir splines
-	etaStart := trig.Atan2(trig.Sin(startAngle)/ry, trig.Cos(startAngle)/rx)
-	etaEnd := trig.Atan2(trig.Sin(endAngle)/ry, trig.Cos(endAngle)/rx)
+	sinStart, cosStart := trig.Sincos(startAngle)
+	sinEnd, cosEnd := trig.Sincos(endAngle)
+	etaStart := trig.Atan2(sinStart/ry, cosStart/rx)
+	etaEnd := trig.Atan2(sinEnd/ry, cosEnd/rx)
 	deltaEta := etaEnd - etaStart
 	if (arcBig && !largeArc) || (!arcBig && largeArc) { // Go has no boolean XOR
 		if deltaEta < 0 {
@@ -141,17 +154,19 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 	tde := trig.Tan(dEta / 2)
 	alpha := trig.Sin(dEta) * (math.Sqrt(4+float64(3*tde*tde)) - 1) / 3 // Math is fun!
 	lx, ly = px, py
-	sinTheta, cosTheta := trig.Sin(rotX), trig.Cos(rotX)
-	ldx, ldy := ellipsePrime(rx, ry, sinTheta, cosTheta, etaStart, cx, cy)
+	sinTheta, cosTheta := trig.Sincos(rotX)
+	sinEta0, cosEta0 := trig.Sincos(etaStart)
+	ldx, ldy := ellipsePrimeSC(rx, ry, sinTheta, cosTheta, sinEta0, cosEta0)
 	for i := 1; i <= segs; i++ {
 		eta := etaStart + float64(dEta*float64(i))
+		sinEta, cosEta := trig.Sincos(eta)
 		var px, py float64
 		if i == segs {
 			px, py = points[5], points[6] // Just makes the end point exact; no roundoff error
 		} else {
-			px, py = ellipsePointAt(rx, ry, sinTheta, cosTheta, eta, cx, cy)
+			px, py = ellipsePointAtSC(rx, ry, sinTheta, cosTheta, sinEta, cosEta, cx, cy)
 		}
-		dx, dy := ellipsePrime(rx, ry, sinTheta, cosTheta, eta, cx, cy)
+		dx, dy := ellipsePrimeSC(rx, ry, sinTheta, cosTheta, sinEta, cosEta)
 		p.CubeBezier(ToFixedP(lx+float64(alpha*ldx), ly+float64(alpha*ldy)),
 			ToFixedP(px-float64(alpha*dx), py-float64(alpha*dy)), ToFixedP(px, py))
 		lx, ly, ldx, ldy = px, py, dx, dy
@@ -159,19 +174,19 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 	return lx, ly
 }
 
-// ellipsePrime gives tangent vectors for parameterized elipse; a, b, radii, eta parameter, center cx, cy
-func ellipsePrime(a, b, sinTheta, cosTheta, eta, cx, cy float64) (px, py float64) {
-	bCosEta := b * trig.Cos(eta)
-	aSinEta := a * trig.Sin(eta)
+// ellipsePrimeSC gives tangent vectors for a parameterized ellipse from precomputed sin/cos(eta).
+func ellipsePrimeSC(a, b, sinTheta, cosTheta, sinEta, cosEta float64) (px, py float64) {
+	bCosEta := b * cosEta
+	aSinEta := a * sinEta
 	px = float64(-aSinEta*cosTheta) - float64(bCosEta*sinTheta)
 	py = float64(-aSinEta*sinTheta) + float64(bCosEta*cosTheta)
 	return
 }
 
-// ellipsePointAt gives points for parameterized elipse; a, b, radii, eta parameter, center cx, cy
-func ellipsePointAt(a, b, sinTheta, cosTheta, eta, cx, cy float64) (px, py float64) {
-	aCosEta := a * trig.Cos(eta)
-	bSinEta := b * trig.Sin(eta)
+// ellipsePointAtSC gives points for a parameterized ellipse from precomputed sin/cos(eta).
+func ellipsePointAtSC(a, b, sinTheta, cosTheta, sinEta, cosEta, cx, cy float64) (px, py float64) {
+	aCosEta := a * cosEta
+	bSinEta := b * sinEta
 	px = cx + float64(aCosEta*cosTheta) - float64(bSinEta*sinTheta)
 	py = cy + float64(aCosEta*sinTheta) + float64(bSinEta*cosTheta)
 	return
@@ -190,7 +205,7 @@ func FindEllipseCenter(ra, rb *float64, rotX, startX, startY, endX, endY float64
 	if *ra == 0 || *rb == 0 || (startX == endX && startY == endY) {
 		return startX, startY
 	}
-	cos, sin := trig.Cos(rotX), trig.Sin(rotX)
+	sin, cos := trig.Sincos(rotX)
 
 	// Move origin to start point
 	nx, ny := endX-startX, endY-startY

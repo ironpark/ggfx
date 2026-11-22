@@ -28,6 +28,9 @@ func (svgp *SvgPath) DrawTransformed(p *Painter, opacity float64, t rasterx.Matr
 // through mask where it is not nil; see clip.go. It leaves svgp as it is,
 // so that a document can be drawn from goroutines at once.
 func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D, mask *image.Alpha) {
+	if mask != nil && mask.Rect.Empty() {
+		return
+	}
 	r, rf, adder := p.Dasher, &p.Dasher.Filler, &p.adder
 	adder.M = t.Mult(svgp.mAdder.M)
 	fill := !svgp.fillerColor.none()

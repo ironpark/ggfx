@@ -15,56 +15,20 @@ type Matrix2D struct {
 	A, B, C, D, E, F float64
 }
 
-// matrix3 is a full 3x3 float64 matrix
-// used for inverting
-type matrix3 [9]float64
-
-func otherPair(i int) (a, b int) {
-	switch i {
-	case 0:
-		a, b = 1, 2
-	case 1:
-		a, b = 0, 2
-	case 2:
-		a, b = 0, 1
-	}
-	return
-}
-
-func (m *matrix3) coFact(i, j int) float64 {
-	ai, bi := otherPair(i)
-	aj, bj := otherPair(j)
-	a, b, c, d := m[ai+aj*3], m[bi+bj*3], m[ai+bj*3], m[bi+aj*3]
-	return float64(a*b) - float64(c*d)
-}
-
-func (m *matrix3) Invert() *matrix3 {
-	var cofact matrix3
-	for i := 0; i < 3; i++ {
-		for j := 0; j < 3; j++ {
-			sign := float64(1 - (i+j%2)%2*2) // "checkerboard of minuses" grid
-			cofact[i+j*3] = m.coFact(i, j) * sign
-		}
-	}
-	deteriminate := float64(m[0]*cofact[0]) + float64(m[1]*cofact[1]) + float64(m[2]*cofact[2])
-
-	// transpose cofact
-	for i := 0; i < 2; i++ {
-		for j := i + 1; j < 3; j++ {
-			cofact[i+j*3], cofact[j+i*3] = cofact[j+i*3], cofact[i+j*3]
-		}
-	}
-	for i := 0; i < 9; i++ {
-		cofact[i] /= deteriminate
-	}
-	return &cofact
-}
-
-// Invert returns the inverse matrix
+// Invert returns the inverse matrix, or the zero matrix if singular.
 func (a Matrix2D) Invert() Matrix2D {
-	n := &matrix3{a.A, a.C, a.E, a.B, a.D, a.F, 0, 0, 1}
-	n = n.Invert()
-	return Matrix2D{A: n[0], C: n[1], E: n[2], B: n[3], D: n[4], F: n[5]}
+	det := float64(a.A*a.D) - float64(a.B*a.C)
+	if det == 0 {
+		return Matrix2D{}
+	}
+	return Matrix2D{
+		A: a.D / det,
+		B: -a.B / det,
+		C: -a.C / det,
+		D: a.A / det,
+		E: (float64(a.C*a.F) - float64(a.D*a.E)) / det,
+		F: (float64(a.B*a.E) - float64(a.A*a.F)) / det,
+	}
 }
 
 // The float64(...) conversions of products here and in the rest of the
@@ -154,11 +118,12 @@ func (a Matrix2D) Translate(x, y float64) Matrix2D {
 
 // Rotate rotate the matrix by theta
 func (a Matrix2D) Rotate(theta float64) Matrix2D {
+	s, c := trig.Sincos(theta)
 	return a.Mult(Matrix2D{
-		A: trig.Cos(theta),
-		B: trig.Sin(theta),
-		C: -trig.Sin(theta),
-		D: trig.Cos(theta),
+		A: c,
+		B: s,
+		C: -s,
+		D: c,
 		E: 0,
 		F: 0})
 }
