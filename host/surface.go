@@ -15,9 +15,11 @@
 package host
 
 import (
+	"errors"
 	"image"
 
 	"github.com/ironpark/ggfx"
+	"github.com/ironpark/ggfx/internal/bridge"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/render"
 )
@@ -65,6 +67,9 @@ type Surface struct {
 // what is behind it; DirectX returns an error for one. NewSurface is called on the main thread,
 // after [Init].
 func NewSurface(target SurfaceTarget, transparent bool) (*Surface, error) {
+	if target == nil {
+		return nil, errors.New("host: target must not be nil")
+	}
 	s, err := render.NewSurface(target.driverTarget(), transparent)
 	if err != nil {
 		return nil, err
@@ -120,6 +125,9 @@ func (s *Surface) SetDamage(rects []image.Rectangle) { s.surface.SetDamage(rects
 // Dispose deallocates the screen and releases s after the commands queued before it. A window
 // system disposes a window's surface before it destroys the window.
 func (s *Surface) Dispose() {
+	if s.screen != nil {
+		bridge.Image[*ggfx.Image]().ClearPending(s.screen)
+		s.screen = nil
+	}
 	s.surface.Dispose()
-	s.screen = nil
 }

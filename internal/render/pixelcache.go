@@ -93,6 +93,9 @@ func (c *pixelCache) tileRegion(idx image.Point) image.Rectangle {
 
 // readPixels reads the pixels in region into pixels, loading the tiles intersecting region as needed.
 func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.Graphics, pixels []byte, region image.Rectangle) (bool, error) {
+	if region.Empty() {
+		return true, nil
+	}
 	if region.Dx() == 1 && region.Dy() == 1 {
 		if clr, ok := c.dots[region.Min]; ok {
 			copy(pixels, clr[:c.bpp])

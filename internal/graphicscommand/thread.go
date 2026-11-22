@@ -28,7 +28,7 @@ func SetOSThreadAsRenderThread() {
 }
 
 func LoopRenderThread(ctx context.Context) {
-	_ = theRenderThread.Loop(ctx)
+	_ = theRenderThread.LoopAndStop(ctx)
 }
 
 // runOnRenderThread calls f on the rendering thread.

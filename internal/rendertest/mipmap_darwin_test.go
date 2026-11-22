@@ -16,6 +16,7 @@ package rendertest_test
 
 import (
 	"image/color"
+	"runtime"
 	"testing"
 
 	"github.com/ironpark/ggfx"
@@ -51,6 +52,11 @@ func TestMipmapLevelsDropped(t *testing.T) {
 
 	red := color.RGBA{0xff, 0, 0, 0xff}
 	green := color.RGBA{0, 0xff, 0, 0xff}
+	// Let cleanups and cached vector stencils from earlier tests expire so base counts only live images.
+	runtime.GC()
+	for range 2*recent.Window + 2 {
+		frame(t, func() {})
+	}
 	frame(t, func() {
 		src.Fill(red)
 		dst.Fill(color.White)

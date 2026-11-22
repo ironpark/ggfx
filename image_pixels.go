@@ -76,7 +76,9 @@ func (i *Image) Fill(clr color.Color) {
 //
 // ReadPixels can't be called outside the main loop (ebiten.Run's updating function) starts.
 func (i *Image) ReadPixels(pixels []byte) {
+	i.copyCheck()
 	b := i.Bounds()
+	i.updateAccessTime()
 	n := b.Dx() * b.Dy()
 	if i.image.Format() == graphicsdriver.PixelFormatA8 {
 		switch len(pixels) {
@@ -220,6 +222,7 @@ func (i *Image) WritePixels(pixels []byte) {
 	}
 
 	i.flushPending()
+	i.updateAccessTime()
 
 	if i.image.Format() == graphicsdriver.PixelFormatA8 {
 		b := i.Bounds()

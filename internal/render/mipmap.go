@@ -162,6 +162,24 @@ func sizeForLevel(x int, level int) int {
 	return x
 }
 
+// scaleMipmapRegion scales a level-0 source region to a mipmap level of size maxW by maxH.
+func scaleMipmapRegion(r image.Rectangle, level, maxW, maxH int) image.Rectangle {
+	if r.Empty() || maxW <= 0 || maxH <= 0 {
+		return image.Rectangle{}
+	}
+	minX := min(max(r.Min.X>>level, 0), maxW)
+	minY := min(max(r.Min.Y>>level, 0), maxH)
+	maxX := min(max(r.Max.X>>level, 0), maxW)
+	maxY := min(max(r.Max.Y>>level, 0), maxH)
+	if maxX <= minX && minX < maxW {
+		maxX = minX + 1
+	}
+	if maxY <= minY && minY < maxH {
+		maxY = minY + 1
+	}
+	return image.Rect(minX, minY, maxX, maxY)
+}
+
 // mipmapLevelFor returns the level a draw of the triangles samples its source from: the lowest any
 // edge of them asks for.
 func mipmapLevelFor(vertices []float32, indices []uint32) int {
@@ -212,7 +230,8 @@ func mipmapLevelFromDistance(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float32) int
 
 	if level > 0 {
 		// If the image can be scaled into 0 size, adjust the level. (#839)
-		w, h := int(sx1-sx0), int(sy1-sy0)
+		w := int(math.Abs(float64(sx1 - sx0)))
+		h := int(math.Abs(float64(sy1 - sy0)))
 		for level >= 0 {
 			if (w > 0 && sizeForLevel(w, level) == 0) || (h > 0 && sizeForLevel(h, level) == 0) {
 				level--

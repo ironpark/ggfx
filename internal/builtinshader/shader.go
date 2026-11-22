@@ -91,7 +91,7 @@ const sampling = `
 {{if eq .Filter .FilterLinear}}
 	let rate = fract(p1);
 {{else if eq .Filter .FilterPixelated}}
-	let rate = clamp(fract(p1) / inversed_scale, vec2f(0.0), vec2f(1.0));
+	let rate = select(clamp(fract(p1) / inversed_scale, vec2f(0.0), vec2f(1.0)), vec2f(0.0), inversed_scale == vec2f(0.0));
 {{end}}
 	var clr = mix(mix(c0, c1, rate.x), mix(c2, c3, rate.x), rate.y);
 {{end}}

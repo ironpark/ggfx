@@ -100,6 +100,62 @@ func testDrawImagesPaintsWhatDrawImageDoes(t *testing.T, filter ggfx.Filter) {
 	}
 }
 
+// A later WritePixels to the second quad's image must not be hoisted ahead of a merged DrawImages.
+func TestDrawImagesWritePixelsOrdering(t *testing.T) {
+	red := color.RGBA{0xff, 0, 0, 0xff}
+	green := color.RGBA{0, 0xff, 0, 0xff}
+	blue := color.RGBA{0, 0, 0xff, 0xff}
+	solid := func(c color.RGBA) []byte {
+		pix := make([]byte, 4*8*8)
+		for i := 0; i < len(pix); i += 4 {
+			pix[i], pix[i+1], pix[i+2], pix[i+3] = c.R, c.G, c.B, c.A
+		}
+		return pix
+	}
+	img0 := ggfx.NewImage(8, 8)
+	img1 := ggfx.NewImage(8, 8)
+	img0.WritePixels(solid(red))
+	img1.WritePixels(solid(green))
+
+	dst := ggfx.NewImage(32, 16)
+	dst.DrawImages([]ggfx.ImageDraw{
+		{Image: img0, X: 0, Y: 0},
+		{Image: img1, X: 16, Y: 0},
+	}, nil)
+	// Overwrite img1 after DrawImages in the same frame; dst must still keep green.
+	img1.WritePixels(solid(blue))
+
+	if got := dst.At(4, 4).(color.RGBA); got != red {
+		t.Errorf("quad 0: got %v, want %v", got, red)
+	}
+	if got := dst.At(20, 4).(color.RGBA); got != green {
+		t.Errorf("quad 1: got %v, want %v (later WritePixels was hoisted ahead of DrawImages)", got, green)
+	}
+}
+
+// Drawing a shrunk sub-image with FilterLinear + AddressClampToZero scales srcRegions with mipmaps.
+func TestDrawTrianglesMipmapClampToZeroSubImage(t *testing.T) {
+	sheet := ggfx.NewImage(64, 64)
+	red := color.RGBA{0xff, 0, 0, 0xff}
+	sub := sheet.SubImage(image.Rect(32, 32, 64, 64)).(*ggfx.Image)
+	sub.Fill(red)
+
+	dst := ggfx.NewImage(16, 16)
+	vs := []ggfx.Vertex{
+		{DstX: 0, DstY: 0, SrcX: 32, SrcY: 32, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		{DstX: 8, DstY: 0, SrcX: 64, SrcY: 32, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		{DstX: 0, DstY: 8, SrcX: 32, SrcY: 64, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+		{DstX: 8, DstY: 8, SrcX: 64, SrcY: 64, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
+	}
+	dst.DrawTriangles(vs, []uint16{0, 1, 2, 1, 2, 3}, sub, &ggfx.DrawTrianglesOptions{
+		Filter:  ggfx.FilterLinear,
+		Address: ggfx.AddressClampToZero,
+	})
+	if got := dst.At(4, 4).(color.RGBA); got != red {
+		t.Errorf("dst.At(4, 4) = %v, want %v", got, red)
+	}
+}
+
 func BenchmarkDrawImagesGlyphs(b *testing.B) {
 	imgs := glyphs(80)
 	dst := ggfx.NewImage(800, 200)

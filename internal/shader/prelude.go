@@ -129,8 +129,10 @@ fn src%[1]d_unsafe_at(pos: vec2f) -> vec4f {
 // outside source image %[1]d. pos is in pixels of source texture %[1]d.
 fn src%[1]d_at(pos: vec2f) -> vec4f {
 	let origin = ggfx_internal.src_origins[%[1]d].xy;
-	let inside = step(origin, pos) - step(origin + ggfx_internal.src_sizes[%[1]d].xy, pos);
-	return textureLoad(ggfx_src%[1]d, vec2i(pos), 0) * inside.x * inside.y;
+	let size = ggfx_internal.src_sizes[%[1]d].xy;
+	let inside = step(origin, pos) - step(origin + size, pos);
+	let clamped = clamp(pos, origin, max(origin, origin + size - vec2f(1.0)));
+	return textureLoad(ggfx_src%[1]d, vec2i(clamped), 0) * inside.x * inside.y;
 }
 `, i)
 		if i == 0 {

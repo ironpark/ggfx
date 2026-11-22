@@ -242,3 +242,24 @@ fn fragment(v: Vertex) -> vec4f {
 		t.Errorf("counterclockwise: got: %v, want: %v", got, want)
 	}
 }
+
+func TestShaderDisposeIdempotent(t *testing.T) {
+	s, err := ggfx.NewShader([]byte(`
+struct U { x: f32 }
+@group(1) @binding(0) var<uniform> u: U;
+fn fragment(v: Vertex) -> vec4f { return vec4f(u.x); }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := s.NewUniforms()
+	s.Dispose()
+	s.Dispose()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("Uniforms.Set after Shader.Dispose must panic")
+		}
+	}()
+	u.Set("x", float32(1))
+}

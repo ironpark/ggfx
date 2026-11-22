@@ -167,8 +167,14 @@ func SetGLContext(context GLContext) {
 
 // Frame is a frame begun by [BeginFrame]. Screens are drawn in a frame.
 type Frame struct {
-	begun bool
+	id uint64
 }
+
+var (
+	activeFrameID uint64
+	nextFrameID   uint64
+	frameScreens  []*ggfx.Image
+)
 
 // BeginFrame begins a frame. A read of pixels that missed the last frame runs at BeginFrame.
 // [Frame.End] is called when BeginFrame succeeded.
@@ -176,25 +182,54 @@ func BeginFrame() (Frame, error) {
 	if err := render.BeginFrame(); err != nil {
 		return Frame{}, err
 	}
-	return Frame{begun: true}, nil
+	nextFrameID++
+	activeFrameID = nextFrameID
+	frameScreens = frameScreens[:0]
+	return Frame{id: activeFrameID}, nil
 }
 
 // Screen returns the image presented on s, width by height pixels. A size other than the last
 // one replaces the image and deallocates the old one. Screen is called once a frame for each
 // surface drawn: it clears the image where the graphics driver does not.
 func (f Frame) Screen(s *Surface, width, height int) *ggfx.Image {
-	if !f.begun {
+	if f.id == 0 || f.id != activeFrameID {
 		panic("host: Screen is called outside a frame")
 	}
-	s.screen = bridge.Image[*ggfx.Image]().ScreenImage(s.screen, s.surface.Screen(width, height))
-	return s.screen
+	prev := s.screen
+	next := bridge.Image[*ggfx.Image]().ScreenImage(prev, s.surface.Screen(width, height))
+	if prev != nil && prev != next {
+		bridge.Image[*ggfx.Image]().ClearPending(prev)
+	}
+	s.screen = next
+	if !slicesContains(frameScreens, next) {
+		frameScreens = append(frameScreens, next)
+	}
+	return next
+}
+
+func slicesContains(screens []*ggfx.Image, target *ggfx.Image) bool {
+	for _, img := range screens {
+		if img == target {
+			return true
+		}
+	}
+	return false
 }
 
 // End ends the frame.
 func (f Frame) End() error {
-	if !f.begun {
+	if f.id == 0 || f.id != activeFrameID {
 		panic("host: End is called outside a frame")
 	}
+	hooks := bridge.Image[*ggfx.Image]()
+	for _, screen := range frameScreens {
+		if p := hooks.Pending(screen); p != nil {
+			p.FlushPending(screen)
+		}
+	}
+	clear(frameScreens)
+	frameScreens = frameScreens[:0]
+	activeFrameID = 0
 	return render.EndFrame()
 }
 

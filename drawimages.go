@@ -79,7 +79,14 @@ func (i *Image) DrawImages(draws []ImageDraw, options *DrawImageOptions) {
 	regions := i.tmpQuadRegions[:0]
 	for k, dr := range draws {
 		img := dr.Image
+		if img == nil {
+			clear(srcs)
+			i.tmpQuadSources = srcs[:0]
+			panic("ggfx: the given image to DrawImages must not be nil")
+		}
 		if img.isDisposed() {
+			clear(srcs)
+			i.tmpQuadSources = srcs[:0]
 			panic("ggfx: the given image to DrawImages must not be disposed")
 		}
 		img.flushPending()

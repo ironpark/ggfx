@@ -206,7 +206,6 @@ var (
 	// If inFrame is false, function calls on an image should be deferred until the next BeginFrame.
 	inFrame bool
 
-	initOnce  sync.Once
 	inited    atomic.Bool
 	suspended atomic.Bool
 
@@ -291,10 +290,12 @@ type imageImpl struct {
 //
 // moveTo is similar to C++'s move semantics.
 func (i *Image) moveTo(dst *Image) {
+	usedAsDest := dst.usedAsDestinationCount
 	dst.deallocateImpl()
 	dst.cleanup.Stop()
 
 	impl := *i.imageImpl
+	impl.usedAsDestinationCount = usedAsDest
 	dst.imageImpl = &impl
 	if impl.backend != nil && impl.node != nil {
 		impl.backend.replaceImage(i.imageImpl, &impl)
@@ -479,7 +480,7 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 		if src.backend == nil {
 			// It is possible to spcify i.backend as a forbidden backend, but this might prevent a good allocation for a source image.
 			// If the backend becomes the same as i's, i's backend will be changed at ensureIsolatedFromSource.
-			src.allocate(nil, i.imageType == ImageTypeRegular)
+			src.allocate(nil, src.imageType == ImageTypeRegular)
 		}
 		backends = append(backends, src.backend)
 		src.backend.sourceInThisFrame = true
@@ -754,34 +755,48 @@ func SupportsA8() bool {
 	return a8Supported
 }
 
+// DisposeSurface disposes surface on the render thread, after every command queued before it,
+// deferring until the next BeginFrame when called outside a frame.
+func DisposeSurface(surface graphicsdriver.Surface) {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+
+	if !inFrame {
+		appendDeferred(func() {
+			graphicscommand.DisposeSurface(surface)
+		})
+		return
+	}
+	graphicscommand.DisposeSurface(surface)
+}
+
 // initialize is Initialize with backendsM held.
 func initialize(graphicsDriver graphicsdriver.Graphics) error {
-	var err error
-	initOnce.Do(func() {
-		err = graphicscommand.InitializeGraphicsDriverState(graphicsDriver)
-		if err != nil {
-			return
-		}
-		if len(theBackends) != 0 {
-			panic("atlas: all the images must be not on an atlas before the game starts")
-		}
+	if inited.Load() {
+		return nil
+	}
+	if err := graphicscommand.InitializeGraphicsDriverState(graphicsDriver); err != nil {
+		return err
+	}
+	if len(theBackends) != 0 {
+		panic("atlas: all the images must be not on an atlas before the game starts")
+	}
 
-		// min*Size and maxSize can already be set for testings.
-		if minSourceSize == 0 {
-			// A source page starts small, as an app's first images are often a few small ones,
-			// and grows as images come (see backend.tryAlloc).
-			minSourceSize = 256
-		}
-		if minDestinationSize == 0 {
-			minDestinationSize = 16
-		}
-		if maxSize == 0 {
-			maxSize = floorPowerOf2(graphicscommand.MaxImageSize(graphicsDriver))
-		}
-		a8Supported = graphicscommand.SupportsPixelFormat(graphicsDriver, graphicsdriver.PixelFormatA8)
-		inited.Store(true)
-	})
-	return err
+	// min*Size and maxSize can already be set for testings.
+	if minSourceSize == 0 {
+		// A source page starts small, as an app's first images are often a few small ones,
+		// and grows as images come (see backend.tryAlloc).
+		minSourceSize = 256
+	}
+	if minDestinationSize == 0 {
+		minDestinationSize = 16
+	}
+	if maxSize == 0 {
+		maxSize = floorPowerOf2(graphicscommand.MaxImageSize(graphicsDriver))
+	}
+	a8Supported = graphicscommand.SupportsPixelFormat(graphicsDriver, graphicsdriver.PixelFormatA8)
+	inited.Store(true)
+	return nil
 }
 
 // MaxImageSize returns the maximum width and height of an image in pixels.
@@ -1075,8 +1090,6 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 		panic("atlas: inFrame must be false in BeginFrame")
 	}
 
-	inFrame = true
-
 	if err := initialize(graphicsDriver); err != nil {
 		return err
 	}
@@ -1093,8 +1106,10 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 		// Dispose all the images.
 		// The current internal image objects might have references to old GPU resources.
 		for _, b := range theBackends {
-			b.backendImage.Dispose()
-			b.backendImage = nil
+			if b.backendImage != nil {
+				b.backendImage.Dispose()
+				b.backendImage = nil
+			}
 		}
 
 		// Restore all the images.
@@ -1115,6 +1130,8 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 			}
 		}
 	}
+
+	inFrame = true
 
 	// Discard restore info whichever restoration is done or not.
 	for _, b := range theBackends {

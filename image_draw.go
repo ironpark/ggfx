@@ -337,7 +337,10 @@ func checkIndices(indices []uint32, vertexCount int) {
 func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, options *DrawTrianglesOptions) {
 	i.copyCheck()
 
-	if img != nil && img.isDisposed() {
+	if img == nil {
+		panic("ggfx: the given image to DrawTriangles must not be nil")
+	}
+	if img.isDisposed() {
 		panic("ggfx: the given image to DrawTriangles must not be disposed")
 	}
 	if i.isDisposed() {

@@ -66,7 +66,7 @@ func (i *Image) drawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 	backends := quadBackends[:0]
 	for _, src := range srcs {
 		if src.backend == nil {
-			src.allocate(nil, i.imageType == ImageTypeRegular)
+			src.allocate(nil, src.imageType == ImageTypeRegular)
 		}
 		src.backend.sourceInThisFrame = true
 		if !slices.Contains(backends, src.backend) {
@@ -114,6 +114,13 @@ func (i *Image) drawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 			regions[0] = sr.Add(srcs[k].regionWithPadding().Min)
 		}
 		i.backend.backendImage.DrawTriangles(imgs, vertices[k*quad:n*quad], indicesForQuads(n-k), blend, dstRegion, regions, gs, nil)
+		for j := k + 1; j < n; j++ {
+			var sr image.Rectangle
+			if !srcRegions[j].Empty() {
+				sr = srcRegions[j].Add(srcs[j].regionWithPadding().Min)
+			}
+			imgs[0].Touch(sr)
+		}
 		k = n
 	}
 }

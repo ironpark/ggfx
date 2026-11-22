@@ -152,6 +152,10 @@ func QuadVerticesFromDstAndSrc(dst []float32, dx0, dy0, dx1, dy1, sx0, sy0, sx1,
 }
 
 func adjustDestinationPixel(x float32) float32 {
+	// NaN, Inf, and float32 values with |x| >= 2^23 have no fractional part and would overflow int(x).
+	if !(x > -1<<23 && x < 1<<23) {
+		return x
+	}
 	// Avoid the center of the pixel, which is problematic (#929, #1171).
 	// Instead, align the vertices with about 1/3 pixels.
 	//

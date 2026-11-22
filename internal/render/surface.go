@@ -18,7 +18,7 @@ import (
 	"errors"
 	"image"
 
-	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
@@ -132,9 +132,13 @@ func (s *Surface) SetWindowState(liveResizing, fullscreen, hidden bool) {
 
 // Dispose deallocates the screen and releases s once the commands queued before it ran.
 func (s *Surface) Dispose() {
+	if s.surface == nil {
+		return
+	}
 	if s.screen != nil {
 		s.screen.Deallocate()
 		s.screen = nil
 	}
-	graphicscommand.DisposeSurface(s.surface)
+	atlas.DisposeSurface(s.surface)
+	s.surface = nil
 }

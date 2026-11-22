@@ -160,6 +160,32 @@ func (p *Program) reflectInternalReads() error {
 				}
 			}
 		}
+		var scanBlock func(b ir.Block)
+		scanBlock = func(b ir.Block) {
+			for _, st := range b {
+				switch s := st.Kind.(type) {
+				case ir.StmtBlock:
+					scanBlock(s.Block)
+				case ir.StmtIf:
+					scanBlock(s.Accept)
+					scanBlock(s.Reject)
+				case ir.StmtSwitch:
+					for _, c := range s.Cases {
+						scanBlock(c.Body)
+					}
+				case ir.StmtLoop:
+					scanBlock(s.Body)
+					scanBlock(s.Continuing)
+				case ir.StmtCall:
+					for _, arg := range s.Arguments {
+						if isGlobal(arg) {
+							mark(dwordRange{0, len(mask)})
+						}
+					}
+				}
+			}
+		}
+		scanBlock(f.Body)
 		return nil
 	}
 

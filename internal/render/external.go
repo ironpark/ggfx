@@ -51,15 +51,13 @@ func DrawExternally(dst *Image, f func(g graphicsdriver.Graphics, target *atlas.
 	}
 	// Pixels written to dst but not yet to the GPU go first, as for any draw.
 	dst.mu.Lock()
+	defer dst.mu.Unlock()
 	dst.cache.writeBackPixelsIfNeeded(dst.img)
-	dst.mu.Unlock()
 
 	err := atlas.DrawExternally(driver, dst.img, f)
 
-	dst.mu.Lock()
 	dst.cache.reset()
 	dst.markLevelsDirty()
-	dst.mu.Unlock()
 	return err
 }
 

@@ -102,8 +102,6 @@ type commandQueue struct {
 	flushLogger  debug.FrameLogger
 	flushErr     error
 	runFlushFunc func()
-
-	err atomic.Value
 }
 
 func (q *commandQueue) appendIndices(indices []uint32, offset uint32) {
@@ -162,7 +160,9 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 
 	// Zero the internal uniforms the shader never reads, so that draws which differ only in
 	// their regions can be merged.
-	shader.ir.FilterInternalUniforms(uniforms[:graphics.PreservedUniformDwordCount])
+	if shader.ir != nil {
+		shader.ir.FilterInternalUniforms(uniforms[:graphics.PreservedUniformDwordCount])
+	}
 
 	sameInternal := prev != nil && slices.Equal(prev.uniforms[:graphics.PreservedUniformDwordCount], uniforms[:graphics.PreservedUniformDwordCount])
 	if last != nil && sameUser && sameInternal {
@@ -262,10 +262,6 @@ func (q *commandQueue) Enqueue(command command) {
 
 // Flush flushes the command queue.
 func (q *commandQueue) Flush(graphicsDriver graphicsdriver.Graphics, mode graphicsdriver.FlushMode) error {
-	if err := q.err.Load(); err != nil {
-		return err.(error)
-	}
-
 	// Disable asynchronous rendering when presenting, as vsync is on and asynchronous rendering
 	// causes a rendering delay (#2822).
 	sync := mode == graphicsdriver.FlushModePresent
@@ -279,7 +275,7 @@ func (q *commandQueue) Flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 	}
 
 	// The flush's arguments are kept in q rather than captured by a closure, so that a flush
-	// allocates nothing. q is not touched by anyone else until runFlush puts it back in the pool.
+	// allocates nothing. q is not touched by anyone else until it is put back in the pool.
 	q.flushDriver = graphicsDriver
 	q.flushMode = mode
 	q.flushSync = sync
@@ -291,11 +287,10 @@ func (q *commandQueue) Flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 	runOnRenderThread(q.runFlushFunc, sync)
 
 	if sync {
-		// When the flush succeeded, q may already be in the pool again; flushErr is then nil.
-		if err := q.flushErr; err != nil {
-			q.flushErr = nil
-			return err
-		}
+		err := q.flushErr
+		q.flushErr = nil
+		theCommandQueueManager.putCommandQueue(q)
+		return err
 	}
 
 	return nil
@@ -312,11 +307,52 @@ func (q *commandQueue) runFlush() {
 			q.flushErr = err
 			return
 		}
-		q.err.Store(err)
-		return
+		theCommandQueueManager.storeAsyncErr(err)
 	}
 
-	theCommandQueueManager.putCommandQueue(q)
+	if !sync {
+		theCommandQueueManager.putCommandQueue(q)
+	}
+}
+
+// resetCommands releases commands and buffers after a flush, whether it succeeded or failed.
+func (q *commandQueue) resetCommands(mode graphicsdriver.FlushMode) {
+	// Release the commands explicitly (#1803).
+	// Apparently, the part of a slice between len and cap-1 still holds references.
+	// Then, resetting the length by [:0] doesn't release the references.
+	for i, c := range q.commands {
+		switch c := c.(type) {
+		case *drawTrianglesCommand:
+			q.drawTrianglesCommandPool.put(c)
+		case *writePixelsCommand:
+			// An image's pendingWrite may still point to c, but it is not used once the
+			// queue's generation has passed.
+			q.writePixelsCommandPool.put(c)
+		}
+		q.commands[i] = nil
+	}
+	q.commands = q.commands[:0]
+	q.lastDraw = nil
+	// No command refers to the vertices or indices any more, and the driver has copied them.
+	q.vertices = shrinkToRecentUse(q.vertices, &q.verticesUse)
+	q.indices = shrinkToRecentUse(q.indices, &q.indicesUse)
+	q.tmpNumVertexFloats = 0
+
+	// Return uploaded bytes on every flush (including intermediate flushes) so headless
+	// ReadPixels loops and external replays do not leak buffers.
+	for i, bs := range q.uploadedBytes {
+		graphics.PutBytes(bs)
+		q.uploadedBytes[i] = nil
+	}
+	q.uploadedBytes = keepSmall(q.uploadedBytes, 4*maxKeptWrites)
+
+	if mode != graphicsdriver.FlushModeIntermediate {
+		q.uint32sBuffer.reset()
+		// The frame's upload bytes are back in the pool.
+		graphics.AdvanceBytesPoolFrame()
+	} else {
+		q.uint32sBuffer.rewind()
+	}
 }
 
 // flush must be called the render thread.
@@ -325,6 +361,7 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 	if len(q.commands) == 0 && mode == graphicsdriver.FlushModeIntermediate {
 		return nil
 	}
+	defer q.resetCommands(mode)
 
 	es := q.indices
 	vs := q.vertices
@@ -342,39 +379,6 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 		// Call End even if an error causes, or the graphics driver's state might be stale (#2388).
 		if graphicsErr := graphicsDriver.End(mode); graphicsErr != nil {
 			err = errors.Join(err, graphicsErr)
-		}
-
-		// Release the commands explicitly (#1803).
-		// Apparently, the part of a slice between len and cap-1 still holds references.
-		// Then, resetting the length by [:0] doesn't release the references.
-		for i, c := range q.commands {
-			switch c := c.(type) {
-			case *drawTrianglesCommand:
-				q.drawTrianglesCommandPool.put(c)
-			case *writePixelsCommand:
-				// An image's pendingWrite may still point to c, but it is not used once the
-				// queue's generation has passed.
-				q.writePixelsCommandPool.put(c)
-			}
-			q.commands[i] = nil
-		}
-		q.commands = q.commands[:0]
-		q.lastDraw = nil
-		// No command refers to the vertices or indices any more, and the driver has copied them.
-		q.vertices = shrinkToRecentUse(q.vertices, &q.verticesUse)
-		q.indices = shrinkToRecentUse(q.indices, &q.indicesUse)
-		q.tmpNumVertexFloats = 0
-
-		if mode != graphicsdriver.FlushModeIntermediate {
-			q.uint32sBuffer.reset()
-			for i, bs := range q.uploadedBytes {
-				graphics.PutBytes(bs)
-				q.uploadedBytes[i] = nil
-			}
-			// The slice holds the bytes of all the frame's writes, which span several commands.
-			q.uploadedBytes = keepSmall(q.uploadedBytes, 4*maxKeptWrites)
-			// The frame's upload bytes are back in the pool.
-			graphics.AdvanceBytesPoolFrame()
 		}
 	}()
 
@@ -403,6 +407,8 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 				return err
 			}
 			es = es[ne:]
+		}
+		if 0 < nv {
 			vs = vs[nv:]
 		}
 		var indexOffset int
@@ -525,24 +531,18 @@ type commandQueuePool struct {
 	m     sync.Mutex
 }
 
-func (c *commandQueuePool) get() (*commandQueue, error) {
+func (c *commandQueuePool) get() *commandQueue {
 	c.m.Lock()
 	defer c.m.Unlock()
 
 	if len(c.cache) == 0 {
-		return &commandQueue{}, nil
-	}
-
-	for _, q := range c.cache {
-		if err := q.err.Load(); err != nil {
-			return nil, err.(error)
-		}
+		return &commandQueue{}
 	}
 
 	q := c.cache[len(c.cache)-1]
 	c.cache[len(c.cache)-1] = nil
 	c.cache = c.cache[:len(c.cache)-1]
-	return q, nil
+	return q
 }
 
 func (c *commandQueuePool) put(queue *commandQueue) {
@@ -559,22 +559,50 @@ type commandQueueManager struct {
 	// generation counts the flushes, so that an image can tell whether a command it enqueued is
 	// still in the current queue.
 	generation uint64
+
+	// asyncErr holds the error reported by an asynchronous flush until the next flush drains it.
+	asyncErr atomic.Pointer[error]
 }
 
 var theCommandQueueManager commandQueueManager
+
+func (c *commandQueueManager) storeAsyncErr(err error) {
+	if err == nil {
+		return
+	}
+	for {
+		oldErr := c.asyncErr.Load()
+		var newErr error
+		if oldErr != nil {
+			newErr = errors.Join(*oldErr, err)
+		} else {
+			newErr = err
+		}
+		if c.asyncErr.CompareAndSwap(oldErr, &newErr) {
+			return
+		}
+	}
+}
+
+func (c *commandQueueManager) drainAsyncErr() error {
+	if ep := c.asyncErr.Swap(nil); ep != nil {
+		return *ep
+	}
+	return nil
+}
 
 // newWritePixelsCommand returns a write-pixels command from the current queue's pool. The queue
 // puts it back once it has run.
 func (c *commandQueueManager) newWritePixelsCommand() *writePixelsCommand {
 	if c.current == nil {
-		c.current, _ = c.pool.get()
+		c.current = c.pool.get()
 	}
 	return c.current.writePixelsCommandPool.get()
 }
 
 func (c *commandQueueManager) enqueueCommand(command command) {
 	if c.current == nil {
-		c.current, _ = c.pool.get()
+		c.current = c.pool.get()
 	}
 	c.current.Enqueue(command)
 }
@@ -586,19 +614,19 @@ func (c *commandQueueManager) putCommandQueue(commandQueue *commandQueue) {
 
 func (c *commandQueueManager) enqueueDrawTrianglesCommand(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *Shader, uniforms []uint32) {
 	if c.current == nil {
-		c.current, _ = c.pool.get()
+		c.current = c.pool.get()
 	}
 	c.current.EnqueueDrawTrianglesCommand(dst, srcs, vertices, indices, blend, dstRegion, srcRegions, shader, uniforms)
 }
 
 func (c *commandQueueManager) flush(graphicsDriver graphicsdriver.Graphics, mode graphicsdriver.FlushMode) error {
-	// Switch the command queue.
-	prev := c.current
-	q, err := c.pool.get()
-	if err != nil {
+	if err := c.drainAsyncErr(); err != nil {
 		return err
 	}
-	c.current = q
+
+	// Switch the command queue.
+	prev := c.current
+	c.current = c.pool.get()
 	c.generation++
 
 	if prev == nil {
@@ -607,7 +635,7 @@ func (c *commandQueueManager) flush(graphicsDriver graphicsdriver.Graphics, mode
 	if err := prev.Flush(graphicsDriver, mode); err != nil {
 		return err
 	}
-	return nil
+	return c.drainAsyncErr()
 }
 
 // uint32sBuffer is a reusable buffer to allocate []uint32.
@@ -640,6 +668,11 @@ func (b *uint32sBuffer) free(s []uint32) {
 	}
 	b.buf = b.buf[:len(b.buf)-n]
 	b.used -= n
+}
+
+// rewind reuses the backing buffer after an intermediate flush without ending the frame's peak observation.
+func (b *uint32sBuffer) rewind() {
+	b.buf = b.buf[:0]
 }
 
 // reset frees all the allocated slices; it must be called only when none of them is used any more.

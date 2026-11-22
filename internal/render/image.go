@@ -323,6 +323,7 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 	}
 
 	var imgs [graphics.ShaderSrcImageCount]*atlas.Image
+	var scaledSrc0 bool
 	for k, src := range srcs {
 		if src == nil {
 			continue
@@ -334,16 +335,22 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 		// be cleared since src is not modified here.
 		src.cache.writeBackPixelsIfNeeded(src.img)
 		imgs[k] = src.img
-		if level == 0 {
+		if level == 0 || !canUseMipmap(src.imageType) {
 			continue
 		}
 		if img := src.level(level); img != nil {
-			s := float32(int(1) << level)
-			for j := 0; j < len(vertices); j += graphics.VertexFloatCount {
-				vertices[j+2] /= s
-				vertices[j+3] /= s
-			}
 			imgs[k] = img
+			srcRegions[k] = scaleMipmapRegion(srcRegions[k], level, sizeForLevel(src.width, level), sizeForLevel(src.height, level))
+			if k == 0 {
+				scaledSrc0 = true
+			}
+		}
+	}
+	if scaledSrc0 {
+		s := float32(int(1) << level)
+		for j := 0; j < len(vertices); j += graphics.VertexFloatCount {
+			vertices[j+2] /= s
+			vertices[j+3] /= s
 		}
 	}
 

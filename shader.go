@@ -46,6 +46,9 @@ func newShader(src []byte, name string) (*Shader, error) {
 }
 
 func (s *Shader) Dispose() {
+	if s.shader == nil {
+		return
+	}
 	s.shader.Deallocate()
 	s.shader = nil
 }

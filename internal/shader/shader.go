@@ -113,9 +113,11 @@ func Compile(src []byte, textureCount int) (*Program, error) {
 			hasVertex = true
 		case FragmentEntryPoint:
 			hasFragment = true
+		default:
+			return nil, fmt.Errorf("shader: unexpected entry point %q; do not declare @vertex, @fragment or @compute functions", ep.Name)
 		}
 	}
-	if !hasVertex || !hasFragment {
+	if !hasVertex || !hasFragment || len(module.EntryPoints) != 2 {
 		return nil, errors.New("shader: the entry points are missing; do not declare @vertex or @fragment functions")
 	}
 

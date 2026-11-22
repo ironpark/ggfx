@@ -52,6 +52,10 @@ var (
 	// funcsInFrameCh carries functions that must run inside a frame, like reading pixels.
 	funcsInFrameCh = make(chan func())
 
+	// terminatedCh is closed when Terminate transitions state to stateTerminated, unblocking
+	// any goroutine waiting in runInFrame.
+	terminatedCh = make(chan struct{})
+
 	// whiteImage is the source a fill draws from.
 	whiteImage *Image
 )
@@ -142,6 +146,7 @@ func Terminate() {
 	if !state.CompareAndSwap(stateRunning, stateTerminated) {
 		return
 	}
+	close(terminatedCh)
 	graphicscommand.Terminate()
 	if stopRenderThread != nil {
 		stopRenderThread()
@@ -235,6 +240,14 @@ func Tick() int64 {
 	return recent.Now()
 }
 
+// drainError returns and clears the error a read of pixels ran into, if any.
+func drainError() error {
+	if err := theErr.Swap(nil); err != nil {
+		return *err
+	}
+	return nil
+}
+
 // BeginFrame begins a frame. Screens are drawn between BeginFrame and EndFrame, which is called
 // when BeginFrame succeeded. A read of pixels that missed the last frame runs at BeginFrame, and
 // BeginFrame returns the error a read of pixels ran into, as the read itself cannot.
@@ -243,7 +256,7 @@ func BeginFrame() error {
 		return err
 	}
 	processFuncsInFrame()
-	if err := loadError(); err != nil {
+	if err := drainError(); err != nil {
 		return errors.Join(err, atlas.EndFrame(driver))
 	}
 	return nil
@@ -285,7 +298,7 @@ func readPixels(img *Image, pixels []byte, region image.Rectangle) error {
 		// this might be possible (#1704).
 
 		var err error
-		runInFrame(func() {
+		if !runInFrame(func() {
 			ok, imgErr := img.readPixels(pixels, region)
 			if imgErr != nil {
 				err = imgErr
@@ -295,7 +308,9 @@ func readPixels(img *Image, pixels []byte, region image.Rectangle) error {
 				// This never reaches since this function must be called in a frame.
 				panic("render: ReadPixels unexpectedly failed")
 			}
-		})
+		}) {
+			return errors.New("render: terminated while waiting for frame in ReadPixels")
+		}
 		return err
 	}
 
@@ -303,13 +318,24 @@ func readPixels(img *Image, pixels []byte, region image.Rectangle) error {
 }
 
 // runInFrame runs f inside a frame, on the goroutine running the frame, and waits for it.
-func runInFrame(f func()) {
+// It returns false if the renderer was terminated before f could complete.
+func runInFrame(f func()) bool {
 	ch := make(chan struct{})
-	funcsInFrameCh <- func() {
+	wrapped := func() {
 		defer close(ch)
 		f()
 	}
-	<-ch
+	select {
+	case funcsInFrameCh <- wrapped:
+	case <-terminatedCh:
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	case <-terminatedCh:
+		return false
+	}
 }
 
 // processFuncsInFrame runs the functions queued to run inside a frame, like a read of pixels that

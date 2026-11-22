@@ -69,10 +69,16 @@ TEXT ·convertVerticesSIMD(SB), NOSPLIT, $0-40
 		Tee R4
 		I32WrapI64
 		If
+			// Save original alpha before storing V2 so dst == src (in-place) preserves it.
+			ADDR(R1)
+			I32Load $28
+			I64ExtendI32U
+			Set R5
 			// Multiply (r, g, b, a) by a. The alpha is restored below.
 			Get V2
-			ADDR(R1)
-			F32Load $28
+			Get R5
+			I32WrapI64
+			F32ReinterpretI32
 			F32x4Splat
 			F32x4Mul
 			Set V2
@@ -86,9 +92,9 @@ TEXT ·convertVerticesSIMD(SB), NOSPLIT, $0-40
 		I32WrapI64
 		If
 			ADDR(R0)
-			ADDR(R1)
-			F32Load $28
-			F32Store $28
+			Get R5
+			I32WrapI64
+			I32Store $28
 		End
 
 		Get R3

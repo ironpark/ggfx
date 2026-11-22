@@ -209,6 +209,12 @@ func (i *Image) canJoinPendingWrite() bool {
 	return true
 }
 
+// Touch records that a command enqueued now reads or draws into region of the image, so that
+// later writes to overlapping regions cannot be hoisted ahead of it.
+func (i *Image) Touch(region image.Rectangle) {
+	i.touch(region)
+}
+
 // touch records that a command enqueued now reads or draws into region of the image, if a later
 // write could otherwise join the pending write-pixels command before it. An empty region stands
 // for the whole image.

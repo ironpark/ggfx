@@ -15,6 +15,7 @@
 package graphicscommand_test
 
 import (
+	"errors"
 	"image"
 	"math"
 	"slices"
@@ -325,5 +326,37 @@ func TestUniformVersions(t *testing.T) {
 	// A new flush does not take the versions of the last.
 	if d[5].versions.Internal <= d[4].versions.Internal || d[5].versions.User <= d[4].versions.User {
 		t.Errorf("first draw of the second flush: versions %+v, want newer than %+v", d[5].versions, d[4].versions)
+	}
+}
+
+type failingResetDriver struct {
+	frameDriver
+	resetErr error
+}
+
+func (g *failingResetDriver) Reset() error {
+	return g.resetErr
+}
+
+func TestResetGraphicsDriverStateReturnsError(t *testing.T) {
+	want := errors.New("reset failed")
+	if got := graphicscommand.ResetGraphicsDriverState(&failingResetDriver{resetErr: want}); !errors.Is(got, want) {
+		t.Errorf("ResetGraphicsDriverState() = %v, want %v", got, want)
+	}
+}
+
+func TestIntermediateFlushReclaimsUploadedBytes(t *testing.T) {
+	var q graphicscommand.CommandQueueForTesting
+	var driver drawDriver
+	dst := graphicscommand.NewFakeImageForTesting(16, 16)
+	shader := nearestFilterShader.FakeForTesting()
+
+	enqueueQuads(&q, dst, shader, 1, false)
+	q.AddUploadedBytesForTesting(make([]byte, 16))
+	if err := q.FlushForTesting(&driver, graphicsdriver.FlushModeIntermediate); err != nil {
+		t.Fatal(err)
+	}
+	if _, uploaded := q.PendingResourcesForTesting(); uploaded != 0 {
+		t.Errorf("after non-empty intermediate flush: uploaded bytes = %d, want 0", uploaded)
 	}
 }

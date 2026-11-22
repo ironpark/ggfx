@@ -23,6 +23,7 @@ import (
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/host"
+	"github.com/ironpark/ggfx/vector"
 )
 
 // viewSurface is a Metal surface on an NSView in no window, made on the main thread, or nil when
@@ -103,10 +104,59 @@ func TestScreenAsSource(t *testing.T) {
 
 func TestOffscreenCanBeSource(t *testing.T) {
 	img := ggfx.NewImage(4, 4)
+	defer img.Deallocate()
 	if !img.CanBeSource() {
 		t.Error("an offscreen image cannot be a source")
 	}
 	if !img.SubImage(image.Rect(1, 1, 2, 2)).(*ggfx.Image).CanBeSource() {
 		t.Error("an offscreen sub-image cannot be a source")
+	}
+}
+
+// TestScreenFlushesPendingVectorAtFrameEnd checks that pending vector fills on a screen are
+// flushed when Frame.End runs, even when no other ggfx.Image call follows them.
+func TestScreenFlushesPendingVectorAtFrameEnd(t *testing.T) {
+	if viewSurface == nil {
+		t.Skipf("no Metal surface: %v", viewSurfaceErr)
+	}
+	dst := ggfx.NewImage(16, 16)
+	defer dst.Deallocate()
+	red := color.RGBA{0xff, 0, 0, 0xff}
+
+	fr, err := host.BeginFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := fr.Screen(viewSurface, 16, 16)
+	screen.Clear()
+	vector.FillRect(screen, 0, 0, 16, 16, red, true)
+	if err := fr.End(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// On the next kept frame, the screen must contain the vector fill from the previous frame.
+	fr, err = host.BeginFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen = fr.Screen(viewSurface, 16, 16)
+	kept := viewSurface.Kept()
+	dst.DrawImage(screen, &ggfx.DrawImageOptions{Blend: ggfx.BlendCopy})
+	if err := fr.End(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Flush(true); err != nil {
+		t.Fatal(err)
+	}
+	if !kept {
+		t.Skip("surface did not keep previous frame")
+	}
+	var got color.RGBA
+	frame(t, func() { got = dst.At(8, 8).(color.RGBA) })
+	if got != red {
+		t.Errorf("screen pixel after Frame.End with pending vector fill = %v, want %v", got, red)
 	}
 }

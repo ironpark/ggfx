@@ -444,7 +444,7 @@ func ResetGraphicsDriverState(graphicsDriver graphicsdriver.Graphics) (err error
 			err = r.Reset()
 		}, true)
 	}
-	return nil
+	return err
 }
 
 // SupportsPixelFormat reports whether the driver can make images of format. It must be called

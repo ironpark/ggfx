@@ -55,6 +55,9 @@ func (s *Shader) NewUniforms() *Uniforms {
 
 // Set sets the single-element uniform name to v.
 func (u *Uniforms) Set[T UniformScalar](name string, v T) {
+	if u.shader.isDisposed() {
+		panic("ggfx: the shader of Uniforms is already disposed")
+	}
 	u.shader.shader.Program().PutUniform(u.block, name, v)
 }
 
@@ -62,11 +65,17 @@ func (u *Uniforms) Set[T UniformScalar](name string, v T) {
 // vector components, matrix columns then rows, array elements.
 // len(v) must be the uniform's element count.
 func (u *Uniforms) SetSlice[T UniformScalar](name string, v []T) {
+	if u.shader.isDisposed() {
+		panic("ggfx: the shader of Uniforms is already disposed")
+	}
 	u.shader.shader.Program().PutUniformSlice(u.block, name, v)
 }
 
 // SetBool sets the single-element uniform name to 1 if v is true, or 0 otherwise.
 func (u *Uniforms) SetBool(name string, v bool) {
+	if u.shader.isDisposed() {
+		panic("ggfx: the shader of Uniforms is already disposed")
+	}
 	u.shader.shader.Program().PutUniformBool(u.block, name, v)
 }
 
