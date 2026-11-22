@@ -26,10 +26,13 @@ import (
 //
 // The first byte is the version. A newer reader reads every older version;
 // an older reader refuses a newer one.
-const binaryVersion = 1
+const (
+	binaryVersionV1 = 1
+	binaryVersionV2 = 2
+)
 
 // ErrNoBinaryForm is why an icon has no binary form.
-var ErrNoBinaryForm = errors.New("oksvg: an icon with gradients, clips, masks or markers has no binary form")
+var ErrNoBinaryForm = errors.New("oksvg: an icon with gradients, clips, masks, markers, or animations has no binary form")
 
 // The stroke functions by their numbers in the binary form, zero for none.
 var (
@@ -56,31 +59,49 @@ const (
 	// binarySame: painted, stroked and transformed as the path before it,
 	// which most of an icon's paths are, so none of that follows.
 	binarySame
-	binaryKnownFlags = binaryFill | binaryLine | binaryNonZero | binaryMatrix | binarySame
+	// v2 flags: fill or stroke uses SVG currentColor (no 4-byte RGBA follows).
+	binaryFillCurrent
+	binaryLineCurrent
+	binaryKnownFlagsV1 = binaryFill | binaryLine | binaryNonZero | binaryMatrix | binarySame
+	binaryKnownFlagsV2 = binaryKnownFlagsV1 | binaryFillCurrent | binaryLineCurrent
 )
 
 // AppendBinary appends the icon's binary form to b.
 func (s *SvgIcon) AppendBinary(b []byte) ([]byte, error) {
-	b = append(b, binaryVersion)
+	if s.Animated() || s.needsSceneForStatic() {
+		return nil, ErrNoBinaryForm
+	}
+	version := byte(binaryVersionV1)
+	for i := range s.SVGPaths {
+		p := &s.SVGPaths[i]
+		if p.clip != nil || p.markers != [3]string{} || p.fillerColor.grad != nil || p.linerColor.grad != nil {
+			return nil, ErrNoBinaryForm
+		}
+		if p.fillerColor.current || p.linerColor.current {
+			version = binaryVersionV2
+		}
+	}
+	b = append(b, version)
 	for _, v := range []float64{s.ViewBox.X, s.ViewBox.Y, s.ViewBox.W, s.ViewBox.H} {
 		b = appendFloat(b, v)
 	}
 	b = binary.AppendUvarint(b, uint64(len(s.SVGPaths)))
 	for i := range s.SVGPaths {
 		p := &s.SVGPaths[i]
-		if p.clip != nil || p.markers != [3]string{} || p.fillerColor.grad != nil || p.linerColor.grad != nil {
-			return nil, ErrNoBinaryForm
-		}
 		var flags byte
 		fill, okFill := p.fillerColor.color.(color.NRGBA)
 		line, okLine := p.linerColor.color.(color.NRGBA)
-		if p.fillerColor.color != nil {
+		if p.fillerColor.current {
+			flags |= binaryFillCurrent
+		} else if p.fillerColor.color != nil {
 			if !okFill {
 				return nil, ErrNoBinaryForm
 			}
 			flags |= binaryFill
 		}
-		if p.linerColor.color != nil {
+		if p.linerColor.current {
+			flags |= binaryLineCurrent
+		} else if p.linerColor.color != nil {
 			if !okLine {
 				return nil, ErrNoBinaryForm
 			}
@@ -101,15 +122,20 @@ func (s *SvgIcon) AppendBinary(b []byte) ([]byte, error) {
 		if flags&binaryFill != 0 {
 			b = append(b, fill.R, fill.G, fill.B, fill.A)
 			b = appendFloat(b, p.FillOpacity)
+		} else if flags&binaryFillCurrent != 0 {
+			b = appendFloat(b, p.FillOpacity)
 		}
-		if flags&binaryLine != 0 {
+		if flags&(binaryLine|binaryLineCurrent) != 0 {
 			lineCap, ok1 := funcIndex(binaryCaps, p.LineCap)
 			lead, ok2 := funcIndex(binaryCaps, p.LeadLineCap)
 			gap, ok3 := funcIndex(binaryGaps, p.LineGap)
 			if !ok1 || !ok2 || !ok3 {
 				return nil, ErrNoBinaryForm
 			}
-			b = append(b, line.R, line.G, line.B, line.A, lineCap, lead, gap, byte(p.LineJoin))
+			if flags&binaryLine != 0 {
+				b = append(b, line.R, line.G, line.B, line.A)
+			}
+			b = append(b, lineCap, lead, gap, byte(p.LineJoin))
 			for _, v := range []float64{p.LineOpacity, p.LineWidth, p.MiterLimit, p.DashOffset} {
 				b = appendFloat(b, v)
 			}
@@ -227,10 +253,15 @@ func (r *binaryReader) path() rasterx.Path {
 // ReadBinary is the icon that AppendBinary wrote as data.
 func ReadBinary(data []byte) (*SvgIcon, error) {
 	r := &binaryReader{b: data}
-	if v := r.byte(); r.err == nil && v > binaryVersion {
+	v := r.byte()
+	if r.err == nil && v > binaryVersionV2 {
 		return nil, fmt.Errorf("oksvg: an icon's binary form of version %d, newer than this reads", v)
 	} else if v == 0 {
 		r.fail()
+	}
+	knownFlags := byte(binaryKnownFlagsV1)
+	if v >= binaryVersionV2 {
+		knownFlags = binaryKnownFlagsV2
 	}
 	s := &SvgIcon{Transform: rasterx.Identity}
 	s.ViewBox.X, s.ViewBox.Y, s.ViewBox.W, s.ViewBox.H = r.float(), r.float(), r.float(), r.float()
@@ -240,7 +271,7 @@ func ReadBinary(data []byte) (*SvgIcon, error) {
 		p.PathStyle = defaultStyle
 		p.fillerColor = paint{}
 		flags := r.byte()
-		if flags&^binaryKnownFlags != 0 {
+		if flags&^knownFlags != 0 {
 			return nil, errBinary
 		}
 		if flags&binarySame != 0 {
@@ -253,13 +284,26 @@ func ReadBinary(data []byte) (*SvgIcon, error) {
 			}
 			continue
 		}
+		if (flags&binaryFill != 0 && flags&binaryFillCurrent != 0) ||
+			(flags&binaryLine != 0 && flags&binaryLineCurrent != 0) {
+			return nil, errBinary
+		}
 		p.UseNonZeroWinding = flags&binaryNonZero != 0
 		if flags&binaryFill != 0 {
 			p.fillerColor = paint{color: r.color()}
 			p.FillOpacity = r.float()
+		} else if flags&binaryFillCurrent != 0 {
+			p.fillerColor = paint{current: true}
+			p.FillOpacity = r.float()
+			s.usesCurrentColor = true
 		}
-		if flags&binaryLine != 0 {
-			p.linerColor = paint{color: r.color()}
+		if flags&(binaryLine|binaryLineCurrent) != 0 {
+			if flags&binaryLine != 0 {
+				p.linerColor = paint{color: r.color()}
+			} else {
+				p.linerColor = paint{current: true}
+				s.usesCurrentColor = true
+			}
 			lineCap, lead, gap, join := r.byte(), r.byte(), r.byte(), r.byte()
 			if int(lineCap) >= len(binaryCaps) || int(lead) >= len(binaryCaps) || int(gap) >= len(binaryGaps) || rasterx.JoinMode(join) > rasterx.Round {
 				r.fail()

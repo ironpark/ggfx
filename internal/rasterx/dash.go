@@ -126,24 +126,34 @@ func (r *Dasher) SetStroke(width, miterLimit fixed.Int26_6, capL, capT CapFunc, 
 		r.sgm = &r.Stroker // This is just plain stroking
 		return
 	}
+	r.SetPhase(dashOffset)
+	r.sgm = r // Use the full dasher
+}
+
+// SetPhase sets the starting dash offset for subsequent subpaths (callable
+// between subpaths before Start/Draw), keeping the active dash pattern.
+func (r *Dasher) SetPhase(off float64) {
+	if len(r.Dashes) == 0 {
+		r.DashOffset = 0
+		return
+	}
 	var period float64
 	for _, d := range r.Dashes {
 		period += float64(d) / 64
 	}
-	if period > 0 && !math.IsNaN(dashOffset) && !math.IsInf(dashOffset, 0) {
+	if period > 0 && !math.IsNaN(off) && !math.IsInf(off, 0) {
 		cycle := period
 		if len(r.Dashes)%2 != 0 {
 			cycle *= 2
 		}
-		dashOffset = math.Mod(dashOffset, cycle)
-		if dashOffset < 0 {
-			dashOffset += cycle
+		off = math.Mod(off, cycle)
+		if off < 0 {
+			off += cycle
 		}
 	} else {
-		dashOffset = 0
+		off = 0
 	}
-	r.DashOffset = fixed.Int26_6(dashOffset * 64)
-	r.sgm = r // Use the full dasher
+	r.DashOffset = fixed.Int26_6(off * 64)
 }
 
 // Stop terminates a dashed line

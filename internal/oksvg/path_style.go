@@ -29,19 +29,29 @@ type PathStyle struct {
 	// markers are the ids of the markers at a shape's start, its inner
 	// vertices and its end; see marker.go.
 	markers [3]string
+	// color is the inherited CSS color used to resolve currentColor on this element.
+	// nil means inherit from the draw options root CurrentColor (default black).
+	color color.Color
 }
 
 // paint is a fill or a stroke as a style names it: a color, a gradient,
-// or, with neither, none.
+// currentColor, or, with none set, none.
 type paint struct {
-	color color.Color
-	grad  *rasterx.Gradient
+	color   color.Color
+	grad    *rasterx.Gradient
+	gradID  string
+	current bool
 }
 
-func (p paint) none() bool { return p.color == nil && p.grad == nil }
+func (p paint) none() bool { return !p.current && p.color == nil && p.grad == nil }
 
-// styleAttribute describes draw options, such as {"fill":"black"; "stroke":"white"}.
-type styleAttribute = map[string]string
+// currentColorSentinel is placed in rasterx.GradStop.StopColor for stops with
+// stop-color="currentColor". Its RGBA method falls back to opaque black.
+type currentColorSentinel struct{}
+
+func (currentColorSentinel) RGBA() (r, g, b, a uint32) { return 0, 0, 0, 0xffff }
+
+var currentColorMark color.Color = currentColorSentinel{}
 
 // defaultStyle sets the default PathStyle to fill black, winding rule,
 // full opacity, no stroke, ButtCap line end and Bevel line connect.

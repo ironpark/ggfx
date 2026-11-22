@@ -4,6 +4,7 @@
 package oksvg
 
 import (
+	"encoding/xml"
 	"math"
 	"strconv"
 	"strings"
@@ -56,10 +57,14 @@ func (c *iconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) {
 // markerAt is where def's shapes go for the vertex v of a shape drawn in
 // style: the shape's user space, moved to v, turned, and scaled.
 func markerAt(def *captured, v vertex, first bool, style PathStyle) rasterx.Matrix2D {
+	return markerPlace(style.mAdder.M, def.attrs, v, first, style.LineWidth)
+}
+
+func markerPlace(shapeWorld rasterx.Matrix2D, attrs []xml.Attr, v vertex, first bool, lineWidth float64) rasterx.Matrix2D {
 	refX, refY, w, h := 0.0, 0.0, 3.0, 3.0
 	orient, strokeUnits := "0", true
 	var box []float64
-	for _, a := range def.attrs {
+	for _, a := range attrs {
 		n, _ := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(a.Value), "px"), 64)
 		switch a.Name.Local {
 		case "refX":
@@ -90,8 +95,8 @@ func markerAt(def *captured, v vertex, first bool, style PathStyle) rasterx.Matr
 		sx, sy = s, s
 	}
 	if strokeUnits {
-		sx *= style.LineWidth
-		sy *= style.LineWidth
+		sx *= lineWidth
+		sy *= lineWidth
 	}
 	angle := v.angle
 	switch orient {
@@ -104,7 +109,7 @@ func markerAt(def *captured, v vertex, first bool, style PathStyle) rasterx.Matr
 		deg, _ := strconv.ParseFloat(strings.TrimSuffix(orient, "deg"), 64)
 		angle = deg * math.Pi / 180
 	}
-	return style.mAdder.M.Translate(v.x, v.y).Rotate(angle).Scale(sx, sy).Translate(-refX, -refY)
+	return shapeWorld.Translate(v.x, v.y).Rotate(angle).Scale(sx, sy).Translate(-refX, -refY)
 }
 
 // vertex is where a marker goes, and the way the shape runs there, in

@@ -9,8 +9,6 @@ import (
 	"errors"
 	"strings"
 
-	"golang.org/x/image/math/fixed"
-
 	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
@@ -98,22 +96,7 @@ var (
 				return err
 			}
 		}
-		if w <= 0 || h <= 0 {
-			return nil
-		}
-		if rx < 0 {
-			rx = 0
-		}
-		if ry < 0 {
-			ry = 0
-		}
-		// One radius given is both, as the specification has it.
-		if setRx && !setRy {
-			ry = rx
-		} else if setRy && !setRx {
-			rx = ry
-		}
-		rasterx.AddRoundRect(x, y, w+x, h+y, rx, ry, 0, rasterx.RoundGap, &c.Path)
+		buildRect(&c.Path, x, y, w, h, rx, ry, setRx, setRy)
 		return nil
 	}
 	circleF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
@@ -137,10 +120,7 @@ var (
 				return err
 			}
 		}
-		if rx <= 0 || ry <= 0 { // not drawn, but not an error
-			return nil
-		}
-		c.EllipseAt(cx, cy, rx, ry)
+		buildEllipse(&c.Path, cx, cy, rx, ry)
 		return nil
 	}
 	lineF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
@@ -161,12 +141,7 @@ var (
 				return err
 			}
 		}
-		c.Path.Start(fixed.Point26_6{
-			X: fixed.Int26_6((x1) * 64),
-			Y: fixed.Int26_6((y1) * 64)})
-		c.Path.Line(fixed.Point26_6{
-			X: fixed.Int26_6((x2) * 64),
-			Y: fixed.Int26_6((y2) * 64)})
+		buildLine(&c.Path, x1, y1, x2, y2)
 		return nil
 	}
 	polylineF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
@@ -184,16 +159,7 @@ var (
 				return err
 			}
 		}
-		if len(c.points) >= 4 {
-			c.Path.Start(fixed.Point26_6{
-				X: fixed.Int26_6((c.points[0]) * 64),
-				Y: fixed.Int26_6((c.points[1]) * 64)})
-			for i := 2; i < len(c.points)-1; i += 2 {
-				c.Path.Line(fixed.Point26_6{
-					X: fixed.Int26_6((c.points[i]) * 64),
-					Y: fixed.Int26_6((c.points[i+1]) * 64)})
-			}
-		}
+		buildPoly(&c.Path, c.points, false)
 		return nil
 	}
 	polygonF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
@@ -300,10 +266,15 @@ var (
 				case "offset":
 					stop.Offset, err = readFraction(attr.Value)
 				case "stop-color":
-					//todo: add current color inherit
-					stop.StopColor, err = ParseSVGColor(attr.Value)
+					if strings.EqualFold(strings.TrimSpace(attr.Value), "currentcolor") {
+						stop.StopColor = currentColorMark
+						c.icon.usesCurrentColor = true
+						c.icon.gradHasCurrentColor = true
+					} else {
+						stop.StopColor, err = parseColorFlexible(attr.Value)
+					}
 				case "stop-opacity":
-					stop.Opacity, err = parseFloat(attr.Value, 64)
+					stop.Opacity, err = parseOpacityVal(attr.Value)
 				}
 				if err != nil {
 					return err

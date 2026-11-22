@@ -16,6 +16,7 @@ import (
 	"golang.org/x/image/colornames"
 
 	"github.com/ironpark/ggfx/internal/rasterx"
+	"github.com/ironpark/ggfx/internal/svganim"
 )
 
 // ReadIconStream reads the Icon from the given io.Reader.
@@ -26,6 +27,9 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 	icon := &SvgIcon{Defs: make(map[string][]definition), Grads: make(map[string]*rasterx.Gradient), Transform: rasterx.Identity,
 		clips: map[string]*captured{}, markers: map[string]*captured{}}
 	cursor := &iconCursor{StyleStack: []PathStyle{defaultStyle}, icon: icon}
+	sb := newSceneBuilder(icon)
+	animBuilder := svganim.NewBuilder()
+	var smilDepth int
 	var classInfo strings.Builder
 	decoder := xml.NewDecoder(stream)
 	for {
@@ -39,6 +43,24 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 		// Inspect the type of the XML token
 		switch se := t.(type) {
 		case xml.StartElement:
+			// B1 fix: intercept SMIL elements BEFORE PushStyle and before defs/capture,
+			// so attributes like fill="freeze" never collide with SVG paint fill.
+			if smilDepth > 0 {
+				smilDepth++
+				if svganim.IsSMILTag(se.Name.Local) {
+					animBuilder.SMILElement(se, sb.currentElem(), sb.inDefs())
+				}
+				continue
+			}
+			if svganim.IsSMILTag(se.Name.Local) {
+				smilDepth = 1
+				animBuilder.SMILElement(se, sb.currentElem(), sb.inDefs())
+				continue
+			}
+
+			// Tee token to scene builder (keeps elements open until EndElement: B2).
+			sb.startElement(se)
+
 			// Inside <defs> or a captured <clipPath>/<mask>/<marker>, elements are stored
 			// for later expansion (which runs PushStyle), so avoid parsing style attributes
 			// prematurely (and keep StyleStack balanced for EndElement).
@@ -55,29 +77,29 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 				return icon, err
 			}
 		case xml.EndElement:
+			if smilDepth > 0 {
+				smilDepth--
+				continue
+			}
+			sb.endElement(se)
 			// pop style
 			cursor.StyleStack = cursor.StyleStack[:len(cursor.StyleStack)-1]
 			if cursor.endCapture(se) {
 				continue
 			}
 			if se.Name.Local == "style" && cursor.inDefsStyle {
-				parsed, err := parseClasses(classInfo.String())
+				cssText := classInfo.String()
 				classInfo.Reset()
 				cursor.inDefsStyle = false
-				if err != nil {
-					return icon, err
-				}
-				if icon.classes == nil {
-					icon.classes = parsed
-				} else {
-					for cls, attrs := range parsed {
-						if icon.classes[cls] == nil {
-							icon.classes[cls] = attrs
-							continue
-						}
-						for k, v := range attrs {
-							icon.classes[cls][k] = v
-						}
+				animBuilder.Stylesheet(cssText)
+				sb.addStylesheet(cssText)
+				declsByClass, _ := parseBraceAwareClasses(cssText)
+				if len(declsByClass) > 0 {
+					if icon.classes == nil {
+						icon.classes = make(map[string][]svganim.Decl, len(declsByClass))
+					}
+					for cls, decls := range declsByClass {
+						icon.classes[cls] = append(icon.classes[cls], decls...)
 					}
 				}
 				continue
@@ -107,11 +129,12 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 				}
 			}
 		case xml.CharData:
-			if cursor.inDefsStyle {
+			if cursor.inDefsStyle && smilDepth == 0 {
 				classInfo.Write(se)
 			}
 		}
 	}
+	icon.scene = sb.finish(animBuilder)
 	return icon, nil
 }
 

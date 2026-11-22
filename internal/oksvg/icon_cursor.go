@@ -7,7 +7,6 @@ package oksvg
 import (
 	"encoding/xml"
 	"errors"
-	"image/color"
 	"math"
 	"strings"
 
@@ -106,13 +105,9 @@ func (c *iconCursor) PushStyle(attrs []xml.Attr) error {
 		return err
 	}
 	if styleAttr != "" {
-		for decl := range strings.SplitSeq(styleAttr, ";") {
-			k, v, ok := strings.Cut(decl, ":")
-			if !ok {
-				continue
-			}
-			k = strings.ToLower(strings.TrimSpace(k))
-			v = strings.TrimSpace(v)
+		for _, d := range parseInlineDecls(styleAttr) {
+			k := strings.ToLower(strings.TrimSpace(d.Name))
+			v := strings.TrimSpace(d.Value)
 			if err := c.readStyleAttr(&curStyle, k, v); err != nil {
 				return err
 			}
@@ -188,10 +183,6 @@ func (c *iconCursor) readTransformAttr(m1 rasterx.Matrix2D, k string) (rasterx.M
 	return m1, nil
 }
 
-func (c *iconCursor) parseTransform(v string) (rasterx.Matrix2D, error) {
-	return c.parseTransformFrom(c.StyleStack[len(c.StyleStack)-1].mAdder.M, v)
-}
-
 func (c *iconCursor) parseTransformFrom(m1 rasterx.Matrix2D, v string) (rasterx.Matrix2D, error) {
 	ts := strings.Split(v, ")")
 	for _, t := range ts {
@@ -218,28 +209,58 @@ func (c *iconCursor) parseTransformFrom(m1 rasterx.Matrix2D, v string) (rasterx.
 func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 	switch k {
 	case "fill":
+		if strings.EqualFold(v, "currentcolor") {
+			curStyle.fillerColor = paint{current: true}
+			c.icon.usesCurrentColor = true
+			return nil
+		}
+		if strings.EqualFold(v, "inherit") {
+			return nil
+		}
 		gradient, ok := c.ReadGradURL(v, curStyle.fillerColor)
 		if ok {
-			curStyle.fillerColor = paint{grad: gradient}
+			curStyle.fillerColor = paint{grad: gradient, gradID: urlID(v)}
 			break
 		}
-		col, err := ParseSVGColor(v)
-		curStyle.fillerColor = paint{color: col}
-		return err
+		col, err := parseColorFlexible(v)
+		if err != nil {
+			return err
+		}
+		if col != nil {
+			curStyle.fillerColor = paint{color: toNRGBA(col)}
+		} else {
+			curStyle.fillerColor = paint{}
+		}
+		return nil
 	case "stroke":
+		if strings.EqualFold(v, "currentcolor") {
+			curStyle.linerColor = paint{current: true}
+			c.icon.usesCurrentColor = true
+			return nil
+		}
+		if strings.EqualFold(v, "inherit") {
+			return nil
+		}
 		gradient, ok := c.ReadGradURL(v, curStyle.linerColor)
 		if ok {
-			curStyle.linerColor = paint{grad: gradient}
+			curStyle.linerColor = paint{grad: gradient, gradID: urlID(v)}
 			break
 		}
-		col, errc := ParseSVGColor(v)
+		col, errc := parseColorFlexible(v)
 		if errc != nil {
 			return errc
 		}
 		if col != nil {
-			curStyle.linerColor = paint{color: col.(color.NRGBA)}
+			curStyle.linerColor = paint{color: toNRGBA(col)}
 		} else {
 			curStyle.linerColor = paint{}
+		}
+	case "color":
+		lv := strings.ToLower(v)
+		if lv != "inherit" && lv != "currentcolor" {
+			if col, err := parseColorFlexible(v); err == nil && col != nil {
+				curStyle.color = col
+			}
 		}
 	case "fill-rule", "clip-rule":
 		var nonZero bool
@@ -341,7 +362,7 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 		}
 		curStyle.Dash = dList
 	case "opacity", "stroke-opacity", "fill-opacity":
-		op, err := parseFloat(v, 64)
+		op, err := parseOpacityVal(v)
 		if err != nil {
 			return err
 		}
@@ -354,6 +375,11 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 	case "transform":
 		m, err := c.parseTransformFrom(curStyle.mAdder.M, v)
 		if err != nil {
+			// Fallback to CSS transform parser (supports deg/rad/grad/turn/px/%/3d/none).
+			if lm, err2 := parseTransformCSSRef(v, c.icon.ViewBox.W, c.icon.ViewBox.H); err2 == nil {
+				curStyle.mAdder.M = curStyle.mAdder.M.Mult(lm)
+				return nil
+			}
 			return err
 		}
 		curStyle.mAdder.M = m
@@ -432,6 +458,16 @@ func (c *iconCursor) addPath(tag string) {
 	pathCopy := make(rasterx.Path, len(c.Path))
 	copy(pathCopy, c.Path)
 	style := c.StyleStack[len(c.StyleStack)-1]
+	// If an explicit CSS color was set on this element or an ancestor, resolve
+	// currentColor statically for the legacy path so root CurrentColor doesn't override it.
+	if style.color != nil {
+		if style.fillerColor.current {
+			style.fillerColor = paint{color: toNRGBA(style.color)}
+		}
+		if style.linerColor.current {
+			style.linerColor = paint{color: toNRGBA(style.color)}
+		}
+	}
 	c.icon.SVGPaths = append(c.icon.SVGPaths, SvgPath{style, pathCopy})
 	c.Path = c.Path[:0]
 	c.addMarkers(tag, pathCopy, style)
@@ -442,8 +478,8 @@ func (c *iconCursor) adaptClasses(pathStyle *PathStyle, className string) error 
 		return nil
 	}
 	for _, cls := range strings.Fields(className) {
-		for k, v := range c.icon.classes[cls] {
-			if err := c.readStyleAttr(pathStyle, k, v); err != nil {
+		for _, d := range c.icon.classes[cls] {
+			if err := c.readStyleAttr(pathStyle, strings.ToLower(d.Name), d.Value); err != nil {
 				return err
 			}
 		}

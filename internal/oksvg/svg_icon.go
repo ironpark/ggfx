@@ -8,6 +8,7 @@ import (
 	"image"
 
 	"github.com/ironpark/ggfx/internal/rasterx"
+	"github.com/ironpark/ggfx/internal/svganim"
 )
 
 // SvgIcon holds data from parsed SVGs.
@@ -19,7 +20,11 @@ type SvgIcon struct {
 	clips     map[string]*captured // clipPath and mask elements, by id
 	markers   map[string]*captured // marker elements, by id
 	Transform rasterx.Matrix2D
-	classes   map[string]styleAttribute
+	classes   map[string][]svganim.Decl
+
+	scene               *scene
+	usesCurrentColor    bool
+	gradHasCurrentColor bool
 }
 
 // Draw the compiled SVG icon with p.
@@ -31,6 +36,18 @@ func (s *SvgIcon) Draw(p *Painter, opacity float64) {
 // DrawTransformed draws the icon as Draw does, under t in place of its
 // Transform. It changes nothing in s.
 func (s *SvgIcon) DrawTransformed(p *Painter, opacity float64, t rasterx.Matrix2D) {
+	if s.needsSceneForStatic() {
+		fr := framePool.Get().(*frame)
+		s.scene.evaluate(fr, &EvalOptions{Animate: false})
+		renderFrame(p, fr, nil, opacity, t)
+		fr.reset()
+		framePool.Put(fr)
+		return
+	}
+	s.drawLegacyTransformed(p, opacity, t)
+}
+
+func (s *SvgIcon) drawLegacyTransformed(p *Painter, opacity float64, t rasterx.Matrix2D) {
 	// Each clip or mask is drawn once a drawing, for every shape under it.
 	var masks map[*clipUse]*image.Alpha
 	for i := range s.SVGPaths {

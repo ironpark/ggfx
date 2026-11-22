@@ -6,6 +6,7 @@ package oksvg
 
 import (
 	"image"
+	"image/color"
 	"math"
 
 	"golang.org/x/image/math/fixed"
@@ -28,6 +29,10 @@ func (svgp *SvgPath) DrawTransformed(p *Painter, opacity float64, t rasterx.Matr
 // through mask where it is not nil; see clip.go. It leaves svgp as it is,
 // so that a document can be drawn from goroutines at once.
 func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D, mask *image.Alpha) {
+	svgp.drawThroughTrim(p, opacity, t, mask, trimSpec{}, nil)
+}
+
+func (svgp *SvgPath) drawThroughTrim(p *Painter, opacity float64, t rasterx.Matrix2D, mask *image.Alpha, trim trimSpec, lt *lengthTable) {
 	if mask != nil && mask.Rect.Empty() {
 		return
 	}
@@ -44,10 +49,14 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 		adder.Adder = rf
 		svgp.Path.AddTo(adder)
 		rf.SetWinding(svgp.UseNonZeroWinding)
-		rf.SetPaint(through(svgp.fillerColor.paint(svgp.Path, svgp.FillOpacity*opacity, adder.M), mask))
+		rf.SetPaint(through(svgp.fillerColor.paint(p, svgp.Path, svgp.FillOpacity*opacity, adder.M), mask))
 		rf.Draw()
 	}
 	if !svgp.linerColor.none() && svgp.LineWidth > 0 {
+		tMode, trimA, trimB := trim.classify()
+		if tMode == trimEmpty {
+			return
+		}
 		r.Clear()
 		// A stroke's outline overlaps itself where it turns: non-zero
 		// fills it all, whatever the fill's rule.
@@ -105,8 +114,15 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 		r.SetStroke(2*fixed.Int26_6(math.Round(svgp.LineWidth*scale*32)),
 			fixed.Int26_6(svgp.MiterLimit*64), leadLineCap, lineCap,
 			lineGap, svgp.LineJoin, dash, svgp.DashOffset*scale)
-		svgp.Path.AddTo(adder)
-		r.SetPaint(through(svgp.linerColor.paint(svgp.Path, svgp.LineOpacity*opacity, m), mask))
+		if tMode == trimCut {
+			if lt == nil {
+				lt = buildLengthTable(svgp.Path)
+			}
+			emitTrimmedStroke(lt, trimA, trimB, adder.M, r, len(r.Dashes) > 0, svgp.DashOffset, scale)
+		} else {
+			svgp.Path.AddTo(adder)
+		}
+		r.SetPaint(through(svgp.linerColor.paint(p, svgp.Path, svgp.LineOpacity*opacity, m), mask))
 		r.Draw()
 	}
 }
@@ -114,11 +130,18 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 // paint is p as drawn at opacity for path, in the user space m maps: a
 // gradient in that space or in the path's bounding box there, its fill's,
 // for the stroke too, which SVG leaves out of it.
-func (p paint) paint(path rasterx.Path, opacity float64, m rasterx.Matrix2D) rasterx.Paint {
+func (p paint) paint(painter *Painter, path rasterx.Path, opacity float64, m rasterx.Matrix2D) rasterx.Paint {
+	if p.current {
+		c := painter.currentColor
+		if c == nil {
+			c = color.NRGBA{0, 0, 0, 0xff}
+		}
+		return rasterx.ColorPaint(rasterx.ApplyOpacity(c, opacity))
+	}
 	if p.grad == nil {
 		return rasterx.ColorPaint(rasterx.ApplyOpacity(p.color, opacity))
 	}
-	g := *p.grad
+	g := *painter.resolveGrad(p.grad, painter.currentColor)
 	if g.Units == rasterx.ObjectBoundingBox {
 		minX, minY, maxX, maxY := path.Bounds()
 		if minX >= maxX || minY >= maxY {

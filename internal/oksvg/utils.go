@@ -5,7 +5,6 @@
 package oksvg
 
 import (
-	"errors"
 	"image/color"
 	"strconv"
 	"strings"
@@ -61,58 +60,6 @@ func splitOnCommaOrSpace(s string) []string {
 		func(r rune) bool {
 			return r == ',' || r == ' '
 		})
-}
-
-func parseClasses(data string) (map[string]styleAttribute, error) {
-	res := map[string]styleAttribute{}
-	arr := strings.SplitSeq(data, "}")
-	for v := range arr {
-		v = strings.TrimSpace(v)
-		if v == "" {
-			continue
-		}
-		classesStr, attrStr, ok := strings.Cut(v, "{")
-		if !ok || attrStr == "" {
-			return res, errors.New(v + "}: invalid map format in class definitions")
-		}
-		attrMap, err := parseAttrs(attrStr)
-		if err != nil {
-			return res, err
-		}
-		classes := strings.SplitSeq(classesStr, ",")
-		for class := range classes {
-			class = strings.TrimSpace(class)
-			if len(class) > 0 && class[0] == '.' {
-				class = class[1:]
-			}
-			for attrKey, attrVal := range attrMap {
-				if res[class] == nil {
-					res[class] = make(styleAttribute, len(attrMap))
-				}
-				res[class][attrKey] = attrVal
-			}
-		}
-	}
-	return res, nil
-}
-
-func parseAttrs(attrStr string) (styleAttribute, error) {
-	arr := strings.Split(attrStr, ";")
-	res := make(styleAttribute, len(arr))
-	for _, kv := range arr {
-		kv = strings.TrimSpace(kv)
-		if kv == "" {
-			continue
-		}
-		tmp := strings.SplitN(kv, ":", 2)
-		if len(tmp) != 2 {
-			return res, errors.New(kv + ": invalid attribute format")
-		}
-		k := strings.TrimSpace(tmp[0])
-		v := strings.TrimSpace(tmp[1])
-		res[k] = v
-	}
-	return res, nil
 }
 
 func readFraction(v string) (f float64, err error) {
