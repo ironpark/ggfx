@@ -20,18 +20,21 @@ import (
 var unitSuffixes = []string{"cm", "mm", "px", "pt"}
 
 func parseColorValue(v string) (uint8, error) {
+	v = strings.TrimSpace(v)
 	if before, ok := strings.CutSuffix(v, "%"); ok {
 		n, err := strconv.Atoi(strings.TrimSpace(before))
 		if err != nil {
 			return 0, err
 		}
+		n = max(0, min(n, 100))
 		return uint8(n * 0xFF / 100), nil
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if n > 255 {
-		n = 255
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, err
 	}
-	return uint8(n), err
+	n = max(0, min(n, 255))
+	return uint8(n), nil
 }
 
 // trimSuffixes removes unitSuffixes from any number that is not just numeric
@@ -48,7 +51,7 @@ func trimSuffixes(a string) (b string) {
 
 // parseFloat is a helper function that strips suffixes before passing to strconv.ParseFloat
 func parseFloat(s string, bitSize int) (float64, error) {
-	val := trimSuffixes(s)
+	val := trimSuffixes(strings.TrimSpace(s))
 	return strconv.ParseFloat(val, bitSize)
 }
 

@@ -97,17 +97,21 @@ func urlID(v string) string {
 func (c *iconCursor) expandCaptured(def *captured, m rasterx.Matrix2D, add bool) ([]SvgPath, error) {
 	start := len(c.icon.SVGPaths)
 	stack := c.StyleStack
+	inDefs := c.inDefs
+	c.inDefs = false
+	defer func() {
+		c.inDefs = inDefs
+		c.StyleStack = stack
+	}()
 	base := defaultStyle
 	base.mAdder.M = m
 	c.StyleStack = []PathStyle{base}
 	// The element's own transform, as a clipPath's, places what it holds,
 	// and its rules are its shapes'.
 	if err := c.PushStyle(placing(def.attrs)); err != nil {
-		c.StyleStack = stack
 		return nil, err
 	}
 	err := c.expandDefs(def.defs)
-	c.StyleStack = stack
 	if add || err != nil {
 		return nil, err
 	}

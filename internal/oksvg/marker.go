@@ -41,8 +41,14 @@ func (c *iconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) {
 		if def == nil {
 			continue
 		}
+		start := len(c.icon.SVGPaths)
 		if _, err := c.expandCaptured(def, markerAt(def, v, first, style), true); err != nil {
 			return
+		}
+		if style.clip != nil {
+			for j := start; j < len(c.icon.SVGPaths); j++ {
+				c.icon.SVGPaths[j].clip = chainClip(c.icon.SVGPaths[j].clip, style.clip)
+			}
 		}
 	}
 }
@@ -79,10 +85,9 @@ func markerAt(def *captured, v vertex, first bool, style PathStyle) rasterx.Matr
 	sx, sy := 1.0, 1.0
 	if len(box) == 4 && box[2] > 0 && box[3] > 0 {
 		// Meet: the box's shape kept, its larger side filling the marker.
+		// refX and refY are already in the marker's viewBox coordinate system (SVG 1.1 §11.6.2).
 		s := min(w/box[2], h/box[3])
 		sx, sy = s, s
-		refX -= box[0]
-		refY -= box[1]
 	}
 	if strokeUnits {
 		sx *= style.LineWidth

@@ -213,3 +213,44 @@ func TestGradientStopOffsets(t *testing.T) {
 		t.Errorf("stops %v; want %v", got, want)
 	}
 }
+
+func TestParseSVGColorCaseClampAndUnresolvedURL(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want color.Color
+	}{
+		{"RGB( 255 , 0 , 50% )", color.NRGBA{0xff, 0, 0x7f, 0xff}},
+		{"rgb(-10, 300, 150%)", color.NRGBA{0, 0xff, 0xff, 0xff}},
+		{"HSL(-120, 100%, 50%)", color.NRGBA{0, 0, 0xff, 0xff}},
+		{"hsl(480, 100%, 50%)", color.NRGBA{0, 0xff, 0, 0xff}},
+		{"hsl(0, 100%, -50%)", color.NRGBA{0, 0, 0, 0xff}},
+	} {
+		got, err := oksvg.ParseSVGColor(tc.in)
+		if err != nil {
+			t.Errorf("ParseSVGColor(%q): %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("ParseSVGColor(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+	if _, err := oksvg.ParseSVGColor("url(#missing)"); err == nil {
+		t.Error("ParseSVGColor(url(#missing)) must return an error")
+	}
+}
+
+func TestReadBinaryRejectsUnknownFlags(t *testing.T) {
+	icon, err := oksvg.ReadIconStream(strings.NewReader(`<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#f00"/></svg>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := icon.AppendBinary(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Version (1) + 4 float32s (4*5=20) + path count (1) = offset 22 is the first path's flag byte.
+	data[22] |= 0x80
+	if _, err := oksvg.ReadBinary(data); err == nil {
+		t.Error("ReadBinary accepted unknown flag bit 0x80")
+	}
+}

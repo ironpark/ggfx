@@ -26,7 +26,7 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 	icon := &SvgIcon{Defs: make(map[string][]definition), Grads: make(map[string]*rasterx.Gradient), Transform: rasterx.Identity,
 		clips: map[string]*captured{}, markers: map[string]*captured{}}
 	cursor := &iconCursor{StyleStack: []PathStyle{defaultStyle}, icon: icon}
-	var classInfo string
+	var classInfo strings.Builder
 	decoder := xml.NewDecoder(stream)
 	for {
 		t, err := decoder.Token()
@@ -39,18 +39,20 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 		// Inspect the type of the XML token
 		switch se := t.(type) {
 		case xml.StartElement:
-			// Reads all recognized style attributes from the start element
-			// and places it on top of the styleStack
-			err = cursor.PushStyle(se.Attr)
-			if err != nil {
-				return icon, err
+			// Inside <defs> or a captured <clipPath>/<mask>/<marker>, elements are stored
+			// for later expansion (which runs PushStyle), so avoid parsing style attributes
+			// prematurely (and keep StyleStack balanced for EndElement).
+			if cursor.inDefs || cursor.capture != nil {
+				cursor.StyleStack = append(cursor.StyleStack, cursor.StyleStack[len(cursor.StyleStack)-1])
+			} else {
+				err = cursor.PushStyle(se.Attr)
+				if err != nil {
+					return icon, err
+				}
 			}
 			err = cursor.readStartElement(se)
 			if err != nil {
 				return icon, err
-			}
-			if se.Name.Local == "style" && cursor.inDefs {
-				cursor.inDefsStyle = true
 			}
 		case xml.EndElement:
 			// pop style
@@ -58,34 +60,55 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 			if cursor.endCapture(se) {
 				continue
 			}
-			switch se.Name.Local {
-			case "g":
-				if cursor.inDefs {
-					cursor.currentDef = append(cursor.currentDef, definition{
-						Tag: "endg",
-					})
+			if se.Name.Local == "style" && cursor.inDefsStyle {
+				parsed, err := parseClasses(classInfo.String())
+				classInfo.Reset()
+				cursor.inDefsStyle = false
+				if err != nil {
+					return icon, err
 				}
-			case "defs":
-				if len(cursor.currentDef) > 0 {
-					cursor.icon.Defs[cursor.currentDef[0].ID] = cursor.currentDef
-					cursor.currentDef = make([]definition, 0)
-				}
-				cursor.inDefs = false
-			case "radialGradient", "linearGradient":
-				cursor.inGrad = false
-
-			case "style":
-				if cursor.inDefsStyle {
-					icon.classes, err = parseClasses(classInfo)
-					if err != nil {
-						return icon, err
+				if icon.classes == nil {
+					icon.classes = parsed
+				} else {
+					for cls, attrs := range parsed {
+						if icon.classes[cls] == nil {
+							icon.classes[cls] = attrs
+							continue
+						}
+						for k, v := range attrs {
+							icon.classes[cls][k] = v
+						}
 					}
-					cursor.inDefsStyle = false
+				}
+				continue
+			}
+			if se.Name.Local == "radialGradient" || se.Name.Local == "linearGradient" {
+				cursor.inGrad = false
+				continue
+			}
+			if cursor.inDefs && !cursor.inGrad {
+				if se.Name.Local == "defs" && cursor.defsDepth == 0 {
+					cursor.defStack = cursor.defStack[:0]
+					cursor.inDefs = false
+					continue
+				}
+				if cursor.defsDepth > 0 {
+					cursor.defsDepth--
+					if se.Name.Local == "g" {
+						for i := range cursor.defStack {
+							cursor.defStack[i].defs = append(cursor.defStack[i].defs, definition{Tag: "endg"})
+						}
+					}
+					for len(cursor.defStack) > 0 && cursor.defStack[len(cursor.defStack)-1].depth == cursor.defsDepth {
+						top := cursor.defStack[len(cursor.defStack)-1]
+						cursor.defStack = cursor.defStack[:len(cursor.defStack)-1]
+						cursor.icon.Defs[top.id] = top.defs
+					}
 				}
 			}
 		case xml.CharData:
 			if cursor.inDefsStyle {
-				classInfo = string(se)
+				classInfo.Write(se)
 			}
 		}
 	}
@@ -125,11 +148,9 @@ func parseSVGColorNum(colorStr string) (r, g, b uint8, err error) {
 // ParseSVGColor parses an SVG color string in all forms
 // including all SVG1.1 names, obtained from the image.colornames package
 func ParseSVGColor(colorStr string) (color.Color, error) {
-	// _, _, _, a := curColor.RGBA()
-	v := strings.ToLower(colorStr)
-	if strings.HasPrefix(v, "url") { // We are not handling urls
-		// and gradients and stuff at this point
-		return color.NRGBA{0, 0, 0, 255}, nil
+	v := strings.ToLower(strings.TrimSpace(colorStr))
+	if strings.HasPrefix(v, "url(") {
+		return nil, fmt.Errorf("oksvg: unresolved paint server %q", colorStr)
 	}
 	switch v {
 	case "none", "":
@@ -142,9 +163,11 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 			return color.NRGBA{cn.R, cn.G, cn.B, cn.A}, nil
 		}
 	}
-	cStr := strings.TrimPrefix(colorStr, "rgb(")
-	if cStr != colorStr {
-		cStr := strings.TrimSuffix(cStr, ")")
+	if cStr, ok := strings.CutPrefix(v, "rgb("); ok {
+		cStr, ok = strings.CutSuffix(cStr, ")")
+		if !ok {
+			return color.NRGBA{}, errParamMismatch
+		}
 		vals := strings.Split(cStr, ",")
 		if len(vals) != 3 {
 			return color.NRGBA{}, errParamMismatch
@@ -160,33 +183,39 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 		return color.NRGBA{cvals[0], cvals[1], cvals[2], 0xFF}, nil
 	}
 
-	cStr = strings.TrimPrefix(colorStr, "hsl(")
-	if cStr != colorStr {
-		cStr := strings.TrimSuffix(cStr, ")")
+	if cStr, ok := strings.CutPrefix(v, "hsl("); ok {
+		cStr, ok = strings.CutSuffix(cStr, ")")
+		if !ok {
+			return color.NRGBA{}, errParamMismatch
+		}
 		vals := strings.Split(cStr, ",")
 		if len(vals) != 3 {
 			return color.NRGBA{}, errParamMismatch
 		}
 
-		H, err := strconv.ParseInt(strings.TrimSpace(vals[0]), 10, 64)
-		if err != nil {
-			return color.NRGBA{}, fmt.Errorf("invalid hue in hsl: '%s' (%s)", vals[0], err)
+		H, err := strconv.ParseFloat(strings.TrimSpace(vals[0]), 64)
+		if err != nil || math.IsNaN(H) || math.IsInf(H, 0) {
+			return color.NRGBA{}, fmt.Errorf("invalid hue in hsl: '%s' (%v)", vals[0], err)
+		}
+		H = math.Mod(H, 360)
+		if H < 0 {
+			H += 360
 		}
 
 		S, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(vals[1]), "%"), 64)
-		if err != nil {
-			return color.NRGBA{}, fmt.Errorf("invalid saturation in hsl: '%s' (%s)", vals[1], err)
+		if err != nil || math.IsNaN(S) || math.IsInf(S, 0) {
+			return color.NRGBA{}, fmt.Errorf("invalid saturation in hsl: '%s' (%v)", vals[1], err)
 		}
-		S = S / 100
+		S = max(0, min(S/100, 1))
 
 		L, err := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(vals[2]), "%"), 64)
-		if err != nil {
-			return color.NRGBA{}, fmt.Errorf("invalid lightness in hsl: '%s' (%s)", vals[2], err)
+		if err != nil || math.IsNaN(L) || math.IsInf(L, 0) {
+			return color.NRGBA{}, fmt.Errorf("invalid lightness in hsl: '%s' (%v)", vals[2], err)
 		}
-		L = L / 100
+		L = max(0, min(L/100, 1))
 
 		C := (1 - math.Abs((2*L)-1)) * S
-		X := C * (1 - math.Abs(math.Mod((float64(H)/60), 2)-1))
+		X := C * (1 - math.Abs(math.Mod(H/60, 2)-1))
 		m := L - float64(C/2) // not fused, as on arm64
 
 		var rp, gp, bp float64
@@ -204,16 +233,9 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 			rp, gp, bp = float64(C), float64(0), float64(X)
 		}
 
-		r, g, b := math.Round((rp+m)*255), math.Round((gp+m)*255), math.Round((bp+m)*255)
-		if r > 255 {
-			r = 255
-		}
-		if g > 255 {
-			g = 255
-		}
-		if b > 255 {
-			b = 255
-		}
+		r := max(0, min(math.Round((rp+m)*255), 255))
+		g := max(0, min(math.Round((gp+m)*255), 255))
+		b := max(0, min(math.Round((bp+m)*255), 255))
 
 		return color.NRGBA{
 			uint8(r),
@@ -223,8 +245,8 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 		}, nil
 	}
 
-	if colorStr[0] == '#' {
-		r, g, b, err := parseSVGColorNum(colorStr)
+	if v[0] == '#' {
+		r, g, b, err := parseSVGColorNum(v)
 		if err != nil {
 			return nil, err
 		}

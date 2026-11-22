@@ -47,7 +47,14 @@ var ErrNoBinaryForm = oksvg.ErrNoBinaryForm
 //
 // The form is versioned: a later ggfx reads what an earlier one wrote.
 func (d *Document) MarshalBinary() ([]byte, error) {
-	b, err := d.icon.AppendBinary(nil)
+	var icon *oksvg.SvgIcon
+	if d != nil {
+		icon = d.icon
+	}
+	if icon == nil {
+		icon = &oksvg.SvgIcon{}
+	}
+	b, err := icon.AppendBinary(nil)
 	if err != nil {
 		return nil, fmt.Errorf("svg: %w", err)
 	}
@@ -68,6 +75,9 @@ func (d *Document) UnmarshalBinary(data []byte) error {
 // ViewBox returns the rectangle of the document's user space that its
 // viewBox attribute names as the picture.
 func (d *Document) ViewBox() (x, y, width, height float64) {
+	if d == nil || d.icon == nil {
+		return 0, 0, 0, 0
+	}
 	b := d.icon.ViewBox
 	return b.X, b.Y, b.W, b.H
 }
@@ -75,7 +85,13 @@ func (d *Document) ViewBox() (x, y, width, height float64) {
 // Draw draws the document over dst, with geoM mapping its user space to
 // dst's pixels.
 func (d *Document) Draw(dst *image.RGBA, geoM ggfx.GeoM) {
+	if d == nil || d.icon == nil || dst == nil {
+		return
+	}
 	b := dst.Bounds()
+	if b.Empty() {
+		return
+	}
 	p := painters.Get()
 	p.Scanner.Dest, p.Scanner.Targ = dst, b
 	p.Dasher.SetBounds(b.Dx(), b.Dy())

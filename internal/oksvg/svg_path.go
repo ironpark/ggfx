@@ -44,7 +44,7 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 		rf.SetPaint(through(svgp.fillerColor.paint(svgp.Path, svgp.FillOpacity*opacity, adder.M), mask))
 		rf.Draw()
 	}
-	if !svgp.linerColor.none() {
+	if !svgp.linerColor.none() && svgp.LineWidth > 0 {
 		r.Clear()
 		// A stroke's outline overlaps itself where it turns: non-zero
 		// fills it all, whatever the fill's rule.
@@ -73,9 +73,9 @@ func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D
 		// stroker rounds to a 64th stays within a 64th of a pixel, and
 		// curves are flattened finely enough for the pixels they cover.
 		m := adder.M
-		sq := m.A*m.A + m.B*m.B + m.C*m.C + m.D*m.D
-		det := m.A*m.D - m.B*m.C
-		scale := math.Sqrt((sq + math.Sqrt(max(sq*sq-4*det*det, 0))) / 2)
+		sq := float64(m.A*m.A) + float64(m.B*m.B) + float64(m.C*m.C) + float64(m.D*m.D)
+		det := float64(m.A*m.D) - float64(m.B*m.C)
+		scale := math.Sqrt((sq + math.Sqrt(max(float64(sq*sq)-float64(4*det*det), 0))) / 2)
 		if scale == 0 {
 			return // nothing of the picture is left to see
 		}

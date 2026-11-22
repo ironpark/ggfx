@@ -35,9 +35,13 @@ var (
 func (c *pathCursor) ReadFloat(numStr string) error {
 	var last int
 	isFirst := true
+	hasExp := false
 	for i, n := range numStr {
-		if n == '.' {
-			if isFirst {
+		switch n {
+		case 'e', 'E':
+			hasExp = true
+		case '.':
+			if isFirst && !hasExp {
 				isFirst = false
 				continue
 			}
@@ -47,6 +51,8 @@ func (c *pathCursor) ReadFloat(numStr string) error {
 			}
 			c.points = append(c.points, f)
 			last = i
+			isFirst = false
+			hasExp = false
 		}
 	}
 	f, err := parseFloat(numStr[last:], 64)
@@ -64,13 +70,14 @@ func (c *pathCursor) GetPoints(dataPoints string) error {
 	c.points = c.points[0:0]
 	lr := ' '
 	for i, r := range dataPoints {
-		if !unicode.IsNumber(r) && r != '.' && !(r == '-' && lr == 'e') && r != 'e' {
+		isExpSign := (r == '-' || r == '+') && (lr == 'e' || lr == 'E')
+		if !unicode.IsNumber(r) && r != '.' && !isExpSign && r != 'e' && r != 'E' {
 			if lastIndex != -1 {
 				if err := c.ReadFloat(dataPoints[lastIndex:i]); err != nil {
 					return err
 				}
 			}
-			if r == '-' {
+			if r == '-' || r == '+' {
 				lastIndex = i
 			} else {
 				lastIndex = -1
@@ -105,6 +112,18 @@ func (c *pathCursor) EllipseAt(cx, cy, rx, ry float64) {
 // points are the arc's own seven, which a command of several arcs has after
 // those of the arcs before it.
 func (c *pathCursor) AddArcFromA(points []float64) {
+	// SVG 1.1 Appendix F.6.2: coincident endpoints omit the arc; zero radii draw a straight line;
+	// negative radii use their absolute values.
+	if c.placeX == points[5] && c.placeY == points[6] {
+		return
+	}
+	points[0] = math.Abs(points[0])
+	points[1] = math.Abs(points[1])
+	if points[0] == 0 || points[1] == 0 {
+		c.placeX, c.placeY = points[5], points[6]
+		c.Path.Line(rasterx.ToFixedP(c.placeX, c.placeY))
+		return
+	}
 	cx, cy := rasterx.FindEllipseCenter(&points[0], &points[1], points[2]*math.Pi/180, c.placeX,
 		c.placeY, points[5], points[6], points[4] == 0, points[3] == 0)
 	c.placeX, c.placeY = rasterx.AddArc(points, cx, cy, c.placeX, c.placeY, &c.Path)
@@ -117,7 +136,7 @@ func (c *pathCursor) CompilePath(svgPath string) error {
 	c.init()
 	lastIndex := -1
 	for i, v := range svgPath {
-		if unicode.IsLetter(v) && v != 'e' {
+		if unicode.IsLetter(v) && v != 'e' && v != 'E' {
 			if lastIndex != -1 {
 				if err := c.addSeg(svgPath[lastIndex:i]); err != nil {
 					return err

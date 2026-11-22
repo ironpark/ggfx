@@ -56,6 +56,7 @@ const (
 	// binarySame: painted, stroked and transformed as the path before it,
 	// which most of an icon's paths are, so none of that follows.
 	binarySame
+	binaryKnownFlags = binaryFill | binaryLine | binaryNonZero | binaryMatrix | binarySame
 )
 
 // AppendBinary appends the icon's binary form to b.
@@ -194,10 +195,10 @@ func (r *binaryReader) float() float64 {
 	return 0
 }
 
-// count reads a length, which no form has more of than it has bytes left.
-func (r *binaryReader) count() int {
+// countFor reads a length of records each at least minItemBytes bytes long.
+func (r *binaryReader) countFor(minItemBytes int) int {
 	v, n := binary.Uvarint(r.b)
-	if n <= 0 || v > uint64(len(r.b)-n) {
+	if n <= 0 || v > uint64(len(r.b)-n)/uint64(minItemBytes) {
 		r.fail()
 		return 0
 	}
@@ -210,7 +211,7 @@ func (r *binaryReader) color() color.NRGBA {
 }
 
 func (r *binaryReader) path() rasterx.Path {
-	p := make(rasterx.Path, r.count())
+	p := make(rasterx.Path, r.countFor(1))
 	for j := range p {
 		v, n := binary.Varint(r.b)
 		if n <= 0 || v < math.MinInt32 || v > math.MaxInt32 {
@@ -233,12 +234,15 @@ func ReadBinary(data []byte) (*SvgIcon, error) {
 	}
 	s := &SvgIcon{Transform: rasterx.Identity}
 	s.ViewBox.X, s.ViewBox.Y, s.ViewBox.W, s.ViewBox.H = r.float(), r.float(), r.float(), r.float()
-	s.SVGPaths = make([]SvgPath, r.count())
+	s.SVGPaths = make([]SvgPath, r.countFor(2))
 	for i := range s.SVGPaths {
 		p := &s.SVGPaths[i]
 		p.PathStyle = defaultStyle
 		p.fillerColor = paint{}
 		flags := r.byte()
+		if flags&^binaryKnownFlags != 0 {
+			return nil, errBinary
+		}
 		if flags&binarySame != 0 {
 			if i == 0 || flags != binarySame {
 				return nil, errBinary
@@ -263,7 +267,7 @@ func ReadBinary(data []byte) (*SvgIcon, error) {
 			}
 			p.LineCap, p.LeadLineCap, p.LineGap, p.LineJoin = binaryCaps[lineCap], binaryCaps[lead], binaryGaps[gap], rasterx.JoinMode(join)
 			p.LineOpacity, p.LineWidth, p.MiterLimit, p.DashOffset = r.float(), r.float(), r.float(), r.float()
-			if n := r.count(); n > 0 {
+			if n := r.countFor(5); n > 0 {
 				p.Dash = make([]float64, n)
 				for j := range p.Dash {
 					p.Dash[j] = r.float()

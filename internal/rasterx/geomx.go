@@ -72,7 +72,7 @@ func (p Path) ToSVGPath() string {
 				float32(p[i+3])/64, float32(p[i+4])/64)
 			i += 5
 		case PathCubicTo:
-			s += "C" + fmt.Sprintf("C%4.3f,%4.3f,%4.3f,%4.3f,%4.3f,%4.3f", float32(p[i+1])/64, float32(p[i+2])/64,
+			s += fmt.Sprintf("C%4.3f,%4.3f,%4.3f,%4.3f,%4.3f,%4.3f", float32(p[i+1])/64, float32(p[i+2])/64,
 				float32(p[i+3])/64, float32(p[i+4])/64, float32(p[i+5])/64, float32(p[i+6])/64)
 			i += 7
 		case PathClose:
@@ -273,8 +273,8 @@ func ClosestPortside(bow, stern, p1, p2 fixed.Point26_6, isIntersecting bool) (x
 	dir := bow.Sub(stern)
 	dp1 := p1.Sub(stern)
 	dp2 := p2.Sub(stern)
-	cp1 := dir.X*dp1.Y - dp1.X*dir.Y
-	cp2 := dir.X*dp2.Y - dp2.X*dir.Y
+	cp1 := int64(dir.X)*int64(dp1.Y) - int64(dp1.X)*int64(dir.Y)
+	cp2 := int64(dir.X)*int64(dp2.Y) - int64(dp2.X)*int64(dir.Y)
 	switch {
 	case cp1 < 0 && cp2 < 0:
 		return
@@ -284,11 +284,14 @@ func ClosestPortside(bow, stern, p1, p2 fixed.Point26_6, isIntersecting bool) (x
 		return p1, true
 	default: // both points on port side
 		dirdot := DotProd(dir, dir)
+		if dirdot == 0 {
+			return p1, true
+		}
 		// calculate vector rejections of dp1 and dp2 onto dir
 		h1 := dp1.Sub(dir.Mul(fixed.Int26_6((DotProd(dp1, dir) << 6) / dirdot)))
 		h2 := dp2.Sub(dir.Mul(fixed.Int26_6((DotProd(dp2, dir) << 6) / dirdot)))
 		// return point with smallest vector rejection; i.e. closest to dir line
-		if (h1.X*h1.X + h1.Y*h1.Y) > (h2.X*h2.X + h2.Y*h2.Y) {
+		if DotProd(h1, h1) > DotProd(h2, h2) {
 			return p2, true
 		}
 		return p1, true
@@ -302,12 +305,16 @@ func ClosestPortside(bow, stern, p1, p2 fixed.Point26_6, isIntersecting bool) (x
 func RadCurvature(p0, p1, p2 fixed.Point26_6, dm fixed.Int52_12) fixed.Int26_6 {
 	a, b := p2.Sub(p1), p1.Sub(p0)
 	abdot, bbdot := DotProd(a, b), DotProd(b, b)
-	h := a.Sub(b.Mul(fixed.Int26_6((abdot << 6) / bbdot))) // h is the vector rejection of a onto b
-	if h.X == 0 && h.Y == 0 {                              // points are co-linear
+	if bbdot == 0 {
 		return 0
 	}
-	radCurve := fixed.Int26_6((fixed.Int52_12(a.X*a.X+a.Y*a.Y) * dm / fixed.Int52_12(Length(h)<<6)) >> 6)
-	if a.X*b.Y > b.X*a.Y { // xprod sign
+	h := a.Sub(b.Mul(fixed.Int26_6((abdot << 6) / bbdot))) // h is the vector rejection of a onto b
+	lenH := Length(h)
+	if lenH == 0 { // points are co-linear
+		return 0
+	}
+	radCurve := fixed.Int26_6((DotProd(a, a) * dm / fixed.Int52_12(lenH<<6)) >> 6)
+	if int64(a.X)*int64(b.Y) > int64(b.X)*int64(a.Y) { // xprod sign
 		return radCurve
 	}
 	return -radCurve
@@ -318,6 +325,9 @@ func RadCurvature(p0, p1, p2 fixed.Point26_6, dm fixed.Int52_12) fixed.Int26_6 {
 func CircleCircleIntersection(ct, cl fixed.Point26_6, rt, rl fixed.Int26_6) (xt1, xt2 fixed.Point26_6, intersects bool) {
 	dc := cl.Sub(ct)
 	d := Length(dc)
+	if d == 0 {
+		return // Concentric circles have no unique intersection points.
+	}
 
 	// Check for solvability.
 	if d > (rt + rl) {
@@ -330,7 +340,11 @@ func CircleCircleIntersection(ct, cl fixed.Point26_6, rt, rl fixed.Int26_6) (xt1
 
 	rlf, rtf, df := float64(rl), float64(rt), float64(d)
 	af := float64((float64(rtf*rtf)-float64(rlf*rlf)+float64(df*df))/df) / 2.0
-	hfd := math.Sqrt(float64(rtf*rtf)-float64(af*af)) / df
+	h2 := float64(rtf*rtf) - float64(af*af)
+	if h2 < 0 {
+		h2 = 0
+	}
+	hfd := math.Sqrt(h2) / df
 	afd := af / df
 
 	rOffx, rOffy := float64(float64(-dc.Y)*hfd), float64(float64(dc.X)*hfd)
@@ -342,13 +356,18 @@ func CircleCircleIntersection(ct, cl fixed.Point26_6, rt, rl fixed.Int26_6) (xt1
 		fixed.Point26_6{X: fixed.Int26_6(xt2x), Y: fixed.Int26_6(xt2y)}, true
 }
 
-// CalcIntersect calculates the points of intersection of two fixed point lines
-// and panics if the determinate is zero. You have been warned.
+// CalcIntersect calculates the points of intersection of two fixed point lines.
 func CalcIntersect(a1, a2, b1, b2 fixed.Point26_6) (x fixed.Point26_6) {
 	da, db, ds := a2.Sub(a1), b2.Sub(b1), a1.Sub(b1)
-	det := float32(da.X*db.Y - db.X*da.Y) // Determinate
-	t := float32(ds.Y*db.X-ds.X*db.Y) / det
-	x = a1.Add(fixed.Point26_6{X: fixed.Int26_6(float32(da.X) * t), Y: fixed.Int26_6(float32(da.Y) * t)})
+	det := float64(int64(da.X)*int64(db.Y) - int64(db.X)*int64(da.Y))
+	if det == 0 {
+		return a1.Add(b1).Mul(fixed.Int26_6(1 << 5))
+	}
+	t := float64(int64(ds.Y)*int64(db.X)-int64(ds.X)*int64(db.Y)) / det
+	x = a1.Add(fixed.Point26_6{
+		X: fixed.Int26_6(float64(da.X) * t),
+		Y: fixed.Int26_6(float64(da.Y) * t),
+	})
 	return
 }
 

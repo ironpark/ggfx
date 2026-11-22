@@ -39,14 +39,10 @@ func (s *SvgIcon) DrawTransformed(p *Painter, opacity float64, t rasterx.Matrix2
 			svgp.DrawTransformed(p, opacity, t)
 			continue
 		}
-		mask, ok := masks[svgp.clip]
-		if !ok {
-			mask = svgp.clip.maskImage(p, t)
-			if masks == nil {
-				masks = map[*clipUse]*image.Alpha{}
-			}
-			masks[svgp.clip] = mask
+		if masks == nil {
+			masks = map[*clipUse]*image.Alpha{}
 		}
+		mask := svgp.clip.maskImage(p, t, masks)
 		svgp.drawThrough(p, opacity, t, mask)
 	}
 }

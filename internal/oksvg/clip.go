@@ -20,11 +20,25 @@ import (
 // shapes overlap where the mask is partly light, as the fork already
 // applies a group's opacity shape by shape.
 
-// clipUse is a clip or mask as a style names it: its definition, and its
-// shapes placed where they apply.
+// clipUse is a clip or mask as a style names it: its definition, its shapes
+// placed where they apply, and any enclosing ancestor clip or mask.
 type clipUse struct {
-	def   *captured
-	paths []SvgPath
+	def    *captured
+	paths  []SvgPath
+	parent *clipUse
+}
+
+// chainClip returns a clip chain applying inner inside outer.
+func chainClip(inner, outer *clipUse) *clipUse {
+	if inner == nil {
+		return outer
+	}
+	if outer == nil {
+		return inner
+	}
+	cp := *inner
+	cp.parent = chainClip(inner.parent, outer)
+	return &cp
 }
 
 // compileClip places u's shapes in the user space m of the element naming
@@ -54,7 +68,14 @@ func (c *iconCursor) compileClip(u *clipUse, m rasterx.Matrix2D) error {
 // through, in an image over just the part of the target u's shapes cover,
 // the rest letting nothing through, placed as the target's pixels are to
 // the paint.
-func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D) *image.Alpha {
+func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D, cache map[*clipUse]*image.Alpha) *image.Alpha {
+	if m, ok := cache[u]; ok {
+		return m
+	}
+	var parentMask *image.Alpha
+	if u.parent != nil {
+		parentMask = u.parent.maskImage(p, t, cache)
+	}
 	b := p.Scanner.Dest.Bounds()
 	if p.clips == nil {
 		p.clips = NewPainter(0, 0, nil, image.Rectangle{})
@@ -88,6 +109,21 @@ func (u *clipUse) maskImage(p *Painter, t rasterx.Matrix2D) *image.Alpha {
 	// The paint is asked its color in the target's own coordinates, from
 	// 0 at its corner, not in the image's.
 	mask.Rect = mask.Rect.Sub(b.Min)
+	if parentMask != nil {
+		inter := mask.Rect.Intersect(parentMask.Rect)
+		combined := image.NewAlpha(inter)
+		for y := inter.Min.Y; y < inter.Max.Y; y++ {
+			for x := inter.Min.X; x < inter.Max.X; x++ {
+				a := uint32(mask.AlphaAt(x, y).A)
+				pa := uint32(parentMask.AlphaAt(x, y).A)
+				combined.SetAlpha(x, y, color.Alpha{A: uint8((a*pa + 127) / 255)})
+			}
+		}
+		mask = combined
+	}
+	if cache != nil {
+		cache[u] = mask
+	}
 	return mask
 }
 

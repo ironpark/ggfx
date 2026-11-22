@@ -5,6 +5,8 @@
 package rasterx
 
 import (
+	"math"
+
 	"golang.org/x/image/math/fixed"
 )
 
@@ -33,7 +35,23 @@ func (r *Dasher) joinF() {
 func (r *Dasher) Start(a fixed.Point26_6) {
 	// Advance dashPlace to the dashOffset start point and set deltaDash
 	if len(r.Dashes) > 0 {
-		r.deltaDash = r.DashOffset
+		var period int64
+		for _, d := range r.Dashes {
+			period += int64(d)
+		}
+		if period > 0 {
+			cycle := period
+			if len(r.Dashes)%2 != 0 {
+				cycle *= 2
+			}
+			off := int64(r.DashOffset) % cycle
+			if off < 0 {
+				off += cycle
+			}
+			r.deltaDash = fixed.Int26_6(off)
+		} else {
+			r.deltaDash = 0
+		}
 		r.dashIsGap = false
 		r.dashPlace = 0
 		for r.deltaDash > r.Dashes[r.dashPlace] {
@@ -107,6 +125,22 @@ func (r *Dasher) SetStroke(width, miterLimit fixed.Int26_6, capL, capT CapFunc, 
 		r.Dashes = r.Dashes[:0]
 		r.sgm = &r.Stroker // This is just plain stroking
 		return
+	}
+	var period float64
+	for _, d := range r.Dashes {
+		period += float64(d) / 64
+	}
+	if period > 0 && !math.IsNaN(dashOffset) && !math.IsInf(dashOffset, 0) {
+		cycle := period
+		if len(r.Dashes)%2 != 0 {
+			cycle *= 2
+		}
+		dashOffset = math.Mod(dashOffset, cycle)
+		if dashOffset < 0 {
+			dashOffset += cycle
+		}
+	} else {
+		dashOffset = 0
 	}
 	r.DashOffset = fixed.Int26_6(dashOffset * 64)
 	r.sgm = r // Use the full dasher

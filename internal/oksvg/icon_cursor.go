@@ -14,6 +14,13 @@ import (
 	"github.com/ironpark/ggfx/internal/rasterx"
 )
 
+// defFrame tracks an element with an id being recorded inside <defs>.
+type defFrame struct {
+	id    string
+	depth int
+	defs  []definition
+}
+
 // iconCursor is used while parsing SVG files.
 type iconCursor struct {
 	pathCursor
@@ -21,7 +28,8 @@ type iconCursor struct {
 	StyleStack                  []PathStyle
 	grad                        *rasterx.Gradient
 	inGrad, inDefs, inDefsStyle bool
-	currentDef                  []definition
+	defStack                    []defFrame
+	defsDepth                   int
 	useExpansions               int
 	capture                     *captured // the clip, mask or marker being read
 	captureDepth                int
@@ -32,14 +40,11 @@ type iconCursor struct {
 // the current fill or line color is passed in and used in
 // the case of a nil stopClor value
 func (c *iconCursor) ReadGradURL(v string, defaultColor paint) (grad *rasterx.Gradient, ok bool) {
-	if strings.HasPrefix(v, "url(") && strings.HasSuffix(v, ")") {
-		urlStr := strings.TrimSpace(v[4 : len(v)-1])
-		if strings.HasPrefix(urlStr, "#") {
-			var g *rasterx.Gradient
-			g, ok = c.icon.Grads[urlStr[1:]]
-			if ok {
-				grad = localizeGradIfStopClrNil(g, defaultColor)
-			}
+	if id := urlID(v); id != "" {
+		var g *rasterx.Gradient
+		g, ok = c.icon.Grads[id]
+		if ok {
+			grad = localizeGradIfStopClrNil(g, defaultColor)
 		}
 	}
 	return
@@ -49,7 +54,7 @@ func (c *iconCursor) ReadGradURL(v string, defaultColor paint) (grad *rasterx.Gr
 func (c *iconCursor) ReadGradAttr(attr xml.Attr) (err error) {
 	switch attr.Name.Local {
 	case "gradientTransform":
-		c.grad.Matrix, err = c.parseTransform(attr.Value)
+		c.grad.Matrix, err = c.parseTransformFrom(rasterx.Identity, attr.Value)
 	case "gradientUnits":
 		switch strings.TrimSpace(attr.Value) {
 		case "userSpaceOnUse":
@@ -74,28 +79,25 @@ func (c *iconCursor) ReadGradAttr(attr xml.Attr) (err error) {
 // for fill. Note that this parses both the contents of a style attribute plus
 // direct fill and opacity attributes.
 func (c *iconCursor) PushStyle(attrs []xml.Attr) error {
-	var pairs []string
+	// Make a copy of the top style
+	prevClip := c.StyleStack[len(c.StyleStack)-1].clip
+	curStyle := c.StyleStack[len(c.StyleStack)-1]
+
+	var styleAttr string
 	var className string
+	// Apply in CSS/SVG cascade order: presentation attributes < CSS classes < inline style.
 	for _, attr := range attrs {
-		switch strings.ToLower(attr.Name.Local) {
+		k := strings.ToLower(attr.Name.Local)
+		switch k {
 		case "style":
-			pairs = append(pairs, strings.Split(attr.Value, ";")...)
+			styleAttr = attr.Value
 		case "class":
 			className = attr.Value
+		case "d", "points", "id", "viewbox", "x", "y", "width", "height",
+			"cx", "cy", "r", "rx", "ry", "x1", "y1", "x2", "y2", "href", "offset":
+			// Non-style geometry/structural attributes; skip without copying.
 		default:
-			pairs = append(pairs, attr.Name.Local+":"+attr.Value)
-		}
-	}
-	// Make a copy of the top style
-	curStyle := c.StyleStack[len(c.StyleStack)-1]
-	for _, pair := range pairs {
-		kv := strings.Split(pair, ":")
-		if len(kv) >= 2 {
-			k := strings.ToLower(kv[0])
-			k = strings.TrimSpace(k)
-			v := strings.TrimSpace(kv[1])
-			err := c.readStyleAttr(&curStyle, k, v)
-			if err != nil {
+			if err := c.readStyleAttr(&curStyle, k, strings.TrimSpace(attr.Value)); err != nil {
 				return err
 			}
 		}
@@ -103,10 +105,23 @@ func (c *iconCursor) PushStyle(attrs []xml.Attr) error {
 	if err := c.adaptClasses(&curStyle, className); err != nil {
 		return err
 	}
-	// A clip named here is placed in the element's user space, its own
-	// transform read with the rest of its style.
-	if curStyle.clip != nil && curStyle.clip != c.StyleStack[len(c.StyleStack)-1].clip {
-		if err := c.compileClip(curStyle.clip, curStyle.mAdder.M); err != nil {
+	if styleAttr != "" {
+		for decl := range strings.SplitSeq(styleAttr, ";") {
+			k, v, ok := strings.Cut(decl, ":")
+			if !ok {
+				continue
+			}
+			k = strings.ToLower(strings.TrimSpace(k))
+			v = strings.TrimSpace(v)
+			if err := c.readStyleAttr(&curStyle, k, v); err != nil {
+				return err
+			}
+		}
+	}
+	// Any clip or mask named here is placed in the element's user space, its
+	// own transform read with the rest of its style.
+	for u := curStyle.clip; u != nil && u != prevClip; u = u.parent {
+		if err := c.compileClip(u, curStyle.mAdder.M); err != nil {
 			return err
 		}
 	}
@@ -174,8 +189,11 @@ func (c *iconCursor) readTransformAttr(m1 rasterx.Matrix2D, k string) (rasterx.M
 }
 
 func (c *iconCursor) parseTransform(v string) (rasterx.Matrix2D, error) {
+	return c.parseTransformFrom(c.StyleStack[len(c.StyleStack)-1].mAdder.M, v)
+}
+
+func (c *iconCursor) parseTransformFrom(m1 rasterx.Matrix2D, v string) (rasterx.Matrix2D, error) {
 	ts := strings.Split(v, ")")
-	m1 := c.StyleStack[len(c.StyleStack)-1].mAdder.M
 	for _, t := range ts {
 		t = strings.TrimSpace(t)
 		if len(t) == 0 {
@@ -308,19 +326,20 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 		}
 		curStyle.DashOffset = dashOffset
 	case "stroke-dasharray":
-		if v != "none" {
-			dashes := splitOnCommaOrSpace(v)
-			dList := make([]float64, len(dashes))
-			for i, dstr := range dashes {
-				d, err := parseFloat(strings.TrimSpace(dstr), 64)
-				if err != nil {
-					return err
-				}
-				dList[i] = d
-			}
-			curStyle.Dash = dList
+		if v == "none" {
+			curStyle.Dash = nil
 			break
 		}
+		dashes := splitOnCommaOrSpace(v)
+		dList := make([]float64, len(dashes))
+		for i, dstr := range dashes {
+			d, err := parseFloat(strings.TrimSpace(dstr), 64)
+			if err != nil {
+				return err
+			}
+			dList[i] = d
+		}
+		curStyle.Dash = dList
 	case "opacity", "stroke-opacity", "fill-opacity":
 		op, err := parseFloat(v, 64)
 		if err != nil {
@@ -333,14 +352,14 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 			curStyle.LineOpacity *= op
 		}
 	case "transform":
-		m, err := c.parseTransform(v)
+		m, err := c.parseTransformFrom(curStyle.mAdder.M, v)
 		if err != nil {
 			return err
 		}
 		curStyle.mAdder.M = m
 	case "clip-path", "mask":
 		if def := c.icon.clips[urlID(v)]; def != nil && def.mask == (k == "mask") {
-			curStyle.clip = &clipUse{def: def}
+			curStyle.clip = &clipUse{def: def, parent: curStyle.clip}
 		}
 	case "marker-start":
 		curStyle.markers[0] = urlID(v)
@@ -359,6 +378,10 @@ func (c *iconCursor) readStartElement(se xml.StartElement) error {
 	if c.capturing(se) {
 		return nil
 	}
+	if se.Name.Local == "style" {
+		c.inDefsStyle = true
+		return nil
+	}
 	var skipDef bool
 	if isGradient(se.Name.Local) || c.inGrad {
 		skipDef = true
@@ -370,15 +393,22 @@ func (c *iconCursor) readStartElement(se xml.StartElement) error {
 				ID = attr.Value
 			}
 		}
-		if ID != "" && len(c.currentDef) > 0 {
-			c.icon.Defs[c.currentDef[0].ID] = c.currentDef
-			c.currentDef = make([]definition, 0)
-		}
-		c.currentDef = append(c.currentDef, definition{
+		d := definition{
 			ID:    ID,
 			Tag:   se.Name.Local,
 			Attrs: se.Attr,
-		})
+		}
+		for i := range c.defStack {
+			c.defStack[i].defs = append(c.defStack[i].defs, d)
+		}
+		if ID != "" {
+			c.defStack = append(c.defStack, defFrame{
+				id:    ID,
+				depth: c.defsDepth,
+				defs:  []definition{d},
+			})
+		}
+		c.defsDepth++
 		return nil
 	}
 	df, ok := drawFuncs[se.Name.Local]
@@ -411,9 +441,11 @@ func (c *iconCursor) adaptClasses(pathStyle *PathStyle, className string) error 
 	if className == "" || len(c.icon.classes) == 0 {
 		return nil
 	}
-	for k, v := range c.icon.classes[className] {
-		if err := c.readStyleAttr(pathStyle, k, v); err != nil {
-			return err
+	for _, cls := range strings.Fields(className) {
+		for k, v := range c.icon.classes[cls] {
+			if err := c.readStyleAttr(pathStyle, k, v); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

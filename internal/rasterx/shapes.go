@@ -99,6 +99,11 @@ func AddRoundRect(minX, minY, maxX, maxY, rx, ry, rot float64, gf GapFunc, p Add
 
 // AddArc adds an arc to the adder p
 func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) {
+	rx, ry := math.Abs(points[0]), math.Abs(points[1])
+	if rx == 0 || ry == 0 {
+		p.Line(ToFixedP(points[5], points[6]))
+		return points[5], points[6]
+	}
 	rotX := points[2] * math.Pi / 180 // Convert degress to radians
 	largeArc := points[3] != 0
 	sweep := points[4] != 0
@@ -108,8 +113,8 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 	arcBig := math.Abs(deltaTheta) > math.Pi
 
 	// Approximate ellipse using cubic bezeir splines
-	etaStart := trig.Atan2(trig.Sin(startAngle)/points[1], trig.Cos(startAngle)/points[0])
-	etaEnd := trig.Atan2(trig.Sin(endAngle)/points[1], trig.Cos(endAngle)/points[0])
+	etaStart := trig.Atan2(trig.Sin(startAngle)/ry, trig.Cos(startAngle)/rx)
+	etaEnd := trig.Atan2(trig.Sin(endAngle)/ry, trig.Cos(endAngle)/rx)
 	deltaEta := etaEnd - etaStart
 	if (arcBig && !largeArc) || (!arcBig && largeArc) { // Go has no boolean XOR
 		if deltaEta < 0 {
@@ -137,16 +142,16 @@ func AddArc(points []float64, cx, cy, px, py float64, p Adder) (lx, ly float64) 
 	alpha := trig.Sin(dEta) * (math.Sqrt(4+float64(3*tde*tde)) - 1) / 3 // Math is fun!
 	lx, ly = px, py
 	sinTheta, cosTheta := trig.Sin(rotX), trig.Cos(rotX)
-	ldx, ldy := ellipsePrime(points[0], points[1], sinTheta, cosTheta, etaStart, cx, cy)
+	ldx, ldy := ellipsePrime(rx, ry, sinTheta, cosTheta, etaStart, cx, cy)
 	for i := 1; i <= segs; i++ {
 		eta := etaStart + float64(dEta*float64(i))
 		var px, py float64
 		if i == segs {
 			px, py = points[5], points[6] // Just makes the end point exact; no roundoff error
 		} else {
-			px, py = ellipsePointAt(points[0], points[1], sinTheta, cosTheta, eta, cx, cy)
+			px, py = ellipsePointAt(rx, ry, sinTheta, cosTheta, eta, cx, cy)
 		}
-		dx, dy := ellipsePrime(points[0], points[1], sinTheta, cosTheta, eta, cx, cy)
+		dx, dy := ellipsePrime(rx, ry, sinTheta, cosTheta, eta, cx, cy)
 		p.CubeBezier(ToFixedP(lx+float64(alpha*ldx), ly+float64(alpha*ldy)),
 			ToFixedP(px-float64(alpha*dx), py-float64(alpha*dy)), ToFixedP(px, py))
 		lx, ly, ldx, ldy = px, py, dx, dy
@@ -180,6 +185,11 @@ func ellipsePointAt(a, b, sinTheta, cosTheta, eta, cx, cy float64) (px, py float
 // and an arbitrary point. The center of the circle is then transformed
 // back to the original coordinates and returned.
 func FindEllipseCenter(ra, rb *float64, rotX, startX, startY, endX, endY float64, sweep, smallArc bool) (cx, cy float64) {
+	*ra = math.Abs(*ra)
+	*rb = math.Abs(*rb)
+	if *ra == 0 || *rb == 0 || (startX == endX && startY == endY) {
+		return startX, startY
+	}
 	cos, sin := trig.Cos(rotX), trig.Sin(rotX)
 
 	// Move origin to start point
@@ -192,6 +202,9 @@ func FindEllipseCenter(ra, rb *float64, rotX, startX, startY, endX, endY float64
 
 	midX, midY := float64(nx/2), float64(ny/2)
 	midlenSq := float64(midX*midX) + float64(midY*midY)
+	if midlenSq == 0 {
+		return startX, startY
+	}
 
 	var hr float64
 	if *rb**rb < midlenSq {

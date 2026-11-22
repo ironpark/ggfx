@@ -133,7 +133,8 @@ func (g *Gradient) colors(opacity float64) gradStops {
 		r, gr, b, a := nrgba64(s.StopColor)
 		// Colors and opacities blend apart, not premultiplied, as SVG
 		// has it; a stop color's own alpha is part of its opacity.
-		stops[i] = stop{s.Offset, r, gr, b, a, s.Opacity, s.Opacity * (float64(a) / 0xffff)}
+		op := max(0.0, min(s.Opacity, 1.0))
+		stops[i] = stop{s.Offset, r, gr, b, a, op, op * (float64(a) / 0xffff)}
 	}
 	st := gradStops{stops: stops, spread: g.Spread, opacity: opacity}
 	st.first, st.last = st.at(&stops[0]), st.at(&stops[len(stops)-1])
@@ -206,9 +207,11 @@ func (g *Gradient) GetColorFunction(opacity float64) Paint {
 func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint {
 	switch len(g.Stops) {
 	case 0:
-		return ColorPaint(ApplyOpacity(color.RGBA{0, 0, 0, 255}, opacity)) // default error color for gradient w/o stops.
+		// SVG 1.1 §13.2.4: a gradient with no stops is rendered as if none were specified.
+		return Paint{}
 	case 1:
-		return ColorPaint(ApplyOpacity(g.Stops[0].StopColor, opacity)) // Illegal, I think, should really should not happen.
+		op := max(0.0, min(g.Stops[0].Opacity, 1.0)) * opacity
+		return ColorPaint(ApplyOpacity(g.Stops[0].StopColor, op))
 	}
 	st := g.colors(opacity)
 	toUser := objMatrix
@@ -221,6 +224,13 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 
 	if g.IsRadial {
 		cx, cy, fx, fy, r := p[0], p[1], p[2], p[3], p[4]
+		if r < 0 {
+			return Paint{}
+		}
+		if r == 0 {
+			// SVG 1.1 §13.2.3: r == 0 paints a single color using the final stop.
+			return ColorPaint(st.last)
+		}
 		if cx == fx && cy == fy {
 			return st.centered(toGrad, cx, cy, r)
 		}
@@ -232,12 +242,12 @@ func (g *Gradient) GetColorFunctionUS(opacity float64, objMatrix Matrix2D) Paint
 		dfx := fx - cx
 		dfy := fy - cy
 
-		if float64(dfx*dfx)+float64(dfy*dfy) > 1 { // Focus outside of circle; use intersection
-			// point of line from center to focus and circle as per SVG specs.
-			nfx, nfy, intersects := RayCircleIntersectionF(fx, fy, cx, cy, cx, cy, 1.0-epsilonF)
+		const maxFocus = 1.0 - epsilonF
+		if float64(dfx*dfx)+float64(dfy*dfy) >= float64(maxFocus*maxFocus) { // Focus on or outside circle; pull inside as per SVG specs.
+			nfx, nfy, intersects := RayCircleIntersectionF(fx, fy, cx, cy, cx, cy, maxFocus)
 			fx, fy = nfx, nfy
 			if intersects == false {
-				return ColorPaint(color.RGBA{255, 255, 0, 255}) // should not happen
+				return ColorPaint(st.last)
 			}
 		}
 		return st.focal(toGrad, fx, fy, cx, cy, r)
@@ -290,6 +300,10 @@ func (st gradStops) linear(toGrad Matrix2D, p1x, p1y, p2x, p2y float64) Paint {
 	dx := p2x - p1x
 	dy := p2y - p1y
 	d := float64(dx*dx) + float64(dy*dy) // self inner prod
+	if d == 0 {
+		// SVG 1.1 §13.2.2: coincident endpoints paint the final stop color.
+		return ColorPaint(st.last)
+	}
 	return FuncPaint(func(xi, yi int) color.RGBA64 {
 		x, y := toGrad.Transform(float64(xi)+0.5, float64(yi)+0.5)
 		dfx := x - p1x

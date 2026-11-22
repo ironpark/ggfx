@@ -98,8 +98,14 @@ var (
 				return err
 			}
 		}
-		if w == 0 || h == 0 {
+		if w <= 0 || h <= 0 {
 			return nil
+		}
+		if rx < 0 {
+			rx = 0
+		}
+		if ry < 0 {
+			ry = 0
 		}
 		// One radius given is both, as the specification has it.
 		if setRx && !setRy {
@@ -131,7 +137,7 @@ var (
 				return err
 			}
 		}
-		if rx == 0 || ry == 0 { // not drawn, but not an error
+		if rx <= 0 || ry <= 0 { // not drawn, but not an error
 			return nil
 		}
 		c.EllipseAt(cx, cy, rx, ry)
@@ -164,6 +170,7 @@ var (
 		return nil
 	}
 	polylineF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
+		c.points = c.points[:0]
 		var err error
 		for _, attr := range attrs {
 			switch attr.Name.Local {
@@ -177,7 +184,7 @@ var (
 				return err
 			}
 		}
-		if len(c.points) > 4 {
+		if len(c.points) >= 4 {
 			c.Path.Start(fixed.Point26_6{
 				X: fixed.Int26_6((c.points[0]) * 64),
 				Y: fixed.Int26_6((c.points[1]) * 64)})
@@ -191,7 +198,7 @@ var (
 	}
 	polygonF svgFunc = func(c *iconCursor, attrs []xml.Attr) error {
 		err := polylineF(c, attrs)
-		if len(c.points) > 4 {
+		if len(c.points) >= 4 {
 			c.Path.Stop(true)
 		}
 		return err
@@ -364,10 +371,16 @@ func (c *iconCursor) expandDefs(defs []definition) error {
 	if c.useExpansions > maxUseExpansions {
 		return errors.New("too many elements expanded by use tags")
 	}
+	stackLen := len(c.StyleStack)
+	defer func() {
+		c.StyleStack = c.StyleStack[:stackLen]
+	}()
 	for _, def := range defs {
 		if def.Tag == "endg" {
 			// pop style
-			c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
+			if len(c.StyleStack) > stackLen {
+				c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
+			}
 			continue
 		}
 		if err := c.PushStyle(def.Attrs); err != nil {

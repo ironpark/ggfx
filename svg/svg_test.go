@@ -383,3 +383,168 @@ func TestArcsOfOneCommandAreEachTheirOwn(t *testing.T) {
 		t.Fatal("the arcs of one command are drawn otherwise than one command each")
 	}
 }
+
+func TestZeroAndNilDocumentSafe(t *testing.T) {
+	var zero svg.Document
+	var nilDoc *svg.Document
+	for _, d := range []*svg.Document{&zero, nilDoc} {
+		if x, y, w, h := d.ViewBox(); x != 0 || y != 0 || w != 0 || h != 0 {
+			t.Errorf("ViewBox = %v %v %v %v, want zeros", x, y, w, h)
+		}
+		dst := image.NewRGBA(image.Rect(0, 0, 8, 8))
+		d.Draw(dst, ggfx.GeoM{})
+		d.Draw(nil, ggfx.GeoM{})
+		b, err := d.MarshalBinary()
+		if err != nil {
+			t.Fatalf("MarshalBinary: %v", err)
+		}
+		var back svg.Document
+		if err := back.UnmarshalBinary(b); err != nil {
+			t.Fatalf("UnmarshalBinary: %v", err)
+		}
+	}
+}
+
+func TestDegenerateQuadArcJoinAndLargeMiter(t *testing.T) {
+	// Degenerate quadratic Bezier (control point equals endpoint) with stroke-linejoin="arc"
+	// must not panic with divide-by-zero in RadCurvature.
+	dst := draw(t, svgDoc("0 0 20 20", `
+<path d="M2,10 Q2,10 10,10 Q18,10 18,18" fill="none" stroke="#f00" stroke-width="2" stroke-linejoin="arc"/>`), 1, 20, 20)
+	if dst.RGBAAt(10, 10).R == 0 {
+		t.Error("degenerate quad arc join drew nothing")
+	}
+
+	// Large coordinates (> 724 px) with miter join must not overflow 32-bit determinants.
+	d := parse(t, svgDoc("0 0 2000 2000", `<path d="M100,100 L1800,100 L1800,1800" fill="none" stroke="#0f0" stroke-width="40" stroke-linejoin="miter"/>`))
+	var g ggfx.GeoM
+	g.Translate(-1750, -50)
+	big := drawInto(d, image.Rect(0, 0, 100, 100), g)
+	if big.RGBAAt(50, 50).G == 0 {
+		t.Error("large miter corner drew nothing")
+	}
+}
+
+func TestHugeAndNegativeDashOffset(t *testing.T) {
+	// Huge positive and negative dashoffset must normalize in O(len(dashes)) and wrap properly.
+	dstPos := draw(t, svgDoc("0 0 40 10", `<line x1="0" y1="5" x2="40" y2="5" stroke="#fff" stroke-width="4" stroke-dasharray="10 10" stroke-dashoffset="1000000000"/>`), 1, 40, 10)
+	dstZero := draw(t, svgDoc("0 0 40 10", `<line x1="0" y1="5" x2="40" y2="5" stroke="#fff" stroke-width="4" stroke-dasharray="10 10" stroke-dashoffset="0"/>`), 1, 40, 10)
+	if !bytes.Equal(dstPos.Pix, dstZero.Pix) {
+		t.Error("huge dashoffset multiple of period differs from offset 0")
+	}
+
+	// dashoffset=-10 on "10 10" wraps to +10 (starts with a 10px gap, then 10px dash).
+	dstNeg := draw(t, svgDoc("0 0 40 10", `<line x1="0" y1="5" x2="40" y2="5" stroke="#fff" stroke-width="4" stroke-dasharray="10 10" stroke-dashoffset="-10"/>`), 1, 40, 10)
+	if dstNeg.RGBAAt(5, 5).A != 0 {
+		t.Errorf("negative dashoffset gap pixel alpha = %d, want 0", dstNeg.RGBAAt(5, 5).A)
+	}
+	if dstNeg.RGBAAt(15, 5).A != 0xff {
+		t.Errorf("negative dashoffset dash pixel alpha = %d, want 255", dstNeg.RGBAAt(15, 5).A)
+	}
+}
+
+func TestGradientEdgeCases(t *testing.T) {
+	dst := draw(t, svgDoc("0 0 50 10", `
+<defs>
+<linearGradient id="empty"/>
+<linearGradient id="one"><stop offset="0" stop-color="#f00" stop-opacity="0.5"/></linearGradient>
+<linearGradient id="coinc" x1="0.5" y1="0.5" x2="0.5" y2="0.5"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#0f0"/></linearGradient>
+<radialGradient id="zeroR" r="0"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></radialGradient>
+<radialGradient id="edgeF" cx="0.5" cy="0.5" r="0.5" fx="1" fy="0.5"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#0ff"/></radialGradient>
+</defs>
+<rect x="0" y="0" width="10" height="10" fill="url(#empty)"/>
+<rect x="10" y="0" width="10" height="10" fill="url(#one)"/>
+<rect x="20" y="0" width="10" height="10" fill="url(#coinc)"/>
+<rect x="30" y="0" width="10" height="10" fill="url(#zeroR)"/>
+<rect x="40" y="0" width="10" height="10" fill="url(#edgeF)"/>`), 1, 50, 10)
+
+	if got := dst.RGBAAt(5, 5); got.A != 0 {
+		t.Errorf("0-stop gradient = %v, want transparent", got)
+	}
+	if got := dst.RGBAAt(15, 5); got.A < 120 || got.A > 135 {
+		t.Errorf("1-stop gradient with stop-opacity=0.5 = %v, want ~50%% alpha", got)
+	}
+	if got := dst.RGBAAt(25, 5); got != (color.RGBA{0, 0xff, 0, 0xff}) {
+		t.Errorf("coincident linear gradient = %v, want green", got)
+	}
+	if got := dst.RGBAAt(35, 5); got != (color.RGBA{0, 0, 0xff, 0xff}) {
+		t.Errorf("r=0 radial gradient = %v, want blue", got)
+	}
+	if got := dst.RGBAAt(45, 5); got.A != 0xff {
+		t.Errorf("focus-on-boundary radial gradient = %v, want opaque", got)
+	}
+}
+
+func TestNestedDefsChainedClipsMarkersCSSAndSpecFixes(t *testing.T) {
+	// 1. Nested <defs><g id="a"><rect id="b"/></g></defs> keeps both #a and #b intact.
+	dstDefs := draw(t, svgDoc("0 0 30 10", `
+<defs><g id="a"><rect id="b" width="10" height="10" fill="#f00"/><circle cx="15" cy="5" r="4" fill="#0f0"/></g></defs>
+<use href="#a" x="0" y="0"/>
+<use href="#b" x="20" y="0"/>`), 1, 30, 10)
+	if dstDefs.RGBAAt(5, 5).R != 0xff || dstDefs.RGBAAt(15, 5).G != 0xff || dstDefs.RGBAAt(25, 5).R != 0xff {
+		t.Errorf("nested defs failed: (5,5)=%v (15,5)=%v (25,5)=%v", dstDefs.RGBAAt(5, 5), dstDefs.RGBAAt(15, 5), dstDefs.RGBAAt(25, 5))
+	}
+
+	// 2. Nested clip-path intersects outer and inner clips.
+	dstClip := draw(t, svgDoc("0 0 20 20", `
+<defs>
+<clipPath id="c1"><rect x="0" y="0" width="12" height="20"/></clipPath>
+<clipPath id="c2"><rect x="8" y="0" width="12" height="20"/></clipPath>
+</defs>
+<g clip-path="url(#c1)"><rect width="20" height="20" fill="#f00" clip-path="url(#c2)"/></g>`), 1, 20, 20)
+	if dstClip.RGBAAt(4, 10).A != 0 || dstClip.RGBAAt(10, 10).R != 0xff || dstClip.RGBAAt(16, 10).A != 0 {
+		t.Errorf("chained clip failed: (4,10)=%v (10,10)=%v (16,10)=%v", dstClip.RGBAAt(4, 10), dstClip.RGBAAt(10, 10), dstClip.RGBAAt(16, 10))
+	}
+
+	// 3. Marker with non-zero viewBox min-x/min-y aligns refX/refY to the vertex and respects clip-path.
+	dstMark := draw(t, svgDoc("0 0 40 20", `
+<defs>
+<clipPath id="mc"><rect x="0" y="0" width="20" height="20"/></clipPath>
+<marker id="m" viewBox="-5 -5 10 10" refX="0" refY="0" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse">
+<circle cx="0" cy="0" r="5" fill="#00f"/>
+</marker>
+</defs>
+<g clip-path="url(#mc)">
+<path d="M10,10 L30,10" stroke="#000" stroke-width="1" marker-start="url(#m)" marker-end="url(#m)"/>
+</g>`), 1, 40, 20)
+	if dstMark.RGBAAt(10, 10).B != 0xff {
+		t.Errorf("marker center at (10,10) = %v, want blue", dstMark.RGBAAt(10, 10))
+	}
+	if dstMark.RGBAAt(30, 10).A != 0 {
+		t.Errorf("clipped end marker at (30,10) = %v, want transparent", dstMark.RGBAAt(30, 10))
+	}
+
+	// 4. 2-point polyline, stroke-dasharray="none", quoted url('#g'), multi-class + inline style precedence,
+	// scientific notation, negative rect/circle, and degenerate arcs.
+	dstSpec := draw(t, svgDoc("0 0 60 20", `
+<style>.a { fill: #f00; } .b { stroke: #0f0; }</style>
+<style>.c { fill: #00f; }</style>
+<defs><linearGradient id="g"><stop offset="0" stop-color="#0ff"/><stop offset="1" stop-color="#0ff"/></linearGradient></defs>
+<rect x="0" y="0" width="10" height="10" class="a b" style="fill:#ff0"/>
+<rect x="10" y="0" width="10" height="10" class="c" fill="#f00"/>
+<rect x="20" y="0" width="10" height="10" fill="url('#g')"/>
+<g stroke="#fff" stroke-width="4" stroke-dasharray="1 99">
+<polyline points="30,5 40,5" fill="none" stroke-dasharray="none"/>
+</g>
+<path d="M4E1,1E+1 A0,5 0 0 1 5e+1,1e+1 A-5,-5 0 0 1 5e+1,1e+1" fill="none" stroke="#f0f" stroke-width="4"/>
+<rect x="0" y="10" width="-10" height="10" fill="#fff"/>
+<circle cx="5" cy="15" r="-5" fill="#fff"/>`), 1, 60, 20)
+
+	if got := dstSpec.RGBAAt(5, 5); got != (color.RGBA{0xff, 0xff, 0, 0xff}) {
+		t.Errorf("inline style over class = %v, want yellow", got)
+	}
+	if got := dstSpec.RGBAAt(15, 5); got != (color.RGBA{0, 0, 0xff, 0xff}) {
+		t.Errorf("class over presentation attr (2nd style block) = %v, want blue", got)
+	}
+	if got := dstSpec.RGBAAt(25, 5); got != (color.RGBA{0, 0xff, 0xff, 0xff}) {
+		t.Errorf("quoted gradient url = %v, want cyan", got)
+	}
+	if got := dstSpec.RGBAAt(35, 5); got != (color.RGBA{0xff, 0xff, 0xff, 0xff}) {
+		t.Errorf("2-point polyline + dasharray=none = %v, want white", got)
+	}
+	if got := dstSpec.RGBAAt(45, 10); got != (color.RGBA{0xff, 0, 0xff, 0xff}) {
+		t.Errorf("scientific notation + zero-radius arc line = %v, want magenta", got)
+	}
+	if got := dstSpec.RGBAAt(5, 15); got.A != 0 {
+		t.Errorf("negative rect/circle = %v, want transparent", got)
+	}
+}
