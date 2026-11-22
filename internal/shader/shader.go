@@ -22,11 +22,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/gogpu/naga"
 	"github.com/gogpu/naga/ir"
 	"github.com/gogpu/naga/valid"
 	"github.com/gogpu/naga/wgsl"
+
+	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 // InternalUniformBinding is where the prelude's uniform block is bound.
@@ -81,6 +85,14 @@ type Program struct {
 
 	// mask is 1 for each dword of the internal uniform block the program reads, 0 otherwise.
 	mask []uint32
+
+	descOnce sync.Once
+	desc     graphicsdriver.ShaderDescriptor
+}
+
+// CompileUser compiles a WGSL fragment shader with graphics.ShaderSrcImageCount source textures.
+func CompileUser(src []byte) (*Program, error) {
+	return Compile(src, graphics.ShaderSrcImageCount)
 }
 
 // Compile compiles a user shader. textureCount is how many source textures the prelude declares.

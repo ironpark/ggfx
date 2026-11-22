@@ -1,4 +1,4 @@
-// Copyright 2020 The Ebiten Authors
+// Copyright 2026 The ggfx Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package graphics
+//go:build !js
 
-import (
-	"github.com/ironpark/ggfx/internal/shader"
-)
+package graphicsdriver
 
-// CompileShader compiles a WGSL fragment shader with ShaderSrcImageCount source textures.
-func CompileShader(src []byte) (*shader.Program, error) {
-	return shader.Compile(src, ShaderSrcImageCount)
+// Canvas is a placeholder for the browser's canvas element on non-js targets.
+type Canvas struct{}
+
+func isValidCanvas(Canvas) bool {
+	return false
 }

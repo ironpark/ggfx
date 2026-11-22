@@ -27,7 +27,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
-	ggshader "github.com/ironpark/ggfx/internal/shader"
 )
 
 type activatedTexture struct {
@@ -37,11 +36,7 @@ type activatedTexture struct {
 
 // Presenter is what the rendered frame is presented through: a window on a
 // desktop, or the context of a system that has no window system.
-type Presenter interface {
-	MakeContextCurrent() error
-	SwapInterval(interval int) error
-	SwapBuffers() error
-}
+type Presenter = graphicsdriver.GLPresenter
 
 type Graphics struct {
 	state      openGLState
@@ -231,11 +226,11 @@ type Surface struct {
 	readFramebuffer framebufferNative
 }
 
-// NewSurface ignores transparent: on the desktop the GLFW framebuffer hint decides whether the
-// window composites, and in the browser the canvas does. On the desktop, target is a Presenter whose
-// context shares objects with the drawing context.
-func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	p, err := presenterFromTarget(target)
+// NewSurface ignores desc.Transparent: on the desktop the GLFW framebuffer hint decides whether the
+// window composites, and in the browser the canvas does. On the desktop, desc carries a Presenter
+// whose context shares objects with the drawing context.
+func (g *Graphics) NewSurface(desc graphicsdriver.SurfaceDescriptor) (graphicsdriver.Surface, error) {
+	p, err := presenterFromDescriptor(desc)
 	if err != nil {
 		return nil, err
 	}
@@ -395,8 +390,8 @@ func (g *Graphics) FlipsY() bool {
 	return false
 }
 
-func (g *Graphics) NewShader(program *ggshader.Program) (graphicsdriver.Shader, error) {
-	s, err := newShader(g, program)
+func (g *Graphics) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdriver.Shader, error) {
+	s, err := newShader(g, desc)
 	if err != nil {
 		return nil, err
 	}

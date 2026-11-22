@@ -18,13 +18,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/gogpu/naga/backend"
-	"github.com/gogpu/naga/hlsl"
-	"github.com/gogpu/naga/ir"
-
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
 const (
@@ -32,29 +27,11 @@ const (
 	PixelShaderProfile  = "ps_5_0"
 )
 
-// The constant buffer registers the shader's uniform blocks are bound at, and the size of the
-// internal block's constant buffer in bytes.
-const (
-	internalConstantBufferRegister = 0
-	userConstantBufferRegister     = 1
+const internalConstantBufferSize = graphics.PreservedUniformDwordCount * 4
 
-	internalConstantBufferSize = graphics.PreservedUniformDwordCount * 4
-)
-
-// hlslOptions maps the shader's resource bindings to HLSL registers.
-func hlslOptions(program *shader.Program) hlsl.Options {
-	o := hlsl.DefaultOptions()
-	o.ShaderModel = backend.ShaderModel{Major: 5, Minor: 0}
-	o.BindingMap = map[ir.ResourceBinding]hlsl.BindTarget{
-		shader.InternalUniformBinding: {Register: internalConstantBufferRegister},
-		shader.UserUniformBinding:     {Register: userConstantBufferRegister},
-	}
-	for i := range program.TextureCount {
-		o.BindingMap[shader.TextureBinding(i)] = hlsl.BindTarget{Register: uint32(i)}
-	}
-	// A resource the map leaves out goes where its @group and @binding say, as before naga 0.21.
-	o.FakeMissingBindings = true
-	return o
+var hlslShaderTarget = graphicsdriver.ShaderTarget{
+	Language: graphicsdriver.ShaderLanguageHLSL,
+	Version:  50,
 }
 
 // vertexAttributeSemanticName is the semantic of every vertex attribute: naga's HLSL output names
@@ -85,32 +62,28 @@ var (
 	vertexShaderBlobs  = map[int]*_ID3DBlob{}
 )
 
-// vertexShaderBlob returns the compiled vertex shader every program with textureCount source
-// textures shares. The prelude fixes the vertex stage, so it is compiled once from
-// shader.VertexProgram rather than from each program's HLSL, which holds the user's fragment code.
+// vertexShaderBlob returns the compiled vertex shader every program with desc.TextureCount source
+// textures shares. The prelude fixes the vertex stage, so it is compiled once per texture count.
 // The blob is device independent, lives as long as the process, and must not be released.
-func vertexShaderBlob(textureCount int) (*_ID3DBlob, error) {
+func vertexShaderBlob(desc *graphicsdriver.ShaderDescriptor) (*_ID3DBlob, error) {
+	if desc == nil || desc.Source == nil {
+		return nil, fmt.Errorf("directx: shader descriptor has no source")
+	}
 	vertexShaderBlobsM.Lock()
 	defer vertexShaderBlobsM.Unlock()
 
-	if b, ok := vertexShaderBlobs[textureCount]; ok {
+	if b, ok := vertexShaderBlobs[desc.TextureCount]; ok {
 		return b, nil
 	}
-	vp, err := shader.VertexProgram(textureCount)
-	if err != nil {
-		return nil, err
-	}
-	o := hlslOptions(vp)
-	o.EntryPoint = &backend.EntryPointSelector{Stage: ir.StageVertex, Name: shader.VertexEntryPoint}
-	src, info, err := hlsl.Compile(vp.Module, o)
+	code, err := desc.Source.VertexStage(hlslShaderTarget)
 	if err != nil {
 		return nil, fmt.Errorf("directx: translating the vertex shader to HLSL failed: %w", err)
 	}
-	b, err := _D3DCompile([]byte(src), "shader", nil, nil, info.EntryPointNames[shader.VertexEntryPoint], VertexShaderProfile, shaderCompileFlags, 0)
+	b, err := _D3DCompile(code.Code, "shader", nil, nil, code.EntryPoint, VertexShaderProfile, shaderCompileFlags, 0)
 	if err != nil {
-		return nil, fmt.Errorf("directx: D3DCompile for the vertex shader failed, original source: %s, %w", src, err)
+		return nil, fmt.Errorf("directx: D3DCompile for the vertex shader failed, original source: %s, %w", code.Code, err)
 	}
-	vertexShaderBlobs[textureCount] = b
+	vertexShaderBlobs[desc.TextureCount] = b
 	return b, nil
 }
 
@@ -118,23 +91,23 @@ func vertexShaderBlob(textureCount int) (*_ID3DBlob, error) {
 // vertexShaderBlob), and D3D links the stages by signature: the pixel shader's input comes from the
 // prelude's GgfxVertexOut whatever the user's code reads, so it matches the shared vertex shader's
 // output.
-func compileShader(program *shader.Program) (*_ID3DBlob, error) {
-	// Only the fragment entry point: the program's vertex entry point would be parsed and discarded.
-	o := hlslOptions(program)
-	o.EntryPoint = &backend.EntryPointSelector{Stage: ir.StageFragment, Name: shader.FragmentEntryPoint}
-	src, info, err := hlsl.Compile(program.Module, o)
+func compileShader(desc *graphicsdriver.ShaderDescriptor) (*_ID3DBlob, error) {
+	if desc == nil || desc.Source == nil {
+		return nil, fmt.Errorf("directx: shader descriptor has no source")
+	}
+	code, err := desc.Source.FragmentStage(hlslShaderTarget)
 	if err != nil {
 		return nil, fmt.Errorf("directx: translating the shader to HLSL failed: %w", err)
 	}
-	psh, err := _D3DCompile([]byte(src), "shader", nil, nil, info.EntryPointNames[shader.FragmentEntryPoint], PixelShaderProfile, shaderCompileFlags, 0)
+	psh, err := _D3DCompile(code.Code, "shader", nil, nil, code.EntryPoint, PixelShaderProfile, shaderCompileFlags, 0)
 	if err != nil {
-		return nil, fmt.Errorf("directx: D3DCompile for the pixel shader failed, original source: %s, %w", src, err)
+		return nil, fmt.Errorf("directx: D3DCompile for the pixel shader failed, original source: %s, %w", code.Code, err)
 	}
 	return psh, nil
 }
 
 // userConstantBufferSize returns the size of the constant buffer for the user's uniform block in
 // bytes, which is a multiple of 16, or 0 when the shader has no user uniform block.
-func userConstantBufferSize(program *shader.Program) uint32 {
-	return alignUp16(uint32(program.UniformDwordCount) * 4)
+func userConstantBufferSize(desc *graphicsdriver.ShaderDescriptor) uint32 {
+	return alignUp16(uint32(desc.UniformDwordCount) * 4)
 }

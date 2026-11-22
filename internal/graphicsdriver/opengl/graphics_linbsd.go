@@ -42,11 +42,13 @@ func (g *Graphics) IsES() bool {
 	return g.context.ctx.IsES()
 }
 
-// presenterFromTarget takes the Presenter a surface's frames are presented through.
-func presenterFromTarget(target any) (Presenter, error) {
-	p, ok := target.(Presenter)
-	if !ok {
-		return nil, fmt.Errorf("opengl: NewSurface needs a Presenter but got %T", target)
+// presenterFromDescriptor takes the Presenter a surface's frames are presented through.
+func presenterFromDescriptor(desc graphicsdriver.SurfaceDescriptor) (Presenter, error) {
+	if desc.Kind != graphicsdriver.SurfaceKindGLPresenter {
+		return nil, fmt.Errorf("opengl: NewSurface needs SurfaceKindGLPresenter but got %s", desc.Kind)
 	}
-	return p, nil
+	if err := desc.Validate(); err != nil {
+		return nil, err
+	}
+	return desc.GLPresenter, nil
 }

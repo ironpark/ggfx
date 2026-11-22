@@ -14,10 +14,14 @@
 
 package host
 
-import "github.com/ironpark/ggfx/internal/graphicsdriver/remote"
+import "github.com/ironpark/ggfx/internal/graphicsdriver"
 
 // RemoteTarget is the target of a surface of the remote driver: the window of the viewer an app
 // installed with ggfx/remote draws to. Such an app has one surface.
 type RemoteTarget struct{}
 
-func (RemoteTarget) driverTarget() any { return remote.SurfaceTarget{} }
+func (RemoteTarget) surfaceDescriptor() graphicsdriver.SurfaceDescriptor {
+	return graphicsdriver.SurfaceDescriptor{
+		Kind: graphicsdriver.SurfaceKindRemote,
+	}
+}

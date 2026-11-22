@@ -16,6 +16,7 @@ package remote
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"slices"
 	"sync"
@@ -24,7 +25,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/recent"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
 // Transport carries batches to the viewer. Its methods are called on the render thread, one at a
@@ -174,12 +174,12 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 	return i, nil
 }
 
-// NewSurface returns the surface of the viewer's window. target must be a SurfaceTarget.
-func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	if _, ok := target.(SurfaceTarget); !ok {
-		return nil, errors.New("remote: a surface of the remote driver is made for a SurfaceTarget")
+// NewSurface returns the surface of the viewer's window. desc.Kind must be SurfaceKindRemote.
+func (g *Graphics) NewSurface(desc graphicsdriver.SurfaceDescriptor) (graphicsdriver.Surface, error) {
+	if desc.Kind != graphicsdriver.SurfaceKindRemote {
+		return nil, fmt.Errorf("remote: NewSurface needs SurfaceKindRemote but got %s", desc.Kind)
 	}
-	if transparent {
+	if desc.Transparent {
 		return nil, errors.New("remote: a transparent window is not supported")
 	}
 	if g.hasSurface {
@@ -189,15 +189,15 @@ func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surf
 	return &Surface{g: g}, nil
 }
 
-func (g *Graphics) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
-	if program.Source == nil {
-		return nil, errors.New("remote: the shader program has no source to send")
+func (g *Graphics) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdriver.Shader, error) {
+	if desc == nil || desc.WGSL == nil {
+		return nil, errors.New("remote: the shader descriptor has no WGSL source to send")
 	}
 	s := &Shader{g: g, id: g.newID()}
 	g.e.u8(opNewShader)
 	g.e.u32(s.id)
-	g.e.u32(uint32(program.TextureCount))
-	g.e.bytes(program.Source)
+	g.e.u32(uint32(desc.TextureCount))
+	g.e.bytes(desc.WGSL)
 	return s, nil
 }
 
@@ -236,9 +236,6 @@ func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.Shader
 	g.e.u32s(uniforms)
 	return nil
 }
-
-// SurfaceTarget is the surface target of the remote driver: the viewer's window.
-type SurfaceTarget struct{}
 
 // Surface is the viewer's window. Its screen image is the viewer's target, which keeps the last
 // frame, across a restart of the app too.

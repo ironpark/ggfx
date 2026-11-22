@@ -104,13 +104,13 @@ func scenario(t testing.TB, g graphicsdriver.Graphics, screen graphicsdriver.Ima
 	must(a.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: pix, Region: image.Rect(0, 0, 30, 20)}}))
 	must(b.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: pix[:3*4], Region: image.Rect(2, 3, 5, 7)}, {Pixels: pix[:1], Region: image.Rect(16, 8, 17, 9)}}))
 
-	builtin, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	builtin, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
 	must(err)
 	user, err := shader.Compile([]byte(userShader), graphics.ShaderSrcImageCount)
 	must(err)
-	s1, err := g.NewShader(builtin)
+	s1, err := g.NewShader(builtin.Descriptor())
 	must(err)
-	s2, err := g.NewShader(user)
+	s2, err := g.NewShader(user.Descriptor())
 	must(err)
 
 	vs, is := quads(3)
@@ -165,7 +165,7 @@ func encode(t testing.TB) []byte {
 	t.Helper()
 	rec := &recorder{}
 	g := NewGraphics(testInfo, rec)
-	s, err := g.NewSurface(SurfaceTarget{}, false)
+	s, err := g.NewSurface(graphicsdriver.SurfaceDescriptor{Kind: graphicsdriver.SurfaceKindRemote})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +431,7 @@ func TestReplayRejects(t *testing.T) {
 
 func encodeTestShaderAndDraw(t *testing.T, e *enc, withSetup bool, region image.Rectangle, indexCount uint32) {
 	t.Helper()
-	src, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	src, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +472,7 @@ func encodeTestShaderAndDraw(t *testing.T, e *enc, withSetup bool, region image.
 }
 
 func TestReplayResetsVerticesBetweenBatches(t *testing.T) {
-	src, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	src, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,15 +510,16 @@ func TestReplayResetsVerticesBetweenBatches(t *testing.T) {
 func TestSingleSurfaceUntilDispose(t *testing.T) {
 	rec := &recorder{}
 	g := NewGraphics(testInfo, rec)
-	s1, err := g.NewSurface(SurfaceTarget{}, false)
+	desc := graphicsdriver.SurfaceDescriptor{Kind: graphicsdriver.SurfaceKindRemote}
+	s1, err := g.NewSurface(desc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.NewSurface(SurfaceTarget{}, false); err == nil {
+	if _, err := g.NewSurface(desc); err == nil {
 		t.Error("second concurrent NewSurface must fail")
 	}
 	s1.Dispose()
-	s2, err := g.NewSurface(SurfaceTarget{}, false)
+	s2, err := g.NewSurface(desc)
 	if err != nil {
 		t.Fatalf("NewSurface after Dispose failed: %v", err)
 	}

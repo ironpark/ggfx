@@ -18,13 +18,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/shader"
 )
 
 // ShaderProgramFill returns a shader to fill the framebuffer with a color.
 func ShaderProgramFill(r, g, b, a byte) *shader.Program {
-	ir, err := graphics.CompileShader(fmt.Appendf(nil, `
+	ir, err := shader.CompileUser(fmt.Appendf(nil, `
 fn fragment(v: Vertex) -> vec4f {
 	return vec4f(%0.9f, %0.9f, %0.9f, %0.9f);
 }
@@ -50,7 +49,7 @@ func ShaderProgramImages(numImages int) *shader.Program {
 		}
 	}
 
-	ir, err := graphics.CompileShader(fmt.Appendf(nil, `
+	ir, err := shader.CompileUser(fmt.Appendf(nil, `
 fn fragment(v: Vertex) -> vec4f {
 	return %s;
 }

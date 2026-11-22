@@ -18,7 +18,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/shader"
 )
 
@@ -42,7 +41,7 @@ fn fragment(v: Vertex) -> vec4f {
 
 func newTestProgram(tb testing.TB) *shader.Program {
 	tb.Helper()
-	program, err := graphics.CompileShader([]byte(uniformsTestShader))
+	program, err := shader.CompileUser([]byte(uniformsTestShader))
 	if err != nil {
 		tb.Fatal(err)
 	}

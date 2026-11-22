@@ -21,7 +21,7 @@ import (
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/builtinshader"
-	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/shader"
 )
 
 // Shader represents a compiled shader program.
@@ -36,7 +36,7 @@ func NewShader(src []byte) (*Shader, error) {
 }
 
 func newShader(src []byte, name string) (*Shader, error) {
-	program, err := graphics.CompileShader(src)
+	program, err := shader.CompileUser(src)
 	if err != nil {
 		return nil, err
 	}

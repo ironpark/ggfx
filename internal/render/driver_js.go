@@ -31,12 +31,11 @@ func newGraphicsDriverFor(lib GraphicsLibrary, o *Options) (graphicsdriver.Graph
 	return nil, errUnsupported(lib)
 }
 
-func newGraphicsDriverForSurface(target any, o *Options) (graphicsdriver.Graphics, error) {
-	canvas, ok := target.(js.Value)
-	if !ok {
-		return nil, fmt.Errorf("render: a WebGL surface needs a canvas but got %T", target)
+func newGraphicsDriverForSurface(desc graphicsdriver.SurfaceDescriptor, o *Options) (graphicsdriver.Graphics, error) {
+	if desc.Kind != graphicsdriver.SurfaceKindCanvas {
+		return nil, fmt.Errorf("render: a WebGL surface needs SurfaceKindCanvas but got %s", desc.Kind)
 	}
-	return opengl.NewGraphics(canvas, o.ColorSpace)
+	return opengl.NewGraphics(js.Value(desc.Canvas), o.ColorSpace)
 }
 
 func newAutoGraphicsDriver(o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {

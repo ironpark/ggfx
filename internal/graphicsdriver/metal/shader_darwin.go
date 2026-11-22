@@ -17,20 +17,9 @@ package metal
 import (
 	"fmt"
 
-	"github.com/gogpu/naga/backend"
-	"github.com/gogpu/naga/ir"
-	"github.com/gogpu/naga/msl"
-
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
-	"github.com/ironpark/ggfx/internal/shader"
-)
-
-// The buffer indices the shader's uniform blocks are bound at. Index 0 is the vertex buffer.
-const (
-	internalUniformBufferIndex = 1
-	userUniformBufferIndex     = 2
 )
 
 type shaderRpsKey struct {
@@ -41,18 +30,21 @@ type shaderRpsKey struct {
 type Shader struct {
 	graphics *Graphics
 
-	program *shader.Program
-	lib     mtl.Library
-	fs      mtl.Function
+	desc *graphicsdriver.ShaderDescriptor
+	lib  mtl.Library
+	fs   mtl.Function
 	// vs is shared (see Graphics.vertexFunction) and must not be released.
 	vs   mtl.Function
 	rpss map[shaderRpsKey]mtl.RenderPipelineState
 }
 
-func newShader(graphics *Graphics, device mtl.Device, program *shader.Program) (*Shader, error) {
+func newShader(graphics *Graphics, device mtl.Device, desc *graphicsdriver.ShaderDescriptor) (*Shader, error) {
+	if desc == nil || desc.Source == nil {
+		return nil, fmt.Errorf("metal: shader descriptor has no source")
+	}
 	s := &Shader{
 		graphics: graphics,
-		program:  program,
+		desc:     desc,
 		rpss:     map[shaderRpsKey]mtl.RenderPipelineState{},
 	}
 	if err := s.init(device); err != nil {
@@ -69,37 +61,8 @@ func (s *Shader) Dispose() {
 	s.lib.Release()
 }
 
-// mslOptions maps the shader's resource bindings to Metal buffer and texture indices, and selects
-// the one entry point to write.
-func mslOptions(program *shader.Program, stage ir.ShaderStage, entryPoint string) msl.Options {
-	index := func(i int) *uint8 {
-		n := uint8(i)
-		return &n
-	}
-	resources := map[ir.ResourceBinding]msl.BindTarget{
-		shader.InternalUniformBinding: {Buffer: index(internalUniformBufferIndex)},
-		shader.UserUniformBinding:     {Buffer: index(userUniformBufferIndex)},
-	}
-	for i := range program.TextureCount {
-		resources[shader.TextureBinding(i)] = msl.BindTarget{Texture: index(i)}
-	}
-
-	o := msl.DefaultOptions()
-	o.BoundsCheckPolicies = backend.BoundsCheckPolicies{
-		Index:        backend.BoundsCheckReadZeroSkipWrite,
-		Buffer:       backend.BoundsCheckReadZeroSkipWrite,
-		ImageLoad:    backend.BoundsCheckUnchecked,
-		BindingArray: backend.BoundsCheckReadZeroSkipWrite,
-	}
-	o.PerEntryPointMap = map[string]msl.EntryPointResources{
-		entryPoint: {Resources: resources},
-	}
-	o.EntryPoint = &backend.EntryPointSelector{Stage: stage, Name: entryPoint}
-	return o
-}
-
 // vertexStage is a vertex function shared by every shader of a texture count: the prelude fixes the
-// vertex stage, so one built from shader.VertexProgram stands for all of them.
+// vertex stage, so one built from ShaderSource.VertexStage stands for all of them.
 type vertexStage struct {
 	lib mtl.Library
 	fn  mtl.Function
@@ -107,26 +70,22 @@ type vertexStage struct {
 
 // vertexFunction returns the shared vertex function for textureCount, building it on the first
 // call. It lives as long as g.
-func (g *Graphics) vertexFunction(textureCount int) (mtl.Function, error) {
+func (g *Graphics) vertexFunction(textureCount int, src graphicsdriver.ShaderSource) (mtl.Function, error) {
 	if vs, ok := g.vertexStages[textureCount]; ok {
 		return vs.fn, nil
 	}
-	vp, err := shader.VertexProgram(textureCount)
-	if err != nil {
-		return mtl.Function{}, err
-	}
-	src, info, err := msl.Compile(vp.Module, mslOptions(vp, ir.StageVertex, shader.VertexEntryPoint))
+	code, err := src.VertexStage(graphicsdriver.ShaderTarget{Language: graphicsdriver.ShaderLanguageMSL})
 	if err != nil {
 		return mtl.Function{}, fmt.Errorf("metal: translating the vertex shader to MSL failed: %w", err)
 	}
-	lib, err := g.device.NewLibraryWithSource(src, mtl.CompileOptions{})
+	lib, err := g.device.NewLibraryWithSource(string(code.Code), mtl.CompileOptions{})
 	if err != nil {
-		return mtl.Function{}, fmt.Errorf("metal: device.MakeLibrary for vertex failed: %w, source: %s", err, src)
+		return mtl.Function{}, fmt.Errorf("metal: device.MakeLibrary for vertex failed: %w, source: %s", err, code.Code)
 	}
-	fn, err := lib.NewFunctionWithName(info.EntryPointNames[shader.VertexEntryPoint])
+	fn, err := lib.NewFunctionWithName(code.EntryPoint)
 	if err != nil {
 		lib.Release()
-		return mtl.Function{}, fmt.Errorf("metal: lib.MakeFunction for vertex failed: %w, source: %s", err, src)
+		return mtl.Function{}, fmt.Errorf("metal: lib.MakeFunction for vertex failed: %w, source: %s", err, code.Code)
 	}
 	if g.vertexStages == nil {
 		g.vertexStages = map[int]vertexStage{}
@@ -136,18 +95,18 @@ func (g *Graphics) vertexFunction(textureCount int) (mtl.Function, error) {
 }
 
 func (s *Shader) init(device mtl.Device) (err error) {
-	vs, err := s.graphics.vertexFunction(s.program.TextureCount)
+	vs, err := s.graphics.vertexFunction(s.desc.TextureCount, s.desc.Source)
 	if err != nil {
 		return err
 	}
 
-	src, info, err := msl.Compile(s.program.Module, mslOptions(s.program, ir.StageFragment, shader.FragmentEntryPoint))
+	code, err := s.desc.Source.FragmentStage(graphicsdriver.ShaderTarget{Language: graphicsdriver.ShaderLanguageMSL})
 	if err != nil {
 		return fmt.Errorf("metal: translating the fragment shader to MSL failed: %w", err)
 	}
-	lib, err := device.NewLibraryWithSource(src, mtl.CompileOptions{})
+	lib, err := device.NewLibraryWithSource(string(code.Code), mtl.CompileOptions{})
 	if err != nil {
-		return fmt.Errorf("metal: device.MakeLibrary failed: %w, source: %s", err, src)
+		return fmt.Errorf("metal: device.MakeLibrary failed: %w, source: %s", err, code.Code)
 	}
 	defer func() {
 		if err != nil {
@@ -155,9 +114,9 @@ func (s *Shader) init(device mtl.Device) (err error) {
 		}
 	}()
 
-	fs, err := lib.NewFunctionWithName(info.EntryPointNames[shader.FragmentEntryPoint])
+	fs, err := lib.NewFunctionWithName(code.EntryPoint)
 	if err != nil {
-		return fmt.Errorf("metal: lib.MakeFunction for fragment failed: %w, source: %s", err, src)
+		return fmt.Errorf("metal: lib.MakeFunction for fragment failed: %w, source: %s", err, code.Code)
 	}
 
 	s.lib = lib

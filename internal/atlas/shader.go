@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
-	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/shader"
 )
@@ -102,7 +101,7 @@ var (
 )
 
 func newBuiltinShader(src []byte, name string) *Shader {
-	ir, err := graphics.CompileShader(src)
+	ir, err := shader.CompileUser(src)
 	if err != nil {
 		panic(fmt.Errorf("atlas: compiling the %s shader failed: %w", name, err))
 	}

@@ -68,8 +68,14 @@ func (g *Graphics) ScreenFramebufferSize() (int, int) {
 	return g.glContext.Get("drawingBufferWidth").Int(), g.glContext.Get("drawingBufferHeight").Int()
 }
 
-// presenterFromTarget returns nil: the browser presents the canvas by itself, and there is only the
-// one canvas the context was created for.
-func presenterFromTarget(target any) (Presenter, error) {
+// presenterFromDescriptor returns nil: the browser presents the canvas by itself, and there is
+// only the one canvas the context was created for.
+func presenterFromDescriptor(desc graphicsdriver.SurfaceDescriptor) (Presenter, error) {
+	if desc.Kind != graphicsdriver.SurfaceKindCanvas {
+		return nil, fmt.Errorf("opengl: NewSurface needs SurfaceKindCanvas but got %s", desc.Kind)
+	}
+	if err := desc.Validate(); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }

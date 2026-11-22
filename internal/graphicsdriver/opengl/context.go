@@ -17,8 +17,6 @@
 package opengl
 
 import (
-	"github.com/gogpu/naga/glsl"
-
 	"errors"
 	"fmt"
 	"image"
@@ -436,13 +434,13 @@ func (c *context) newUniformBuffer(size int) buffer {
 	return buffer(b)
 }
 
-// glslVersion returns the GLSL version to translate shaders to: GLSL ES 3.00 for OpenGL ES and
+// shaderTarget returns the GLSL target to translate shaders to: GLSL ES 3.00 for OpenGL ES and
 // WebGL 2, and GLSL 3.30 for desktop OpenGL.
-func (c *context) glslVersion() glsl.Version {
+func (c *context) shaderTarget() graphicsdriver.ShaderTarget {
 	if c.ctx.IsES() {
-		return glsl.Version{Major: 3, Minor: 0, ES: true}
+		return graphicsdriver.ShaderTarget{Language: graphicsdriver.ShaderLanguageGLSLES, Version: 300}
 	}
-	return glsl.Version330
+	return graphicsdriver.ShaderTarget{Language: graphicsdriver.ShaderLanguageGLSL, Version: 330}
 }
 
 func shouldCheckFramebufferStatus() bool {

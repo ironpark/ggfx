@@ -29,23 +29,24 @@ type Surface struct {
 	kept    bool // the frame being drawn starts from the last
 }
 
-// NewSurface makes a surface for target: an NSView for Metal, an HWND for DirectX, the window's
-// own context for OpenGL on the desktop, which has MakeContextCurrent, SwapInterval and
-// SwapBuffers, and the canvas, a js.Value, in the browser, where the first surface creates the
-// driver. transparent asks for a surface that composites with what is behind it. NewSurface must
-// be called on the main thread, after Init.
-func NewSurface(target any, transparent bool) (*Surface, error) {
+// NewSurface makes a surface for the native target described by desc. In the browser, the first
+// surface creates the driver for its canvas. desc.Transparent asks for a surface that composites
+// with what is behind it. NewSurface must be called on the main thread, after Init.
+func NewSurface(desc graphicsdriver.SurfaceDescriptor) (*Surface, error) {
 	if state.Load() != stateRunning {
 		return nil, errors.New("render: NewSurface is called before Init or after Terminate")
 	}
+	if err := desc.Validate(); err != nil {
+		return nil, err
+	}
 	if driver == nil {
-		g, err := newGraphicsDriverForSurface(target, &options)
+		g, err := newGraphicsDriverForSurface(desc, &options)
 		if err != nil {
 			return nil, err
 		}
 		setDriver(g)
 	}
-	s, err := driver.NewSurface(target, transparent)
+	s, err := driver.NewSurface(desc)
 	if err != nil {
 		return nil, err
 	}

@@ -24,23 +24,68 @@ import (
 	"github.com/ironpark/ggfx/internal/render"
 )
 
-// SurfaceTarget is what a surface presents to: an [NSView] for Metal, an [HWND] for DirectX, a
-// [GLWindow] for OpenGL on the desktop, and a Canvas in the browser.
+// SurfaceTarget is what a surface presents to: an [NSView] for Metal, an [HWND] for DirectX, an
+// [X11Window] or [WaylandSurface] for Vulkan (Zig Vulkan driver), a [GLWindow] for OpenGL on the
+// desktop, a [RemoteTarget] for remote rendering, and a Canvas in the browser.
 type SurfaceTarget interface {
-	// driverTarget returns what the graphics driver takes.
-	driverTarget() any
+	// surfaceDescriptor returns the typed descriptor passed to the graphics driver.
+	surfaceDescriptor() graphicsdriver.SurfaceDescriptor
 }
 
 // NSView is an NSView pointer, the target of a Metal surface. The view renders the surface and
 // nothing else: the surface becomes its layer. A window's content view is the usual one.
 type NSView uintptr
 
-func (v NSView) driverTarget() any { return graphicsdriver.NSView(v) }
+func (v NSView) surfaceDescriptor() graphicsdriver.SurfaceDescriptor {
+	return graphicsdriver.SurfaceDescriptor{
+		Kind:   graphicsdriver.SurfaceKindNSView,
+		NSView: graphicsdriver.NSView(v),
+	}
+}
 
 // HWND is a Win32 window handle, the target of a DirectX surface.
 type HWND uintptr
 
-func (h HWND) driverTarget() any { return graphicsdriver.HWND(h) }
+func (h HWND) surfaceDescriptor() graphicsdriver.SurfaceDescriptor {
+	return graphicsdriver.SurfaceDescriptor{
+		Kind: graphicsdriver.SurfaceKindHWND,
+		HWND: graphicsdriver.HWND(h),
+	}
+}
+
+// X11Window is an X11 Display* and Window XID, the target of a Vulkan surface on X11.
+// Only the Zig Vulkan driver supports X11Window.
+type X11Window struct {
+	Display uintptr
+	Window  uintptr
+}
+
+func (w X11Window) surfaceDescriptor() graphicsdriver.SurfaceDescriptor {
+	return graphicsdriver.SurfaceDescriptor{
+		Kind: graphicsdriver.SurfaceKindX11,
+		X11: graphicsdriver.X11Window{
+			Display: w.Display,
+			Window:  w.Window,
+		},
+	}
+}
+
+// WaylandSurface is a wl_display* and wl_surface*, the target of a Vulkan surface on Wayland.
+// Only the Zig Vulkan driver supports WaylandSurface.
+type WaylandSurface struct {
+	Display uintptr
+	Surface uintptr
+}
+
+func (w WaylandSurface) surfaceDescriptor() graphicsdriver.SurfaceDescriptor {
+	return graphicsdriver.SurfaceDescriptor{
+		Kind: graphicsdriver.SurfaceKindWayland,
+		Wayland: graphicsdriver.WaylandSurface{
+			Display: w.Display,
+			Surface: w.Surface,
+		},
+	}
+}
 
 // GLPresenter is a window's own OpenGL context. A frame is drawn in the [GLContext], which shares
 // objects with it, and copied to it to be swapped.
@@ -55,7 +100,12 @@ type GLWindow struct {
 	Context GLPresenter
 }
 
-func (w GLWindow) driverTarget() any { return w.Context }
+func (w GLWindow) surfaceDescriptor() graphicsdriver.SurfaceDescriptor {
+	return graphicsdriver.SurfaceDescriptor{
+		Kind:        graphicsdriver.SurfaceKindGLPresenter,
+		GLPresenter: w.Context,
+	}
+}
 
 // Surface is a presentation target: a view's layer, a window's swap chain or its OpenGL context.
 type Surface struct {
@@ -70,7 +120,9 @@ func NewSurface(target SurfaceTarget, transparent bool) (*Surface, error) {
 	if target == nil {
 		return nil, errors.New("host: target must not be nil")
 	}
-	s, err := render.NewSurface(target.driverTarget(), transparent)
+	desc := target.surfaceDescriptor()
+	desc.Transparent = transparent
+	s, err := render.NewSurface(desc)
 	if err != nil {
 		return nil, err
 	}

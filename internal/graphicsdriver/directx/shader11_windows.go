@@ -16,6 +16,8 @@ package directx
 
 import (
 	"unsafe"
+
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 // vertexStage11 is the vertex shader and the input layout that every shader with one texture count
@@ -121,13 +123,13 @@ func (g *graphics11) uploadConstantBuffer(cb *_ID3D11Buffer, data []uint32, vers
 }
 
 // vertexStage returns the vertex shader and the input layout shared by the shaders with
-// textureCount source textures.
-func (g *graphics11) vertexStage(textureCount int) (_ *vertexStage11, ferr error) {
-	if v, ok := g.vertexStages[textureCount]; ok {
+// desc.TextureCount source textures.
+func (g *graphics11) vertexStage(desc *graphicsdriver.ShaderDescriptor) (_ *vertexStage11, ferr error) {
+	if v, ok := g.vertexStages[desc.TextureCount]; ok {
 		return v, nil
 	}
 
-	blob, err := vertexShaderBlob(textureCount)
+	blob, err := vertexShaderBlob(desc)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +154,6 @@ func (g *graphics11) vertexStage(textureCount int) (_ *vertexStage11, ferr error
 	if g.vertexStages == nil {
 		g.vertexStages = map[int]*vertexStage11{}
 	}
-	g.vertexStages[textureCount] = v
+	g.vertexStages[desc.TextureCount] = v
 	return v, nil
 }

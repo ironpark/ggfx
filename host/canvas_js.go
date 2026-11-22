@@ -14,10 +14,19 @@
 
 package host
 
-import "syscall/js"
+import (
+	"syscall/js"
+
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+)
 
 // Canvas is the browser's canvas element, the target of the WebGL surface. The browser has one
 // surface, and the graphics driver is created for its canvas.
 type Canvas js.Value
 
-func (c Canvas) driverTarget() any { return js.Value(c) }
+func (c Canvas) surfaceDescriptor() graphicsdriver.SurfaceDescriptor {
+	return graphicsdriver.SurfaceDescriptor{
+		Kind:   graphicsdriver.SurfaceKindCanvas,
+		Canvas: js.Value(c),
+	}
+}

@@ -26,7 +26,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/recent"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
 type resourceWithSize struct {
@@ -431,11 +430,8 @@ type surface12 struct {
 
 // NewSurface records the window. Its swap chain is created with the first screen image, on the
 // rendering thread.
-func (g *graphics12) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	if transparent {
-		return nil, errors.New("directx: a transparent surface is not supported")
-	}
-	w, err := surfaceTarget(target)
+func (g *graphics12) NewSurface(desc graphicsdriver.SurfaceDescriptor) (graphicsdriver.Surface, error) {
+	w, err := hwndFromDescriptor(desc)
 	if err != nil {
 		return nil, err
 	}
@@ -1240,19 +1236,19 @@ func (g *graphics12) MaxImageSize() int {
 	return _D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION
 }
 
-func (g *graphics12) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
-	vsh, err := vertexShaderBlob(program.TextureCount)
+func (g *graphics12) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdriver.Shader, error) {
+	vsh, err := vertexShaderBlob(desc)
 	if err != nil {
 		return nil, err
 	}
-	psh, err := compileShader(program)
+	psh, err := compileShader(desc)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &shader12{
 		graphics:               g,
-		userConstantBufferSize: userConstantBufferSize(program),
+		userConstantBufferSize: userConstantBufferSize(desc),
 		vertexShader:           vsh,
 		pixelShader:            psh,
 	}

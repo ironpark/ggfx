@@ -31,7 +31,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/ca"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal/mtl"
 	"github.com/ironpark/ggfx/internal/recent"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
 var sel_supportsFamily = objc.RegisterName("supportsFamily:")
@@ -280,13 +279,17 @@ func (s *Surface) forgetLastLocked() {
 	}
 }
 
-// NewSurface makes a layer the layer of the graphicsdriver.NSView target. NewSurface must be
+// NewSurface makes a layer the layer of the NSView described by desc. NewSurface must be
 // called on the main thread.
-func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	nsView, ok := target.(graphicsdriver.NSView)
-	if !ok {
-		return nil, fmt.Errorf("metal: NewSurface needs an NSView but got %T", target)
+func (g *Graphics) NewSurface(desc graphicsdriver.SurfaceDescriptor) (graphicsdriver.Surface, error) {
+	if desc.Kind != graphicsdriver.SurfaceKindNSView {
+		return nil, fmt.Errorf("metal: NewSurface needs SurfaceKindNSView but got %s", desc.Kind)
 	}
+	if err := desc.Validate(); err != nil {
+		return nil, err
+	}
+	nsView := desc.NSView
+	transparent := desc.Transparent
 	s := &Surface{graphics: g}
 	s.view.runOnMainThread = g.runOnMainThread
 	if err := s.view.initialize(g.device, g.colorSpace); err != nil {
@@ -873,7 +876,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		st.viewportWidth, st.viewportHeight = w, h
 	}
 	if st.vertexBuffer != g.vb {
-		g.rce.SetVertexBuffer(g.vb, 0, 0)
+		g.rce.SetVertexBuffer(g.vb, 0, graphicsdriver.MetalVertexBufferIndex)
 		st.vertexBuffer = g.vb
 	}
 
@@ -890,19 +893,18 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	const p = graphics.ProjectionMatrixUniformDwordIndex
 	const internalSize = unsafe.Sizeof(*internal)
 	if projection := [16]uint32(internal[p : p+16]); !st.vertexInternalSet || st.projection != projection {
-		g.rce.SetVertexBytes(unsafe.Pointer(internal), internalSize, internalUniformBufferIndex)
+		g.rce.SetVertexBytes(unsafe.Pointer(internal), internalSize, graphicsdriver.MetalInternalUniformBufferIndex)
 		st.vertexInternalSet = true
 		st.projection = projection
 	}
-	if shader.program.FragmentReadsInternalUniforms && st.fragmentInternalVersion != versions.Internal {
-		g.rce.SetFragmentBytes(unsafe.Pointer(internal), internalSize, internalUniformBufferIndex)
+	if shader.desc.FragmentReadsInternalUniforms && st.fragmentInternalVersion != versions.Internal {
+		g.rce.SetFragmentBytes(unsafe.Pointer(internal), internalSize, graphicsdriver.MetalInternalUniformBufferIndex)
 		st.fragmentInternalVersion = versions.Internal
 	}
 	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 && st.userVersion != versions.User {
-		const maxInlineBytes = 4096
 		nbytes := unsafe.Sizeof(user[0]) * uintptr(len(user))
-		if nbytes <= maxInlineBytes {
-			g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), nbytes, userUniformBufferIndex)
+		if nbytes <= graphicsdriver.MetalMaxInlineUniformBytes {
+			g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), nbytes, graphicsdriver.MetalUserUniformBufferIndex)
 		} else {
 			buf, offset := g.uploadSpace(alignUploadOffset(nbytes))
 			if buf == (mtl.Buffer{}) {
@@ -912,7 +914,7 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 			src := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(user))), nbytes)
 			copy(dst[offset:], src)
 			buf.DidModifyRange(offset, nbytes)
-			g.rce.SetFragmentBuffer(buf, int(offset), userUniformBufferIndex)
+			g.rce.SetFragmentBuffer(buf, int(offset), graphicsdriver.MetalUserUniformBufferIndex)
 		}
 		st.userVersion = versions.User
 	}
@@ -1025,8 +1027,8 @@ func (g *Graphics) MaxImageSize() int {
 	return g.maxImageSize
 }
 
-func (g *Graphics) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
-	s, err := newShader(g, g.device, program)
+func (g *Graphics) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdriver.Shader, error) {
+	s, err := newShader(g, g.device, desc)
 	if err != nil {
 		return nil, err
 	}

@@ -408,7 +408,7 @@ func (c *newShaderCommand) String() string {
 
 // Exec executes a newShaderCommand.
 func (c *newShaderCommand) Exec(commandQueue *commandQueue, graphicsDriver graphicsdriver.Graphics, indexOffset int) error {
-	s, err := graphicsDriver.NewShader(c.ir)
+	s, err := graphicsDriver.NewShader(c.ir.Descriptor())
 	if err != nil {
 		return err
 	}

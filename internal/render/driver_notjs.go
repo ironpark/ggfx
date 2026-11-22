@@ -23,6 +23,6 @@ import (
 )
 
 // newGraphicsDriverForSurface is not called outside the browser, where Init creates the driver.
-func newGraphicsDriverForSurface(target any, o *Options) (graphicsdriver.Graphics, error) {
+func newGraphicsDriverForSurface(desc graphicsdriver.SurfaceDescriptor, o *Options) (graphicsdriver.Graphics, error) {
 	return nil, errors.New("render: Init created no graphics driver")
 }

@@ -20,7 +20,6 @@ package fakedriver
 
 import (
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"image"
 	"unsafe"
@@ -28,7 +27,6 @@ import (
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
 // MaxImageSize is the largest image the driver makes.
@@ -78,9 +76,23 @@ func (g *Graphics) SupportsPixelFormat(f graphicsdriver.PixelFormat) bool {
 	return f <= graphicsdriver.PixelFormatA8
 }
 
-func (g *Graphics) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	return nil, errors.New("fakedriver: no surfaces")
+func (g *Graphics) NewSurface(desc graphicsdriver.SurfaceDescriptor) (graphicsdriver.Surface, error) {
+	g.logf("NewSurface %s transparent=%t", desc.Kind, desc.Transparent)
+	return &Surface{g: g}, nil
 }
+
+// Surface is a surface of the fake driver's.
+type Surface struct {
+	g *Graphics
+}
+
+func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
+	return s.g.newImage(width, height, graphicsdriver.PixelFormatRGBA8), nil
+}
+
+func (s *Surface) FlipsY() bool { return false }
+
+func (s *Surface) Dispose() {}
 
 func (g *Graphics) SetVertices(vertices []float32, indices []uint32) error {
 	if len(vertices) == 0 || len(indices) == 0 || len(vertices)%graphics.VertexFloatCount != 0 {
@@ -121,11 +133,11 @@ func (g *Graphics) newImage(width, height int, format graphicsdriver.PixelFormat
 	return i
 }
 
-func (g *Graphics) NewShader(program *shader.Program) (graphicsdriver.Shader, error) {
+func (g *Graphics) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdriver.Shader, error) {
 	g.next++
 	g.shaders++
-	s := &Shader{g: g, id: g.next, program: program}
-	g.logf("NewShader #%d textures %d uniforms %d", s.id, program.TextureCount, program.UniformDwordCount)
+	s := &Shader{g: g, id: g.next, desc: desc}
+	g.logf("NewShader #%d textures %d uniforms %d", s.id, desc.TextureCount, desc.UniformDwordCount)
 	return s, nil
 }
 
@@ -177,7 +189,7 @@ func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.Shader
 		blend.BlendOperationAlpha > graphicsdriver.BlendOperationMax {
 		panic(fmt.Sprintf("fakedriver: blend %v", blend))
 	}
-	if len(uniforms) != graphics.PreservedUniformDwordCount+s.program.UniformDwordCount {
+	if len(uniforms) != graphics.PreservedUniformDwordCount+s.desc.UniformDwordCount {
 		panic(fmt.Sprintf("fakedriver: %d dwords of uniforms", len(uniforms)))
 	}
 	g.logf("DrawTriangles #%d %v #%d %v %d %v %s %d %d", d.id, ids, s.id, dstRegions, indexOffset, blend,
@@ -259,7 +271,7 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 type Shader struct {
 	g        *Graphics
 	id       int
-	program  *shader.Program
+	desc     *graphicsdriver.ShaderDescriptor
 	disposed bool
 }
 

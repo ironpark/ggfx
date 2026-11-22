@@ -17,26 +17,16 @@ package opengl
 import (
 	"fmt"
 
-	"github.com/gogpu/naga/backend"
-	"github.com/gogpu/naga/glsl"
-	"github.com/gogpu/naga/ir"
-
 	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
-	ggshader "github.com/ironpark/ggfx/internal/shader"
-)
-
-// The uniform buffer binding points the shader's uniform blocks are bound at.
-const (
-	internalUniformBlockBinding = 0
-	userUniformBlockBinding     = 1
 )
 
 type Shader struct {
 	graphics *Graphics
 
-	program *ggshader.Program
-	p       program
+	desc *graphicsdriver.ShaderDescriptor
+	p    program
 
 	// linked reports whether the link status was checked and the uniform blocks and samplers
 	// were set up. That waits for the link, so it is done at the first draw: with
@@ -45,10 +35,11 @@ type Shader struct {
 
 	// vertex is the shared vertex stage attached to p. fs is the fragment stage, and fssrc its
 	// source, kept for the error message until linked.
-	vertex *vertexShader
-	fs     shader
-	fssrc  string
-	fsinfo glsl.TranslationInfo
+	vertex         *vertexShader
+	fs             shader
+	fssrc          string
+	fsBlocks       []graphicsdriver.ShaderUniformBlock
+	fsTextureNames []string
 
 	// samplerLocations are the locations of the sampler uniforms for the source textures, -1 for a
 	// texture the fragment shader does not read. samplerUnits are the texture units last set to
@@ -57,10 +48,13 @@ type Shader struct {
 	samplerUnits     [graphics.ShaderSrcImageCount]int32
 }
 
-func newShader(graphics *Graphics, program *ggshader.Program) (*Shader, error) {
+func newShader(graphics *Graphics, desc *graphicsdriver.ShaderDescriptor) (*Shader, error) {
+	if desc == nil || desc.Source == nil {
+		return nil, fmt.Errorf("opengl: shader descriptor has no source")
+	}
 	s := &Shader{
 		graphics: graphics,
-		program:  program,
+		desc:     desc,
 	}
 	if err := s.compile(); err != nil {
 		return nil, err
@@ -73,51 +67,30 @@ func (s *Shader) Dispose() {
 	s.graphics.deleteProgram(s.p)
 }
 
-// glslOptions returns the options to translate entryPoint of the shader to GLSL.
-func glslOptions(version glsl.Version, stage ir.ShaderStage, entryPoint string) glsl.Options {
-	o := glsl.DefaultOptions()
-	o.LangVersion = version
-	o.EntryPoint = &backend.EntryPointSelector{Stage: stage, Name: entryPoint}
-	// The projection matrix the driver sets already maps to OpenGL's clip space.
-	o.SkipAdjustCoordinateSpace = true
-	o.BoundsCheckPolicies.ImageLoad = backend.BoundsCheckUnchecked
-	return o
-}
-
-// glslTextureName returns the name naga gives the sampler uniform of the source texture i in the
-// fragment stage.
-func glslTextureName(i int) string {
-	b := ggshader.TextureBinding(i)
-	return fmt.Sprintf("_group_%d_binding_%d_fs", b.Group, b.Binding)
-}
-
 // vertexShader is a vertex shader object shared by every program of a texture count: the prelude
-// fixes the vertex stage, so one compiled from ggshader.VertexProgram stands for all of them.
+// fixes the vertex stage, so one compiled from ShaderSource.VertexStage stands for all of them.
 type vertexShader struct {
 	shader shader
 	src    string
-	info   glsl.TranslationInfo
+	blocks []graphicsdriver.ShaderUniformBlock
 }
 
 // vertexShader returns the shared vertex shader for textureCount, compiling it on the first call.
 // The shader objects live as long as the context; openGLState.reset forgets them.
-func (g *Graphics) vertexShader(textureCount int) (*vertexShader, error) {
+func (g *Graphics) vertexShader(textureCount int, src graphicsdriver.ShaderSource) (*vertexShader, error) {
 	if vs, ok := g.state.vertexShaders[textureCount]; ok {
 		return vs, nil
 	}
-	vp, err := ggshader.VertexProgram(textureCount)
-	if err != nil {
-		return nil, err
-	}
-	src, info, err := glsl.Compile(vp.Module, glslOptions(g.context.glslVersion(), ir.StageVertex, ggshader.VertexEntryPoint))
+	code, err := src.VertexStage(g.context.shaderTarget())
 	if err != nil {
 		return nil, fmt.Errorf("opengl: translating the vertex shader to GLSL failed: %w", err)
 	}
-	sh, err := g.context.newShader(gl.VERTEX_SHADER, src)
+	vssrc := string(code.Code)
+	sh, err := g.context.newShader(gl.VERTEX_SHADER, vssrc)
 	if err != nil {
 		return nil, err
 	}
-	vs := &vertexShader{shader: sh, src: src, info: info}
+	vs := &vertexShader{shader: sh, src: vssrc, blocks: code.UniformBlocks}
 	if g.state.vertexShaders == nil {
 		g.state.vertexShaders = map[int]*vertexShader{}
 	}
@@ -126,15 +99,16 @@ func (g *Graphics) vertexShader(textureCount int) (*vertexShader, error) {
 }
 
 func (s *Shader) compile() error {
-	vs, err := s.graphics.vertexShader(s.program.TextureCount)
+	vs, err := s.graphics.vertexShader(s.desc.TextureCount, s.desc.Source)
 	if err != nil {
 		return err
 	}
 
-	fssrc, fsinfo, err := glsl.Compile(s.program.Module, glslOptions(s.graphics.context.glslVersion(), ir.StageFragment, ggshader.FragmentEntryPoint))
+	fscode, err := s.desc.Source.FragmentStage(s.graphics.context.shaderTarget())
 	if err != nil {
 		return fmt.Errorf("opengl: translating the fragment shader to GLSL failed: %w", err)
 	}
+	fssrc := string(fscode.Code)
 
 	// Without the extension enabled, a browser may compile in the background all the same, but
 	// need not.
@@ -155,7 +129,8 @@ func (s *Shader) compile() error {
 	s.vertex = vs
 	s.fs = fs
 	s.fssrc = fssrc
-	s.fsinfo = fsinfo
+	s.fsBlocks = fscode.UniformBlocks
+	s.fsTextureNames = fscode.TextureNames
 	return nil
 }
 
@@ -178,19 +153,19 @@ func (s *Shader) link() error {
 	s.deleteFragmentShader()
 
 	// Attach the uniform blocks to their binding points. A block a stage does not read is not
-	// emitted, so bind whatever naga reports. The vertex stage's blocks are the shared vertex
+	// emitted, so bind whatever the stage reports. The vertex stage's blocks are the shared vertex
 	// shader's.
-	for _, info := range []glsl.TranslationInfo{s.vertex.info, s.fsinfo} {
-		for _, u := range info.Uniforms {
-			idx := ctx.GetUniformBlockIndex(uint32(p), u.BlockName)
+	for _, blocks := range [][]graphicsdriver.ShaderUniformBlock{s.vertex.blocks, s.fsBlocks} {
+		for _, u := range blocks {
+			idx := ctx.GetUniformBlockIndex(uint32(p), u.Name)
 			if idx == gl.INVALID_INDEX {
 				continue
 			}
-			switch u.Binding {
-			case ggshader.InternalUniformBinding:
-				ctx.UniformBlockBinding(uint32(p), idx, internalUniformBlockBinding)
-			case ggshader.UserUniformBinding:
-				ctx.UniformBlockBinding(uint32(p), idx, userUniformBlockBinding)
+			switch u.Kind {
+			case graphicsdriver.ShaderUniformBlockInternal:
+				ctx.UniformBlockBinding(uint32(p), idx, graphicsdriver.GLInternalUniformBlockBinding)
+			case graphicsdriver.ShaderUniformBlockUser:
+				ctx.UniformBlockBinding(uint32(p), idx, graphicsdriver.GLUserUniformBlockBinding)
 			}
 		}
 	}
@@ -198,14 +173,15 @@ func (s *Shader) link() error {
 	for i := range s.samplerLocations {
 		s.samplerLocations[i] = -1
 		s.samplerUnits[i] = -1
-		if i < s.program.TextureCount {
-			s.samplerLocations[i] = ctx.GetUniformLocation(uint32(p), glslTextureName(i))
+		if i < len(s.fsTextureNames) && s.fsTextureNames[i] != "" {
+			s.samplerLocations[i] = ctx.GetUniformLocation(uint32(p), s.fsTextureNames[i])
 		}
 	}
 
 	s.linked = true
 	s.fssrc = ""
-	s.fsinfo = glsl.TranslationInfo{}
+	s.fsBlocks = nil
+	s.fsTextureNames = nil
 	return nil
 }
 

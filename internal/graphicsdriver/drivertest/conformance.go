@@ -174,7 +174,7 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 	})
 
 	t.Run("DrawTrianglesCopyAndScissor", func(t *testing.T) {
-		prog, err := graphics.CompileShader(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+		prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,7 +191,7 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 			}
 			defer dst.Dispose()
 
-			sh, err := g.NewShader(prog)
+			sh, err := g.NewShader(prog.Descriptor())
 			if err != nil {
 				return err
 			}

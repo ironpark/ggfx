@@ -122,12 +122,17 @@ func parseFeatureLevel(str string) (_D3D_FEATURE_LEVEL, bool) {
 	}
 }
 
-func surfaceTarget(target any) (windows.HWND, error) {
-	w, ok := target.(graphicsdriver.HWND)
-	if !ok {
-		return 0, fmt.Errorf("directx: NewSurface needs an HWND but got %T", target)
+func hwndFromDescriptor(desc graphicsdriver.SurfaceDescriptor) (windows.HWND, error) {
+	if desc.Transparent {
+		return 0, errors.New("directx: a transparent surface is not supported")
 	}
-	return windows.HWND(w), nil
+	if desc.Kind != graphicsdriver.SurfaceKindHWND {
+		return 0, fmt.Errorf("directx: NewSurface needs SurfaceKindHWND but got %s", desc.Kind)
+	}
+	if err := desc.Validate(); err != nil {
+		return 0, err
+	}
+	return windows.HWND(desc.HWND), nil
 }
 
 var deviceCreated atomic.Bool

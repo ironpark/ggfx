@@ -31,7 +31,7 @@ func TestInternalUniformConstants(t *testing.T) {
 			t.Errorf("%s: got %d, want %d", c.name, c.got, c.want)
 		}
 	}
-	if _, err := graphics.CompileShader([]byte(`fn fragment(v: Vertex) -> vec4f { return v.color; }`)); err != nil {
+	if _, err := shader.CompileUser([]byte(`fn fragment(v: Vertex) -> vec4f { return v.color; }`)); err != nil {
 		t.Error(err)
 	}
 }

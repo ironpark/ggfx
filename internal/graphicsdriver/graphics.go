@@ -20,7 +20,6 @@ import (
 
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
 type DstRegion struct {
@@ -57,15 +56,14 @@ type Graphics interface {
 	// after Initialize, on the render thread, and its answer must not change afterwards.
 	SupportsPixelFormat(format PixelFormat) bool
 
-	// NewSurface creates a presentation target for a native window. target is what the platform's
-	// UI layer has: an NSView or an HWND, or an opengl.Presenter for OpenGL.
-	// transparent asks for a surface that composites with what is behind the window; a driver
+	// NewSurface creates a presentation target for the native window described by desc.
+	// desc.Transparent asks for a surface that composites with what is behind the window; a driver
 	// that cannot present one returns an error. NewSurface is called on the main thread.
-	NewSurface(target any, transparent bool) (Surface, error)
+	NewSurface(desc SurfaceDescriptor) (Surface, error)
 	NeedsClearingScreen() bool
 	MaxImageSize() int
 
-	NewShader(program *shader.Program) (Shader, error)
+	NewShader(desc *ShaderDescriptor) (Shader, error)
 
 	// FlipsY reports whether a draw to an offscreen image takes the projection with Y flipped (see
 	// Surface.FlipsY for a screen image). The projection in the uniforms maps the destination's
@@ -89,13 +87,6 @@ type UniformVersions struct {
 	Internal uint64
 	User     uint64
 }
-
-// NSView is an NSView pointer. The view a Metal surface is made for renders that surface and
-// nothing else: the surface becomes its layer.
-type NSView uintptr
-
-// HWND is a Win32 window handle.
-type HWND uintptr
 
 // Surface is one presentation target: a window's swap chain or layer, or the default framebuffer
 // of a GL context. End(FlushModePresent) presents every surface whose screen image was drawn to

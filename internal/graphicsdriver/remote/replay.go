@@ -280,7 +280,7 @@ func (r *Replayer) op(g graphicsdriver.Graphics, d *dec, op uint8, target *Targe
 		if err != nil {
 			return err
 		}
-		s, err := g.NewShader(p)
+		s, err := g.NewShader(p.Descriptor())
 		if err != nil {
 			return err
 		}

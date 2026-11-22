@@ -15,7 +15,6 @@
 package directx
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"unsafe"
@@ -26,7 +25,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/recent"
-	"github.com/ironpark/ggfx/internal/shader"
 )
 
 var inputElementDescsForDX11 []_D3D11_INPUT_ELEMENT_DESC
@@ -279,11 +277,8 @@ func (g *graphics11) End(mode graphicsdriver.FlushMode) error {
 
 // NewSurface records the window. Its swap chain is created with the first screen image, on the
 // rendering thread.
-func (g *graphics11) NewSurface(target any, transparent bool) (graphicsdriver.Surface, error) {
-	if transparent {
-		return nil, errors.New("directx: a transparent surface is not supported")
-	}
-	w, err := surfaceTarget(target)
+func (g *graphics11) NewSurface(desc graphicsdriver.SurfaceDescriptor) (graphicsdriver.Surface, error) {
+	w, err := hwndFromDescriptor(desc)
 	if err != nil {
 		return nil, err
 	}
@@ -492,8 +487,8 @@ func (g *graphics11) MaxImageSize() int {
 	return 16384
 }
 
-func (g *graphics11) NewShader(program *shader.Program) (_ graphicsdriver.Shader, ferr error) {
-	psh, err := compileShader(program)
+func (g *graphics11) NewShader(desc *graphicsdriver.ShaderDescriptor) (_ graphicsdriver.Shader, ferr error) {
+	psh, err := compileShader(desc)
 	if err != nil {
 		return nil, err
 	}
@@ -502,14 +497,14 @@ func (g *graphics11) NewShader(program *shader.Program) (_ graphicsdriver.Shader
 			psh.Release()
 		}
 	}()
-	vs, err := g.vertexStage(program.TextureCount)
+	vs, err := g.vertexStage(desc)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &shader11{
 		graphics:               g,
-		userConstantBufferSize: userConstantBufferSize(program),
+		userConstantBufferSize: userConstantBufferSize(desc),
 		pixelShaderBlob:        psh,
 		vertexStage:            vs,
 	}

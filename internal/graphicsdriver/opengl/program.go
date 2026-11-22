@@ -62,7 +62,7 @@ type openGLState struct {
 	elementArrayBufferUse recent.Peak
 
 	// uniformBuffers hold the internal and the user's uniform blocks, bound at the binding points
-	// internalUniformBlockBinding and userUniformBlockBinding.
+	// graphicsdriver.GLInternalUniformBlockBinding and graphicsdriver.GLUserUniformBlockBinding.
 	uniformBuffers            [2]buffer
 	uniformBufferSizesInBytes [2]int
 	// uniformVersions are the versions of the blocks the buffers hold, 0 when unknown.
@@ -185,7 +185,7 @@ func (s *openGLState) resetLastUniforms() {
 func (s *openGLState) setUniforms(context *context, uniforms []uint32, versions graphicsdriver.UniformVersions) {
 	blocks := [2][]uint32{uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:]}
 	blockVersions := [2]uint64{versions.Internal, versions.User}
-	bindings := [2]uint32{internalUniformBlockBinding, userUniformBlockBinding}
+	bindings := [2]uint32{graphicsdriver.GLInternalUniformBlockBinding, graphicsdriver.GLUserUniformBlockBinding}
 	for i, block := range blocks {
 		if len(block) == 0 {
 			continue

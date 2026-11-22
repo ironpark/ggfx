@@ -25,13 +25,14 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/render"
+	"github.com/ironpark/ggfx/internal/shader"
 	etesting "github.com/ironpark/ggfx/internal/testing"
 )
 
 var nearestFilterShader *graphicscommand.Shader
 
 func init() {
-	ir, err := graphics.CompileShader([]byte(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe)))
+	ir, err := shader.CompileUser([]byte(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe)))
 	if err != nil {
 		panic(fmt.Sprintf("graphicscommand: compiling the nearest shader failed: %v", err))
 	}
