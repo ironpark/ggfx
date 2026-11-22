@@ -31,12 +31,14 @@ import (
 
 type resourceWithSize struct {
 	value       *_ID3D12Resource
+	gpuAddress  _D3D12_GPU_VIRTUAL_ADDRESS
 	sizeInBytes uint32
 }
 
 func (r *resourceWithSize) release() {
 	r.value.Release()
 	r.value = nil
+	r.gpuAddress = 0
 	r.sizeInBytes = 0
 }
 
@@ -1063,6 +1065,7 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 		}
 		g.vertices[g.frameIndex][vidx] = &resourceWithSize{
 			value:       vs,
+			gpuAddress:  vs.GetGPUVirtualAddress(),
 			sizeInBytes: vsize,
 		}
 		defer func() {
@@ -1101,6 +1104,7 @@ func (g *graphics12) SetVertices(vertices []float32, indices []uint32) (ferr err
 		}
 		g.indices[g.frameIndex][iidx] = &resourceWithSize{
 			value:       is,
+			gpuAddress:  is.GetGPUVirtualAddress(),
 			sizeInBytes: isize,
 		}
 		defer func() {
@@ -1318,30 +1322,42 @@ func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics
 		g.drawCommandList.ResourceBarrier(resourceBarriers)
 	}
 
-	if err := dst.setAsRenderTarget(g.drawCommandList, g.device); err != nil {
-		return err
+	backIdx := -1
+	if dst.screen {
+		backIdx = dst.surface.backBufferIndex
+	}
+	if g.drawListState.rtvImage != dst || g.drawListState.rtvBackIndex != backIdx {
+		if err := dst.setAsRenderTarget(g.drawCommandList, g.device); err != nil {
+			return err
+		}
+		g.drawListState.rtvImage = dst
+		g.drawListState.rtvBackIndex = backIdx
 	}
 
 	shader := shaderImpl.(*shader12)
 
 	w, h := dst.internalSize()
 	g.needFlushDrawCommandList = true
-	g.drawCommandList.RSSetViewports([]_D3D12_VIEWPORT{
-		{
-			TopLeftX: 0,
-			TopLeftY: 0,
-			Width:    float32(w),
-			Height:   float32(h),
-			MinDepth: _D3D12_MIN_DEPTH,
-			MaxDepth: _D3D12_MAX_DEPTH,
-		},
-	})
+	if g.drawListState.viewportW != w || g.drawListState.viewportH != h {
+		g.drawCommandList.RSSetViewports([]_D3D12_VIEWPORT{
+			{
+				TopLeftX: 0,
+				TopLeftY: 0,
+				Width:    float32(w),
+				Height:   float32(h),
+				MinDepth: _D3D12_MIN_DEPTH,
+				MaxDepth: _D3D12_MAX_DEPTH,
+			},
+		})
+		g.drawListState.viewportW = w
+		g.drawListState.viewportH = h
+	}
 	// The buffers of a batch stay the same over its draws. Buffers are released only after the GPU
 	// completed the command lists that used them, and drawListState is cleared at every Reset, so a
 	// view here cannot stand for a released buffer.
 	vb := g.vertices[g.frameIndex][len(g.vertices[g.frameIndex])-1]
 	vbv := _D3D12_VERTEX_BUFFER_VIEW{
-		BufferLocation: vb.value.GetGPUVirtualAddress(),
+		BufferLocation: vb.gpuAddress,
 		SizeInBytes:    vb.sizeInBytes,
 		StrideInBytes:  graphics.VertexFloatCount * uint32(unsafe.Sizeof(float32(0))),
 	}
@@ -1351,7 +1367,7 @@ func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics
 	}
 	ib := g.indices[g.frameIndex][len(g.indices[g.frameIndex])-1]
 	ibv := _D3D12_INDEX_BUFFER_VIEW{
-		BufferLocation: ib.value.GetGPUVirtualAddress(),
+		BufferLocation: ib.gpuAddress,
 		SizeInBytes:    ib.sizeInBytes,
 		Format:         _DXGI_FORMAT_R32_UINT,
 	}
@@ -1360,10 +1376,8 @@ func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics
 		g.drawListState.indexBuffer = ibv
 	}
 
-	// The projection is already flipped for Direct3D's render targets (see FlipsY). versions go
-	// unused: each draw writes its blocks to the frame's ring for its own descriptor table, which
-	// a ring range of an earlier draw would have to outlive resetFrame and growth to stand in for.
-	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, &g.drawListState, g.frameIndex, dst.renderTargetFormat(), srcImages, shader, dstRegions, uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:], blend, indexOffset); err != nil {
+	// The projection is already flipped for Direct3D's render targets (see FlipsY).
+	if err := g.pipelineStates.drawTriangles(g.device, g.drawCommandList, &g.drawListState, g.frameIndex, dst.renderTargetFormat(), srcImages, shader, dstRegions, uniforms[:graphics.PreservedUniformDwordCount], uniforms[graphics.PreservedUniformDwordCount:], versions, blend, indexOffset); err != nil {
 		return err
 	}
 

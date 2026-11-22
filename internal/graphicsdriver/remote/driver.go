@@ -17,11 +17,13 @@ package remote
 import (
 	"errors"
 	"image"
+	"slices"
 	"sync"
 
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/shader"
 )
 
@@ -40,10 +42,11 @@ type Transport interface {
 
 // Graphics is the app's side: a graphicsdriver.Graphics that encodes each call.
 type Graphics struct {
-	info Info
-	t    Transport
-	e    enc
-	next uint32
+	info     Info
+	t        Transport
+	e        enc
+	batchUse recent.Peak
+	next     uint32
 
 	// screen is the screen image, and drawn whether it was drawn to since the last present.
 	screen *Image
@@ -72,7 +75,14 @@ func NewGraphics(info Info, t Transport) *Graphics {
 
 // reset starts the next batch, its header to be written when it is shipped.
 func (g *Graphics) reset() {
-	g.e.b = append(g.e.b[:0], make([]byte, HeaderSize)...)
+	const minRetainedBatch = 64 * 1024
+	limit := max(g.batchUse.Max(), minRetainedBatch)
+	if cap(g.e.b) > recent.ShrinkFactor*limit {
+		g.e.b = make([]byte, HeaderSize, limit)
+		return
+	}
+	g.e.b = slices.Grow(g.e.b[:0], HeaderSize)[:HeaderSize]
+	clear(g.e.b)
 }
 
 // batch writes the header and returns the batch.
@@ -81,9 +91,7 @@ func (g *Graphics) batch() []byte {
 	if g.screen != nil {
 		h = Header{Screen: g.screen.id, Width: g.screen.width, Height: g.screen.height}
 	}
-	var he enc
-	he.header(h)
-	copy(g.e.b, he.b)
+	writeHeader(g.e.b, h)
 	return g.e.b
 }
 
@@ -143,6 +151,7 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 		}
 		g.drawn = false
 	}
+	g.batchUse.ObserveNow(len(g.e.b))
 	err := g.t.Send(g.batch(), present)
 	g.reset()
 	return err

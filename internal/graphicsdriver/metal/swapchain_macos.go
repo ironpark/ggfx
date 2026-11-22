@@ -217,7 +217,7 @@ func (c *swapChain) newSurface(width, height int) (swapBuffer, bool) {
 		PixelFormat: mtl.PixelFormatBGRA8UNorm,
 		Width:       width,
 		Height:      height,
-		StorageMode: storageMode,
+		StorageMode: textureStorageMode(c.device),
 		Usage:       mtl.TextureUsageRenderTarget | mtl.TextureUsageShaderRead,
 	}, surface, 0)
 	if tex == (mtl.Texture{}) {

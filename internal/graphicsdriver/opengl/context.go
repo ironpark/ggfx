@@ -98,6 +98,8 @@ type context struct {
 	lastViewportWidth         int
 	lastViewportHeight        int
 	lastBlend                 graphicsdriver.Blend
+	lastScissor               [4]int32
+	lastScissorValid          bool
 	maxTextureSize            int
 	maxTextureSizeOnce        sync.Once
 	initOnce                  sync.Once
@@ -179,6 +181,7 @@ func (c *context) reset() error {
 	c.lastViewportWidth = 0
 	c.lastViewportHeight = 0
 	c.lastBlend = graphicsdriver.Blend{}
+	c.lastScissorValid = false
 
 	c.ctx.Enable(gl.BLEND)
 	c.ctx.Enable(gl.SCISSOR_TEST)
@@ -186,6 +189,16 @@ func (c *context) reset() error {
 	c.screenFramebuffer = framebufferNative(c.ctx.GetInteger(gl.FRAMEBUFFER_BINDING))
 	// TODO: Need to update screenFramebufferWidth/Height?
 	return nil
+}
+
+func (c *context) scissor(x, y, width, height int32) {
+	s := [4]int32{x, y, width, height}
+	if c.lastScissorValid && c.lastScissor == s {
+		return
+	}
+	c.ctx.Scissor(x, y, width, height)
+	c.lastScissor = s
+	c.lastScissorValid = true
 }
 
 func (c *context) blend(blend graphicsdriver.Blend) {
@@ -305,6 +318,9 @@ func (c *context) framebufferPixels(buf []byte, f *framebuffer, region image.Rec
 		c.ctx.ReadPixels(tmp, x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE)
 		for i := range n {
 			buf[i] = tmp[4*i]
+		}
+		if cap(c.tmpPixels) > 64*1024 && 4*n < cap(c.tmpPixels)/4 {
+			c.tmpPixels = nil
 		}
 		return nil
 	}

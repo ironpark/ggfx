@@ -218,10 +218,11 @@ func TestRetarget(t *testing.T) {
 	g := fakedriver.New()
 	target := newTarget(g)
 	target.InternalWidth, target.InternalHeight = 208, 128
-	if _, err := NewReplayer().Replay(g, batch, target); err != nil {
+	r := NewReplayer()
+	if _, err := r.Replay(g, batch, target); err != nil {
 		t.Fatal(err)
 	}
-	u := retarget(uniformsFor(&shader.Program{}, screenW, screenH, 9), target)
+	u := r.retarget(uniformsFor(&shader.Program{}, screenW, screenH, 9), target)
 	m := u[graphics.ProjectionMatrixUniformDwordIndex:]
 	if got := math.Float32frombits(m[0]); got != 2.0/208 {
 		t.Errorf("projection x: got %v", got)
@@ -232,7 +233,6 @@ func TestRetarget(t *testing.T) {
 	if got := math.Float32frombits(u[graphics.DstTextureSizeUniformDwordIndex]); got != 208 {
 		t.Errorf("destination width: got %v", got)
 	}
-	r := NewReplayer()
 	if r.version(3, true) == r.version(3, false) {
 		t.Error("a rewritten block shares its version with the app's")
 	}

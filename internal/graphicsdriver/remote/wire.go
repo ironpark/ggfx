@@ -203,6 +203,17 @@ func (e *enc) u32s(v []uint32) {
 	e.bytes(unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), 4*len(v)))
 }
 
+// writeHeader writes h into dst[:HeaderSize] without allocating.
+func writeHeader(dst []byte, h Header) {
+	_ = dst[HeaderSize-1]
+	copy(dst[:4], batchMagic)
+	binary.LittleEndian.PutUint16(dst[4:6], Version)
+	binary.LittleEndian.PutUint16(dst[6:8], 0)
+	binary.LittleEndian.PutUint32(dst[8:12], h.Screen)
+	binary.LittleEndian.PutUint32(dst[12:16], uint32(h.Width))
+	binary.LittleEndian.PutUint32(dst[16:20], uint32(h.Height))
+}
+
 // header starts a batch.
 func (e *enc) header(h Header) {
 	e.b = append(e.b[:0], batchMagic...)

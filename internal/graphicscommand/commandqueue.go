@@ -175,7 +175,7 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 	c := q.drawTrianglesCommandPool.get()
 	c.dst = dst
 	c.srcs = srcs
-	c.vertices = q.lastVertices(len(vertices))
+	c.numVertexFloats = len(vertices)
 	c.blend = blend
 	c.dstRegions = append(c.dstRegions[:0], graphicsdriver.DstRegion{
 		Region:     dstRegion,
@@ -237,7 +237,7 @@ func (q *commandQueue) uniformVersions(c *drawTrianglesCommand, flipsY bool) gra
 
 // mergeIntoLast adds the vertices and indices appended last to last, the last command.
 func (q *commandQueue) mergeIntoLast(last *drawTrianglesCommand, vertexFloats, indices int, dstRegion image.Rectangle) {
-	last.setVertices(q.lastVertices(vertexFloats + last.numVertices()))
+	last.numVertexFloats += vertexFloats
 	if r := &last.dstRegions[len(last.dstRegions)-1]; r.Region == dstRegion {
 		r.IndexCount += indices
 		return
@@ -246,10 +246,6 @@ func (q *commandQueue) mergeIntoLast(last *drawTrianglesCommand, vertexFloats, i
 		Region:     dstRegion,
 		IndexCount: indices,
 	})
-}
-
-func (q *commandQueue) lastVertices(n int) []float32 {
-	return q.vertices[len(q.vertices)-n : len(q.vertices)]
 }
 
 // Enqueue enqueues a drawing command other than a draw-triangles command.

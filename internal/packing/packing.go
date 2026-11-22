@@ -126,23 +126,10 @@ func (n *Node) updateFreeUp() {
 	}
 }
 
-// refreshFree updates freeW and freeH of every node under n, after regions changed.
-func (n *Node) refreshFree() {
-	if n.child0 != nil {
-		n.child0.refreshFree()
-		n.child1.refreshFree()
-	}
-	n.updateFree()
-}
-
 func (n *Node) canFree() bool {
-	if n.used {
-		return false
-	}
-	if n.child0 == nil && n.child1 == nil {
-		return true
-	}
-	return n.child0.canFree() && n.child1.canFree()
+	// By invariant, free() collapses any parent whose two children are both free leaves,
+	// so an internal node always has at least one used descendant.
+	return !n.used && n.child0 == nil && n.child1 == nil
 }
 
 func (n *Node) Region() image.Rectangle {
@@ -292,6 +279,9 @@ func (p *Page) extendAndAlloc(width, height int) *Node {
 		return n
 	}
 
+	if width > p.maxSize || height > p.maxSize {
+		return nil
+	}
 	if p.width >= p.maxSize && p.height >= p.maxSize {
 		return nil
 	}
@@ -312,6 +302,9 @@ func (p *Page) extendAndAlloc(width, height int) *Node {
 				if newWidth > p.maxSize && newHeight > p.maxSize {
 					panic(fmt.Sprintf("packing: too big extension: allocating size: (%d, %d), current size: (%d, %d), new size: (%d, %d), (i, j): (%d, %d), max size: %d", width, height, p.width, p.height, newWidth, newHeight, i, j, p.maxSize))
 				}
+				continue
+			}
+			if newWidth < width || newHeight < height {
 				continue
 			}
 
@@ -338,7 +331,7 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 	if p.root != nil {
 		_ = walk(p.root, func(n *Node) error {
 			if n.region.Max.X < allocatableWidth && n.region.Max.Y < allocatableHeight {
-				return nil
+				return skipChildren
 			}
 			if n.used {
 				edgeAllocated = true
@@ -362,9 +355,7 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 		// Extend the page in the vertical direction.
 		if newHeight-p.height > 0 {
 			upper := p.root
-			lower := &Node{
-				region: image.Rect(in, allocatableHeight, allocatableWidth, newAllocatableHeight),
-			}
+			lower := newLeaf(image.Rect(in, allocatableHeight, allocatableWidth, newAllocatableHeight), nil)
 			p.root = &Node{
 				region: image.Rect(in, in, allocatableWidth, newAllocatableHeight),
 				child0: upper,
@@ -372,14 +363,13 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 			}
 			upper.parent = p.root
 			lower.parent = p.root
+			p.root.updateFree()
 		}
 
 		// Extend the page in the horizontal direction.
 		if newWidth-p.width > 0 {
 			left := p.root
-			right := &Node{
-				region: image.Rect(allocatableWidth, in, newAllocatableWidth, newAllocatableHeight),
-			}
+			right := newLeaf(image.Rect(allocatableWidth, in, newAllocatableWidth, newAllocatableHeight), nil)
 			p.root = &Node{
 				region: image.Rect(in, in, newAllocatableWidth, newAllocatableHeight),
 				child0: left,
@@ -387,6 +377,7 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 			}
 			left.parent = p.root
 			right.parent = p.root
+			p.root.updateFree()
 		}
 
 		origWidth, origHeight := p.width, p.height
@@ -400,42 +391,46 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 		}
 	} else {
 		// Extend the page by extending edge nodes.
+		type savedEdge struct {
+			node *Node
+			maxX int
+			maxY int
+		}
 
 		origWidth, origHeight := p.width, p.height
-		origMaxXs := map[*Node]int{}
-		origMaxYs := map[*Node]int{}
+		saved := make([]savedEdge, len(edgeNodes))
 
-		for _, n := range edgeNodes {
+		for i, n := range edgeNodes {
+			saved[i] = savedEdge{node: n, maxX: n.region.Max.X, maxY: n.region.Max.Y}
 			if n.region.Max.X == allocatableWidth {
-				origMaxXs[n] = n.region.Max.X
 				n.region.Max.X = newAllocatableWidth
 			}
 			if n.region.Max.Y == allocatableHeight {
-				origMaxYs[n] = n.region.Max.Y
 				n.region.Max.Y = newAllocatableHeight
 			}
+		}
+		// walk recorded parents before children and every ancestor of an edge node also touches
+		// the edge, so reverse order updates every child before its parent.
+		for i := len(edgeNodes) - 1; i >= 0; i-- {
+			edgeNodes[i].updateFree()
 		}
 
 		rollback = func() {
 			p.width = origWidth
 			p.height = origHeight
-			for n, x := range origMaxXs {
-				n.region.Max.X = x
-			}
-			for n, y := range origMaxYs {
-				n.region.Max.Y = y
+			for i := len(saved) - 1; i >= 0; i-- {
+				s := saved[i]
+				s.node.region.Max.X = s.maxX
+				s.node.region.Max.Y = s.maxY
+				s.node.updateFree()
 			}
 		}
 	}
 
 	p.width = newWidth
 	p.height = newHeight
-	p.root.refreshFree()
 
-	return func() {
-		rollback()
-		p.root.refreshFree()
-	}
+	return rollback
 }
 
 func (p *Page) AllocatedRegion() image.Rectangle {

@@ -84,6 +84,11 @@ type Replayer struct {
 	// vertices and indices are the counts the last SetVertices gave, which draws are checked
 	// against.
 	vertices, indices int
+
+	// Scratch slices reused across replayed commands to avoid per-draw allocations.
+	regions     []graphicsdriver.DstRegion
+	retargetBuf []uint32
+	pixelsArgs  []graphicsdriver.PixelsArgs
 }
 
 // The versions an app gives are below 1<<versionBits; the replay puts its salt above them.
@@ -308,24 +313,46 @@ func (r *Replayer) op(g graphicsdriver.Graphics, d *dec, op uint8, target *Targe
 		if i.screen {
 			return errors.New("remote: pixels written to the screen")
 		}
-		args := make([]graphicsdriver.PixelsArgs, 0, n)
+		args := r.pixelsArgs[:0]
+		if cap(args) < n {
+			args = make([]graphicsdriver.PixelsArgs, 0, n)
+		}
 		for range n {
 			region := d.rect()
 			pix := d.bytes()
 			if d.err != nil {
+				clear(args)
+				if cap(args) <= 256 {
+					r.pixelsArgs = args[:0]
+				} else {
+					r.pixelsArgs = nil
+				}
 				return d.err
 			}
 			if err := checkPixels(i, region, len(pix)); err != nil {
+				clear(args)
+				if cap(args) <= 256 {
+					r.pixelsArgs = args[:0]
+				} else {
+					r.pixelsArgs = nil
+				}
 				return err
 			}
 			if !region.Empty() {
 				args = append(args, graphicsdriver.PixelsArgs{Pixels: pix, Region: region})
 			}
 		}
-		if len(args) == 0 {
-			return nil
+		var writeErr error
+		if len(args) > 0 {
+			writeErr = i.img.WritePixels(args)
 		}
-		return i.img.WritePixels(args)
+		clear(args)
+		if cap(args) <= 256 {
+			r.pixelsArgs = args[:0]
+		} else {
+			r.pixelsArgs = nil
+		}
+		return writeErr
 
 	case opDrawTriangles:
 		return r.draw(g, d, target, res)
@@ -425,7 +452,19 @@ func (r *Replayer) draw(g graphicsdriver.Graphics, d *dec, target *Target, res *
 	}
 
 	bounds := dst.bounds()
-	regions := make([]graphicsdriver.DstRegion, n)
+	regions := r.regions
+	if cap(regions) < n {
+		regions = make([]graphicsdriver.DstRegion, n)
+	} else {
+		regions = regions[:n]
+	}
+	defer func() {
+		if cap(regions) <= 256 {
+			r.regions = regions[:0]
+		} else {
+			r.regions = nil
+		}
+	}()
 	var indices uint64
 	for k := range regions {
 		reg := d.rect()
@@ -484,7 +523,7 @@ func (r *Replayer) draw(g graphicsdriver.Graphics, d *dec, target *Target, res *
 	}
 	// The uniforms are used in place unless they are rewritten for the screen.
 	if dst.screen {
-		uniforms = retarget(uniforms, target)
+		uniforms = r.retarget(uniforms, target)
 	}
 	versions := graphicsdriver.UniformVersions{
 		Internal: r.version(internal, dst.screen),
@@ -498,8 +537,16 @@ func (r *Replayer) draw(g graphicsdriver.Graphics, d *dec, target *Target, res *
 // target, which draws at its internal size: the destination's texture size and the scale of the
 // projection, whose terms graphicscommand writes as 2/width and ±2/height (see
 // prependPreservedUniforms there). The rest, in pixels of the destination, holds as it is.
-func retarget(uniforms []uint32, target *Target) []uint32 {
-	u := append([]uint32(nil), uniforms...)
+func (r *Replayer) retarget(uniforms []uint32, target *Target) []uint32 {
+	if cap(r.retargetBuf) < len(uniforms) {
+		r.retargetBuf = make([]uint32, len(uniforms))
+	}
+	u := r.retargetBuf[:len(uniforms)]
+	copy(u, uniforms)
+	if cap(r.retargetBuf) > 1024 && len(uniforms) <= 256 {
+		// Drop oversized scratch on subsequent smaller draws.
+		r.retargetBuf = nil
+	}
 	w, h := float32(target.InternalWidth), float32(target.InternalHeight)
 	u[graphics.DstTextureSizeUniformDwordIndex] = math.Float32bits(w)
 	u[graphics.DstTextureSizeUniformDwordIndex+1] = math.Float32bits(h)

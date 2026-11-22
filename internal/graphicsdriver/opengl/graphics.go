@@ -95,9 +95,7 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	// TODO: examples/sprites worked without this. Is this really needed?
 	g.context.ctx.Flush()
 
-	// The last uniforms must be reset before swapping the buffer (#2517).
 	if mode == graphicsdriver.FlushModePresent {
-		g.state.resetLastUniforms()
 		if err := g.present(); err != nil {
 			return err
 		}
@@ -371,7 +369,7 @@ func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.Shader
 		if destination.screen {
 			y = destination.framebuffer.viewportHeight - dstRegion.Region.Max.Y
 		}
-		g.context.ctx.Scissor(
+		g.context.scissor(
 			int32(dstRegion.Region.Min.X),
 			int32(y),
 			int32(dstRegion.Region.Dx()),

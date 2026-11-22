@@ -74,6 +74,15 @@ type frameUniforms12 struct {
 	// frame completes.
 	retired []*_ID3D12Resource
 
+	// Cached last-uploaded uniform blocks within this frame. Safe across ring growth because
+	// retired buffers stay alive until reset().
+	lastInternalVersion uint64
+	lastInternalGPU     _D3D12_GPU_VIRTUAL_ADDRESS
+	lastInternalSize    uint32
+	lastUserVersion     uint64
+	lastUserGPU         _D3D12_GPU_VIRTUAL_ADDRESS
+	lastUserSize        uint32
+
 	// draws is how many draws took a descriptor table from the frame's share of the heap.
 	draws int
 }
@@ -128,6 +137,12 @@ func (f *frameUniforms12) reset() {
 	f.retired = f.retired[:0]
 	f.offset = 0
 	f.draws = 0
+	f.lastInternalVersion = 0
+	f.lastInternalGPU = 0
+	f.lastInternalSize = 0
+	f.lastUserVersion = 0
+	f.lastUserGPU = 0
+	f.lastUserSize = 0
 }
 
 func (f *frameUniforms12) release() {
@@ -219,6 +234,10 @@ type drawListState12 struct {
 	// topology, which no draw changes, are set.
 	invariantsSet bool
 
+	rtvImage      *image12
+	rtvBackIndex  int
+	viewportW     int
+	viewportH     int
 	vertexBuffer  _D3D12_VERTEX_BUFFER_VIEW
 	indexBuffer   _D3D12_INDEX_BUFFER_VIEW
 	pipelineState *_ID3D12PipelineState
@@ -239,7 +258,7 @@ var nullShaderResourceViewDesc = _D3D12_SHADER_RESOURCE_VIEW_DESC{
 
 // drawTriangles records a draw. internal is the internal uniform block and user the user's block.
 // The caller must make sure that hasRoom(frameIndex) holds.
-func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D12GraphicsCommandList, listState *drawListState12, frameIndex int, rtvFormat _DXGI_FORMAT, srcs [graphics.ShaderSrcImageCount]*image12, shader *shader12, dstRegions []graphicsdriver.DstRegion, internal, user []uint32, blend graphicsdriver.Blend, indexOffset int) error {
+func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D12GraphicsCommandList, listState *drawListState12, frameIndex int, rtvFormat _DXGI_FORMAT, srcs [graphics.ShaderSrcImageCount]*image12, shader *shader12, dstRegions []graphicsdriver.DstRegion, internal, user []uint32, versions graphicsdriver.UniformVersions, blend graphicsdriver.Blend, indexOffset int) error {
 	f := &p.frames[frameIndex]
 	if f.draws >= maxDrawsPerFrame {
 		return fmt.Errorf("directx: too many draws in a frame")
@@ -254,20 +273,55 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		return err
 	}
 
-	// One range of the ring holds both uniform blocks, each at an aligned offset. A shader without a
-	// user uniform block still gets a real, unused view rather than a null descriptor.
+	// Reuse already-uploaded uniform ring slices when the block version and CBV size match the
+	// previous draw in this frame (retired ring buffers remain valid until resetFrame).
+	// A shader without a user uniform block still gets a real, unused view rather than a null descriptor.
 	internalSize := alignUpConstantBuffer(internalConstantBufferSize)
 	userSize := max(alignUpConstantBuffer(shader.userConstantBufferSize), constantBufferAlignment)
-	gpu, cpu, err := f.alloc(device, internalSize+userSize)
-	if err != nil {
-		return err
+	if len(user) > 0 && uint32(len(user)*4) > userSize {
+		return fmt.Errorf("directx: user uniform block (%d bytes) exceeds shader size (%d bytes)", len(user)*4, userSize)
 	}
-	copy(unsafe.Slice((*uint32)(unsafe.Pointer(cpu)), len(internal)), internal)
-	if len(user) > 0 {
-		if uint32(len(user)*4) > userSize {
-			return fmt.Errorf("directx: user uniform block (%d bytes) exceeds shader size (%d bytes)", len(user)*4, userSize)
+
+	reuseInternal := versions.Internal != 0 && f.lastInternalVersion == versions.Internal && f.lastInternalSize == internalSize
+	reuseUser := versions.User != 0 && f.lastUserVersion == versions.User && f.lastUserSize == userSize
+
+	var needSize uint32
+	if !reuseInternal {
+		needSize += internalSize
+	}
+	if !reuseUser {
+		needSize += userSize
+	}
+
+	var allocGPU _D3D12_GPU_VIRTUAL_ADDRESS
+	var allocCPU uintptr
+	if needSize > 0 {
+		allocGPU, allocCPU, err = f.alloc(device, needSize)
+		if err != nil {
+			return err
 		}
-		copy(unsafe.Slice((*uint32)(unsafe.Pointer(cpu+uintptr(internalSize))), len(user)), user)
+	}
+
+	internalGPU := f.lastInternalGPU
+	if !reuseInternal {
+		internalGPU = allocGPU
+		copy(unsafe.Slice((*uint32)(unsafe.Pointer(allocCPU)), len(internal)), internal)
+		allocGPU += _D3D12_GPU_VIRTUAL_ADDRESS(internalSize)
+		allocCPU += uintptr(internalSize)
+		f.lastInternalVersion = versions.Internal
+		f.lastInternalGPU = internalGPU
+		f.lastInternalSize = internalSize
+	}
+
+	userGPU := f.lastUserGPU
+	if !reuseUser {
+		userGPU = allocGPU
+		if len(user) > 0 {
+			copy(unsafe.Slice((*uint32)(unsafe.Pointer(allocCPU)), len(user)), user)
+		}
+		f.lastUserVersion = versions.User
+		f.lastUserGPU = userGPU
+		f.lastUserSize = userSize
 	}
 
 	offset := int32(numConstantBufferAndSourceTextures * (frameIndex*maxDrawsPerFrame + f.draws))
@@ -276,12 +330,12 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 	h := p.shaderDescriptorCPUStart
 	h.Offset(offset, p.shaderDescriptorSize)
 	device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
-		BufferLocation: gpu,
+		BufferLocation: internalGPU,
 		SizeInBytes:    internalSize,
 	}, h)
 	h.Offset(1, p.shaderDescriptorSize)
 	device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
-		BufferLocation: gpu + _D3D12_GPU_VIRTUAL_ADDRESS(internalSize),
+		BufferLocation: userGPU,
 		SizeInBytes:    userSize,
 	}, h)
 	for _, src := range srcs {

@@ -14,14 +14,10 @@
 
 package atlas
 
-import "slices"
-
-// imageSmallSet is a small set for images.
-// imageSmallSet uses a slice assuming the number of items is not so big (smaller than 100 or so).
-// If the number of items is big, a map might be better than a slice.
+// imageSmallSet is an O(1) intrusive set of images keyed by a fixed slot id on Image.setPos.
 type imageSmallSet struct {
-	s []*Image
-
+	id  uint8
+	s   []*Image
 	tmp []*Image
 }
 
@@ -29,21 +25,28 @@ func (s *imageSmallSet) add(image *Image) {
 	if image == nil {
 		panic("atlas: nil image cannot be added")
 	}
-	if slices.Contains(s.s, image) {
+	if image.setPos[s.id] != 0 {
 		return
 	}
 	s.s = append(s.s, image)
+	image.setPos[s.id] = len(s.s)
 }
 
 func (s *imageSmallSet) remove(image *Image) {
-	for i, img := range s.s {
-		if img == image {
-			copy(s.s[i:], s.s[i+1:])
-			s.s[len(s.s)-1] = nil
-			s.s = s.s[:len(s.s)-1]
-			return
-		}
+	pos := image.setPos[s.id]
+	if pos == 0 {
+		return
 	}
+	idx := pos - 1
+	last := len(s.s) - 1
+	if idx != last {
+		moved := s.s[last]
+		s.s[idx] = moved
+		moved.setPos[s.id] = pos
+	}
+	s.s[last] = nil
+	s.s = s.s[:last]
+	image.setPos[s.id] = 0
 }
 
 func (s *imageSmallSet) forEach(f func(*Image)) {
@@ -52,9 +55,14 @@ func (s *imageSmallSet) forEach(f func(*Image)) {
 	for _, img := range s.tmp {
 		f(img)
 	}
-	s.tmp = slices.Delete(s.tmp, 0, len(s.tmp))
+	clear(s.tmp)
+	s.tmp = s.tmp[:0]
 }
 
 func (s *imageSmallSet) clear() {
-	s.s = slices.Delete(s.s, 0, len(s.s))
+	for i, img := range s.s {
+		img.setPos[s.id] = 0
+		s.s[i] = nil
+	}
+	s.s = s.s[:0]
 }

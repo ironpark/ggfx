@@ -212,9 +212,9 @@ var (
 	// theBackends is a set of atlases.
 	theBackends []*backend
 
-	imagesToPutOnSourceBackend imageSmallSet
+	imagesToPutOnSourceBackend = imageSmallSet{id: 0}
 
-	imagesUsedAsDestination imageSmallSet
+	imagesUsedAsDestination = imageSmallSet{id: 1}
 
 	deferred []func()
 
@@ -240,6 +240,10 @@ const (
 // Image is a rectangle pixel set that might be on an atlas.
 type Image struct {
 	*imageImpl
+
+	// setPos holds 1-based positions in imagesToPutOnSourceBackend (0) and
+	// imagesUsedAsDestination (1); 0 means absent.
+	setPos [2]int
 
 	cleanup runtime.Cleanup
 }
@@ -998,6 +1002,7 @@ func EndFrame(graphicsDriver graphicsdriver.Graphics) error {
 	for _, b := range theBackends {
 		b.sourceInThisFrame = false
 	}
+	shrinkQuadIndices()
 
 	if theGPUResourcesState.isSavingGPUResourcesRequested() {
 		defer theGPUResourcesState.finishSavingGPUResources()
@@ -1227,7 +1232,7 @@ func ReadBackendStats(dst []BackendStats) []BackendStats {
 		s.InternalWidth, s.InternalHeight = b.backendImage.InternalSize()
 		if b.page != nil {
 			s.Atlas = true
-			s.UsedArea, s.Images = b.page.UsedArea()
+			s.UsedArea, s.Images = b.usedArea, len(b.images)
 		} else {
 			s.UsedArea, s.Images = int64(b.width)*int64(b.height), 1
 		}

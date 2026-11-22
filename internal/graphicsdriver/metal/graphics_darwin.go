@@ -520,12 +520,26 @@ func (g *Graphics) encoderCommandBuffer() mtl.CommandBuffer {
 	return g.cb
 }
 
+func textureStorageMode(d mtl.Device) mtl.StorageMode {
+	if d.HasUnifiedMemory {
+		return mtl.StorageModeShared
+	}
+	return storageMode
+}
+
+func bufferResourceOptions(d mtl.Device) mtl.ResourceOptions {
+	if d.HasUnifiedMemory {
+		return mtl.ResourceStorageModeShared
+	}
+	return resourceStorageMode
+}
+
 func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
 	g.ensureCommandBuffer()
 
 	newBuf, ok := g.unusedBuffers.get(length)
 	if !ok {
-		newBuf = g.device.NewBufferWithLength(recent.NextPowerOf2(length), resourceStorageMode)
+		newBuf = g.device.NewBufferWithLength(recent.NextPowerOf2(length), bufferResourceOptions(g.device))
 	}
 
 	r := g.currentFrameResources()
@@ -661,7 +675,7 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 		PixelFormat: mtlPixelFormat(format),
 		Width:       graphics.InternalImageSize(width),
 		Height:      graphics.InternalImageSize(height),
-		StorageMode: storageMode,
+		StorageMode: textureStorageMode(g.device),
 		Usage:       mtl.TextureUsageShaderRead | mtl.TextureUsageRenderTarget,
 	}
 	if format == graphicsdriver.PixelFormatA8 {
@@ -1069,15 +1083,29 @@ func (i *Image) Dispose() {
 }
 
 func (i *Image) syncTexture() {
-	i.graphics.flushCommandBufferIfNeeded(false)
+	g := i.graphics
+	g.flushCommandBufferIfNeeded(false)
 
-	// Calling SynchronizeTexture is ignored on iOS (see mtl.m), but it looks like committing BlitCommandEncoder
-	// is necessary (#1337).
-	if i.graphics.cb != (mtl.CommandBuffer{}) {
+	if g.cb != (mtl.CommandBuffer{}) {
 		panic("metal: command buffer must be empty at syncTexture")
 	}
 
-	cb := i.graphics.cq.CommandBuffer()
+	if g.device.HasUnifiedMemory {
+		// Textures use MTLStorageModeShared on unified memory, so no blit
+		// synchronization is needed; wait for any in-flight GPU work to finish.
+		for _, r := range g.inFlight {
+			for _, cb := range r.cbs {
+				if cb.Status() < mtl.CommandBufferStatusCompleted {
+					cb.WaitUntilCompleted()
+				}
+			}
+		}
+		return
+	}
+
+	// Calling SynchronizeTexture is ignored on iOS (see mtl.m), but it looks like committing BlitCommandEncoder
+	// is necessary (#1337).
+	cb := g.cq.CommandBuffer()
 	bce := cb.BlitCommandEncoder()
 	bce.SynchronizeTexture(i.texture, 0, 0)
 	bce.EndEncoding()

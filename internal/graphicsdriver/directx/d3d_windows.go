@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"runtime"
 	"structs"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -72,33 +73,37 @@ const (
 )
 
 var (
+	d3dCompilerOnce   sync.Once
 	procD3DCompile    *windows.LazyProc
 	procD3DCreateBlob *windows.LazyProc
 )
 
-func init() {
-	var d3dcompiler *windows.LazyDLL
+func loadD3DCompiler() {
+	d3dCompilerOnce.Do(func() {
+		var d3dcompiler *windows.LazyDLL
 
-	// Enumerate possible DLL names for d3dcompiler_*.dll.
-	// https://walbourn.github.io/hlsl-fxc-and-d3dcompile/
-	for _, name := range []string{"d3dcompiler_47.dll", "d3dcompiler_46.dll", "d3dcompiler_43.dll"} {
-		dll := windows.NewLazySystemDLL(name)
-		if err := dll.Load(); err != nil {
-			continue
+		// Enumerate possible DLL names for d3dcompiler_*.dll.
+		// https://walbourn.github.io/hlsl-fxc-and-d3dcompile/
+		for _, name := range []string{"d3dcompiler_47.dll", "d3dcompiler_46.dll", "d3dcompiler_43.dll"} {
+			dll := windows.NewLazySystemDLL(name)
+			if err := dll.Load(); err != nil {
+				continue
+			}
+			d3dcompiler = dll
+			break
 		}
-		d3dcompiler = dll
-		break
-	}
 
-	if d3dcompiler == nil {
-		return
-	}
+		if d3dcompiler == nil {
+			return
+		}
 
-	procD3DCompile = d3dcompiler.NewProc("D3DCompile")
-	procD3DCreateBlob = d3dcompiler.NewProc("D3DCreateBlob")
+		procD3DCompile = d3dcompiler.NewProc("D3DCompile")
+		procD3DCreateBlob = d3dcompiler.NewProc("D3DCreateBlob")
+	})
 }
 
 func isD3DCompilerDLLAvailable() bool {
+	loadD3DCompiler()
 	return procD3DCompile != nil
 }
 

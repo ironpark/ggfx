@@ -553,6 +553,10 @@ type Device struct {
 	// LowPower indicates whether a device is low-power.
 	LowPower bool
 
+	// HasUnifiedMemory indicates whether the GPU shares system memory with the CPU
+	// (Apple Silicon / integrated unified memory).
+	HasUnifiedMemory bool
+
 	// Name is the name of the device.
 	Name string
 }
@@ -569,6 +573,7 @@ var (
 	sel_length                                                                                                                        = objc.RegisterName("length")
 	sel_isHeadless                                                                                                                    = objc.RegisterName("isHeadless")
 	sel_isLowPower                                                                                                                    = objc.RegisterName("isLowPower")
+	sel_hasUnifiedMemory                                                                                                              = objc.RegisterName("hasUnifiedMemory")
 	sel_name                                                                                                                          = objc.RegisterName("name")
 	sel_supportsFamily                                                                                                                = objc.RegisterName("supportsFamily:")
 	sel_supportsFeatureSet                                                                                                            = objc.RegisterName("supportsFeatureSet:")
@@ -677,21 +682,28 @@ func CreateSystemDefaultDevice() (Device, error) {
 		return Device{}, fmt.Errorf("mtl: MTLCreateSystemDefaultDevice returned 0")
 	}
 	var (
-		headless bool
-		lowPower bool
-		name     string
+		headless         bool
+		lowPower         bool
+		hasUnifiedMemory bool
+		name             string
 	)
-	if runtime.GOOS != "ios" {
-		headless = int(objc.ID(d).Send(sel_isHeadless)) != 0
-		lowPower = int(objc.ID(d).Send(sel_isLowPower)) != 0
+	if runtime.GOOS == "ios" {
+		hasUnifiedMemory = true
+	} else {
+		headless = uint8(objc.ID(d).Send(sel_isHeadless)) != 0
+		lowPower = uint8(objc.ID(d).Send(sel_isLowPower)) != 0
+		if objc.ID(d).Send(sel_respondsToSelector, sel_hasUnifiedMemory) != 0 {
+			hasUnifiedMemory = uint8(objc.ID(d).Send(sel_hasUnifiedMemory)) != 0
+		}
 	}
 	name = cocoa.NSString{ID: objc.ID(d).Send(sel_name)}.String()
 
 	return Device{
-		device:   objc.ID(d),
-		Headless: headless,
-		LowPower: lowPower,
-		Name:     name,
+		device:           objc.ID(d),
+		Headless:         headless,
+		LowPower:         lowPower,
+		HasUnifiedMemory: hasUnifiedMemory,
+		Name:             name,
 	}, nil
 }
 
@@ -815,18 +827,30 @@ func (d Device) NewRenderPipelineStateWithDescriptor(rpd RenderPipelineDescripto
 	return RenderPipelineState{renderPipelineState}, nil
 }
 
+func isManagedOptions(opt ResourceOptions) bool {
+	return runtime.GOOS != "ios" && (opt>>resourceStorageModeShift)&0xf == ResourceOptions(StorageModeManaged)
+}
+
 // NewBufferWithBytes allocates a new buffer of a given length and initializes its contents by copying existing data into it.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtldevice/1433429-newbufferwithbytes?language=objc.
 func (d Device) NewBufferWithBytes(bytes unsafe.Pointer, length uintptr, opt ResourceOptions) Buffer {
-	return Buffer{d.device.Send(sel_newBufferWithBytes_length_options, bytes, length, uintptr(opt))}
+	id := d.device.Send(sel_newBufferWithBytes_length_options, bytes, length, uintptr(opt))
+	if id == 0 {
+		return Buffer{}
+	}
+	return Buffer{buffer: id, managed: isManagedOptions(opt)}
 }
 
 // NewBufferWithLength allocates a new zero-filled buffer of a given length.
 //
 // Reference: https://developer.apple.com/documentation/metal/mtldevice/1433375-newbufferwithlength?language=objc.
 func (d Device) NewBufferWithLength(length uintptr, opt ResourceOptions) Buffer {
-	return Buffer{d.device.Send(sel_newBufferWithLength_options, length, uintptr(opt))}
+	id := d.device.Send(sel_newBufferWithLength_options, length, uintptr(opt))
+	if id == 0 {
+		return Buffer{}
+	}
+	return Buffer{buffer: id, managed: isManagedOptions(opt)}
 }
 
 // NewTextureWithDescriptor creates a new texture instance.
@@ -989,10 +1013,12 @@ func (cb CommandBuffer) RenderCommandEncoderWithDescriptor(rpd RenderPassDescrip
 		// The clear color is four doubles, which MsgSend cannot pass. It matters only to a clear.
 		colorAttachments0.Send(sel_setClearColor, rpd.ColorAttachments[0].ClearColor)
 	}
-	var stencilAttachment = send0(renderPassDescriptor, sel_stencilAttachment)
-	send1(stencilAttachment, sel_setLoadAction, uintptr(rpd.StencilAttachment.LoadAction))
-	send1(stencilAttachment, sel_setStoreAction, uintptr(rpd.StencilAttachment.StoreAction))
-	send1(stencilAttachment, sel_setTexture, uintptr(rpd.StencilAttachment.Texture.texture))
+	if rpd.StencilAttachment.Texture.texture != 0 {
+		var stencilAttachment = send0(renderPassDescriptor, sel_stencilAttachment)
+		send1(stencilAttachment, sel_setLoadAction, uintptr(rpd.StencilAttachment.LoadAction))
+		send1(stencilAttachment, sel_setStoreAction, uintptr(rpd.StencilAttachment.StoreAction))
+		send1(stencilAttachment, sel_setTexture, uintptr(rpd.StencilAttachment.Texture.texture))
+	}
 	var rce = objc.ID(cocoa.MsgSend1(cb.commandBuffer, sel_renderCommandEncoderWithDescriptor, uintptr(renderPassDescriptor)))
 	send0(renderPassDescriptor, sel_release)
 	return RenderCommandEncoder{CommandEncoder{rce}}
@@ -1270,7 +1296,8 @@ func (t Texture) Height() int {
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlbuffer?language=objc.
 type Buffer struct {
-	buffer objc.ID
+	buffer  objc.ID
+	managed bool
 }
 
 // resource implements the Resource interface.
@@ -1290,7 +1317,7 @@ func (b Buffer) CopyToContents(data unsafe.Pointer, lengthInBytes uintptr) {
 	r := cocoa.MsgSend0(b.buffer, sel_contents)
 	contents := *(*unsafe.Pointer)(unsafe.Pointer(&r))
 	copy(unsafe.Slice((*byte)(contents), lengthInBytes), unsafe.Slice((*byte)(data), lengthInBytes))
-	if runtime.GOOS != "ios" {
+	if b.managed {
 		// The argument is an NSRange, which is passed in two integer registers.
 		cocoa.MsgSend2(b.buffer, sel_didModifyRange, 0, lengthInBytes)
 	}
@@ -1305,11 +1332,11 @@ func (b Buffer) Contents() unsafe.Pointer {
 }
 
 // DidModifyRange tells Metal that length bytes of the contents from offset were modified by the CPU.
-// It does nothing where the buffer's memory is shared (iOS).
+// It does nothing where the buffer's memory is shared (iOS or Apple Silicon unified memory).
 //
 // Reference: https://developer.apple.com/documentation/metal/mtlbuffer/1516121-didmodifyrange?language=objc.
 func (b Buffer) DidModifyRange(offset, length uintptr) {
-	if runtime.GOOS != "ios" {
+	if b.managed {
 		// The argument is an NSRange, which is passed in two integer registers.
 		cocoa.MsgSend2(b.buffer, sel_didModifyRange, offset, length)
 	}

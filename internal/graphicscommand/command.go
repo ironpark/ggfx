@@ -75,14 +75,14 @@ func (p *drawTrianglesCommandPool) put(v *drawTrianglesCommand) {
 
 // drawTrianglesCommand represents a drawing command to draw an image on another image.
 type drawTrianglesCommand struct {
-	dst         *Image
-	srcs        [graphics.ShaderSrcImageCount]*Image
-	vertices    []float32
-	blend       graphicsdriver.Blend
-	dstRegions  []graphicsdriver.DstRegion
-	shader      *Shader
-	uniforms    []uint32
-	firstCaller string
+	dst             *Image
+	srcs            [graphics.ShaderSrcImageCount]*Image
+	numVertexFloats int
+	blend           graphicsdriver.Blend
+	dstRegions      []graphicsdriver.DstRegion
+	shader          *Shader
+	uniforms        []uint32
+	firstCaller     string
 
 	// sameInternalAsPrev and sameUserAsPrev report whether the uniform blocks equal those of the
 	// draw command enqueued before, before either was flipped (see commandQueue.uniformVersions).
@@ -199,7 +199,7 @@ func (c *drawTrianglesCommand) NeedsSync() bool {
 }
 
 func (c *drawTrianglesCommand) numVertices() int {
-	return len(c.vertices)
+	return c.numVertexFloats
 }
 
 func (c *drawTrianglesCommand) numIndices() int {
@@ -208,10 +208,6 @@ func (c *drawTrianglesCommand) numIndices() int {
 		nindices += dstRegion.IndexCount
 	}
 	return nindices
-}
-
-func (c *drawTrianglesCommand) setVertices(vertices []float32) {
-	c.vertices = vertices
 }
 
 // canMergeWithoutUniforms reports whether a draw to dst from srcs with blend and shader can be
@@ -297,6 +293,9 @@ func (p *writePixelsCommandPool) get() *writePixelsCommand {
 }
 
 func (p *writePixelsCommandPool) put(c *writePixelsCommand) {
+	if len(p.pool) >= 256 {
+		return
+	}
 	c.dst = nil
 	c.bounds = image.Rectangle{}
 	clear(c.args)

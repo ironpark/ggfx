@@ -21,19 +21,42 @@ import (
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/recent"
 )
 
-// quadIndices are the indices of as many quads as the most a draw has had, each quad's four
-// vertices following the last's. They only grow, under backendsM.
-var quadIndices []uint32
+// quadIndices are the indices of as many quads as recent frames needed, each quad's four
+// vertices following the last's. Guarded by backendsM.
+var (
+	quadIndices    []uint32
+	quadIndicesMax int
+	quadIndicesUse recent.Peak
+)
 
 // indicesForQuads returns the indices of n quads.
 func indicesForQuads(n int) []uint32 {
-	for k := len(quadIndices) / 6; k < n; k++ {
-		b := uint32(4 * k)
-		quadIndices = append(quadIndices, b, b+1, b+2, b+1, b+2, b+3)
+	if n > quadIndicesMax {
+		quadIndicesMax = n
+	}
+	if need := 6 * n; need > len(quadIndices) {
+		quadIndices = slices.Grow(quadIndices, need-len(quadIndices))
+		for k := len(quadIndices) / 6; k < n; k++ {
+			b := uint32(4 * k)
+			quadIndices = append(quadIndices, b, b+1, b+2, b+1, b+2, b+3)
+		}
 	}
 	return quadIndices[:6*n]
+}
+
+// shrinkQuadIndices releases oversized quadIndices storage after a burst of large quad batches.
+// Caller must hold backendsM.
+func shrinkQuadIndices() {
+	quadIndicesUse.ObserveNow(quadIndicesMax)
+	quadIndicesMax = 0
+	const minRetainedQuads = 256
+	limit := max(quadIndicesUse.Max(), minRetainedQuads)
+	if cap(quadIndices) > recent.ShrinkFactor*6*limit {
+		quadIndices = nil
+	}
 }
 
 // DrawQuads draws quads, quad k of four vertices in vertices from srcs[k] within srcRegions[k],

@@ -43,11 +43,29 @@ func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 	defer quadScratches.Put(s)
 
 	// Lock the destination and each source once, in the order of their IDs, as imagesLocker
-	// does.
+	// does. Deduplicate consecutive identical sources (the common case for glyph/sprite batches)
+	// before sorting so single-atlas batches skip slices.SortFunc.
 	locked := append(s.locked[:0], i)
-	locked = append(locked, srcs...)
-	slices.SortFunc(locked, func(a, b *Image) int { return cmp.Compare(a.id, b.id) })
-	locked = slices.Compact(locked)
+	var prev *Image
+	for _, src := range srcs {
+		if src == i {
+			clear(locked)
+			s.locked = locked[:0]
+			panic("render: Image.DrawQuads: source images must be different from the receiver")
+		}
+		if src != prev {
+			locked = append(locked, src)
+			prev = src
+		}
+	}
+	if len(locked) == 2 {
+		if locked[0].id > locked[1].id {
+			locked[0], locked[1] = locked[1], locked[0]
+		}
+	} else if len(locked) > 2 {
+		slices.SortFunc(locked, func(a, b *Image) int { return cmp.Compare(a.id, b.id) })
+		locked = slices.Compact(locked)
+	}
 	for _, img := range locked {
 		img.mu.Lock()
 	}
@@ -64,16 +82,15 @@ func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 	}
 	i.lastBlend = blend
 
+	// As in drawTriangles, pending pixel writes go to the GPU first—once per unique image.
+	for _, img := range locked {
+		img.cache.writeBackPixelsIfNeeded(img.img)
+	}
+
 	imgs := s.imgs[:0]
 	for _, src := range srcs {
-		if src == i {
-			panic("render: Image.DrawQuads: source images must be different from the receiver")
-		}
-		// As in drawTriangles, the pending pixel writes go to the GPU first.
-		src.cache.writeBackPixelsIfNeeded(src.img)
 		imgs = append(imgs, src.img)
 	}
-	i.cache.writeBackPixelsIfNeeded(i.img)
 	i.img.DrawQuads(imgs, vertices, blend, dstRegion, srcRegions, shader)
 	clear(imgs)
 	s.imgs = imgs[:0]

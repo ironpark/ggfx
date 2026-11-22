@@ -103,7 +103,8 @@ const (
 )
 
 // numBytesClasses is the number of buckets: class c holds arrays of capacity in [2^c, 2^(c+1)).
-const numBytesClasses = 64
+// maxPooledBytes is 8 MiB (2^23), so classes 0..23 cover all poolable capacities.
+const numBytesClasses = 24
 
 // pooledBytes is an array in the pool, and when it was given back, in the order of puts.
 type pooledBytes struct {
@@ -114,16 +115,22 @@ type pooledBytes struct {
 type bytesPool struct {
 	// classes hold the arrays by the power of two of their capacity, the last given back last.
 	classes [numBytesClasses][]pooledBytes
+	// nonPow2Mask has bit c set if class c has ever received an array whose capacity is not 2^c.
+	nonPow2Mask uint32
 	// seq counts the puts.
 	seq uint64
 	// total is the sum of the capacities of the arrays in the pool, and count how many there are.
 	total int
 	count int
 
-	// taken is the bytes of the arrays taken, from the pool or newly made, in this frame, and use
-	// tracks it over recent frames.
-	taken int
-	use   recent.Peak
+	// taken is the bytes of the arrays taken, from the pool or newly made, since the last
+	// advanceFrame call; frameTaken accumulates the current frame's total across multiple
+	// advanceFrame calls at the same recent.Now() tick; use tracks it over recent frames.
+	taken      int
+	frameTaken int
+	lastFrame  int64
+	hasFrame   bool
+	use        recent.Peak
 
 	m sync.Mutex
 }
@@ -162,7 +169,11 @@ func (b *bytesPool) getFromCache(size int) (bs []byte, newCap int) {
 
 	limit := maxWasteFactor * max(size, 64)
 	if size > 0 {
-		for c := bytesClass(size); c < numBytesClasses && 1<<c <= limit; c++ {
+		startClass := bytesClass(size)
+		if size > 1<<startClass && b.nonPow2Mask&(1<<startClass) == 0 {
+			startClass++
+		}
+		for c := startClass; c < numBytesClasses && 1<<c <= limit; c++ {
 			bucket := b.classes[c]
 			for i := len(bucket) - 1; i >= 0; i-- {
 				bs := bucket[i].bytes
@@ -199,6 +210,9 @@ func (b *bytesPool) put(bs []byte) {
 	defer b.m.Unlock()
 
 	c := bytesClass(cap(bs))
+	if cap(bs) != 1<<c {
+		b.nonPow2Mask |= 1 << c
+	}
 	b.seq++
 	b.classes[c] = append(b.classes[c], pooledBytes{bytes: bs[:0], seq: b.seq})
 	b.total += cap(bs)
@@ -243,7 +257,15 @@ func (b *bytesPool) advanceFrame() {
 	b.m.Lock()
 	defer b.m.Unlock()
 
-	b.use.ObserveNow(b.taken)
+	now := recent.Now()
+	if !b.hasFrame || now != b.lastFrame {
+		b.frameTaken = b.taken
+		b.lastFrame = now
+		b.hasFrame = true
+	} else {
+		b.frameTaken += b.taken
+	}
 	b.taken = 0
+	b.use.ObserveNow(b.frameTaken)
 	b.trim(min(maxPooledBytes, b.use.Max()))
 }

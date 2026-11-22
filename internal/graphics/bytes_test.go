@@ -123,6 +123,27 @@ func TestBytesPoolTrimsOldest(t *testing.T) {
 	}
 }
 
+func TestBytesPoolMultipleAdvanceSameFrame(t *testing.T) {
+	var p bytesPool
+	recent.Advance()
+
+	// Two allocations in the same frame separated by an advanceFrame must accumulate rather than
+	// dropping the first half's peak before trimming.
+	a := p.get(1 << 20)
+	a.Release()
+	p.advanceFrame()
+
+	b := p.get(1 << 20)
+	c := p.get(1 << 20)
+	b.Release()
+	c.Release()
+	p.advanceFrame()
+
+	if p.total < 2<<20 {
+		t.Errorf("total after two advanceFrame calls in one frame: got %d, want at least %d", p.total, 2<<20)
+	}
+}
+
 // advanceFrame ends a frame for p, as the frame loop and the command queue do.
 func advanceFrame(p *bytesPool) {
 	recent.Advance()
