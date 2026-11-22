@@ -20,6 +20,7 @@ import (
 	"github.com/ironpark/ggfx/host"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/directx"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver"
 )
 
 // DirectX draws with no window, with WARP where there is no GPU; OpenGL would need a window for a
@@ -40,6 +41,8 @@ func initDriver() error {
 // gpuDriverUsed returns the name of a platform driver the process made a device of, if any.
 func gpuDriverUsed() string {
 	switch {
+	case zigdriver.DeviceCreated():
+		return "Zig"
 	case directx.DeviceCreated():
 		return "DirectX"
 	case opengl.Created():

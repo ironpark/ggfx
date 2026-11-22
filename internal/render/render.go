@@ -181,6 +181,15 @@ func Library() GraphicsLibrary {
 	return GraphicsLibrary(library.Load())
 }
 
+// DriverImplementation returns the active graphics driver implementation ("go" or "zig"),
+// or "" before Init.
+func DriverImplementation() string {
+	if v, ok := driverImpl.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
 // IsOpenGLES reports whether the OpenGL driver draws with OpenGL ES, which decides the context a
 // window system creates for it. It is false for the other drivers.
 func IsOpenGLES() bool {

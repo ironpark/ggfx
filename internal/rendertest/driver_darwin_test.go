@@ -20,6 +20,7 @@ import (
 	"github.com/ironpark/ggfx/host"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/metal"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver"
 )
 
 // Metal is on every Mac this runs on.
@@ -36,6 +37,8 @@ func initDriver() error {
 // gpuDriverUsed returns the name of a platform driver the process made a device of, if any.
 func gpuDriverUsed() string {
 	switch {
+	case zigdriver.DeviceCreated():
+		return "Zig"
 	case metal.DeviceCreated():
 		return "Metal"
 	case opengl.Created():

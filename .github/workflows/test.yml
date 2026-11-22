@@ -33,6 +33,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
       - name: gofmt
         if: runner.os == 'Linux'
         run: |
@@ -57,6 +62,10 @@ jobs:
         run: |
           go build -v ./...
 
+      - name: zig build (Debug)
+        run: |
+          cd zig && zig build -Doptimize=Debug
+
       # The tests run in a frame of the renderer with no window (internal/testing.MainInFrame).
       # Metal and DirectX draw without a surface; OpenGL needs a context, which the harness makes
       # with CGL on macOS and Mesa's surfaceless EGL on Linux. Linux leaves out the packages that
@@ -67,6 +76,12 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           go test -shuffle=on -v -skip '^TestImageBlendFactor$' ./...
+
+      - name: go test (macOS Zig Metal)
+        if: runner.os == 'macOS'
+        run: |
+          env GGFX_DRIVER=zig GGFX_DRIVER_STRICT=1 GGFX_DRIVER_LIB="$PWD/zig/zig-out/lib/libggfx_driver.dylib" \
+            go test -shuffle=on -v ./internal/graphicsdriver/zigdriver ./internal/rendertest ./vector
 
       # OpenGL draws with Apple's software renderer here, on which the batched vector fill does
       # not match the unbatched one pixel for pixel, and which drops some pixels of a triangle a
@@ -90,11 +105,19 @@ jobs:
         run: |
           env GGFX_DIRECTX=warp,version=12 go test -shuffle=on -v ./...
 
+      - name: go test (Windows Zig DirectX 12)
+        if: runner.os == 'Windows'
+        run: |
+          lib_path="$(cygpath -w "$PWD/zig/zig-out/bin/ggfx_driver.dll")"
+          env GGFX_DRIVER=zig GGFX_DIRECTX=warp GGFX_DRIVER_STRICT=1 GGFX_DRIVER_LIB="$lib_path" \
+            go test -shuffle=on -v ./internal/graphicsdriver/zigdriver
+
       # Mesa's surfaceless EGL gives internal/rendertest an OpenGL context with no window, in
-      # which the remote driver's replay is compared with a native draw.
+      # which the remote driver's replay is compared with a native draw. mesa-vulkan-drivers
+      # provides lavapipe for software Vulkan testing of the Zig driver.
       - name: Install Mesa
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri libvulkan1 mesa-vulkan-drivers
 
       - name: go test (Linux)
         if: runner.os == 'Linux'
@@ -107,6 +130,72 @@ jobs:
               -e github.com/ironpark/ggfx/internal/render \
               -e github.com/ironpark/ggfx/vector \
             | xargs go test -shuffle=on -v
+
+      - name: go test (Linux Zig Vulkan)
+        if: runner.os == 'Linux'
+        run: |
+          if ls /usr/share/vulkan/icd.d/lvp_icd*.json >/dev/null 2>&1; then
+            env GGFX_DRIVER=zig GGFX_DRIVER_LIB="$PWD/zig/zig-out/lib/libggfx_driver.so" \
+              go test -shuffle=on -v ./internal/graphicsdriver/zigdriver
+          else
+            echo "lavapipe Vulkan ICD not available; skipping Linux Zig Vulkan test"
+          fi
+
+  zig-test-and-cross:
+    name: Zig test & cross-compile
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: zig build test & cross (ReleaseFast)
+        run: |
+          cd zig
+          zig build test
+          zig build cross -Doptimize=ReleaseFast
+
+      - name: Go ABI & golden batch tests
+        run: |
+          go test -v ./internal/graphicsdriver/zigdriver -run 'TestABI|TestGolden'
+
+      - name: Verify graphics drivers have no naga dependency
+        run: |
+          check_no_naga() {
+            local goos="$1"
+            local goarch="$2"
+            shift 2
+            if GOOS="$goos" GOARCH="$goarch" go list -deps "$@" | grep -i naga; then
+              echo "error: graphics driver packages on ${goos}/${goarch} must not depend on naga"
+              exit 1
+            fi
+          }
+          check_no_naga darwin arm64 \
+            ./internal/graphicsdriver \
+            ./internal/graphicsdriver/metal \
+            ./internal/graphicsdriver/opengl \
+            ./internal/graphicsdriver/zigdriver
+          check_no_naga windows amd64 \
+            ./internal/graphicsdriver \
+            ./internal/graphicsdriver/directx \
+            ./internal/graphicsdriver/opengl \
+            ./internal/graphicsdriver/zigdriver
+          check_no_naga linux amd64 \
+            ./internal/graphicsdriver \
+            ./internal/graphicsdriver/opengl \
+            ./internal/graphicsdriver/zigdriver
 
   cross-build:
     name: Cross build

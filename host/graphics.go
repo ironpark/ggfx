@@ -41,7 +41,16 @@ const (
 	// GraphicsLibraryRemote represents the remote driver of package remote, which draws on the
 	// graphics library of a viewer in another process.
 	GraphicsLibraryRemote GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryRemote)
+
+	// GraphicsLibraryVulkan represents the Vulkan graphics library (available via the Zig driver).
+	GraphicsLibraryVulkan GraphicsLibrary = GraphicsLibrary(render.GraphicsLibraryVulkan)
 )
+
+// DriverImplementation returns the active graphics driver implementation ("go" or "zig"),
+// or "" before Init.
+func DriverImplementation() string {
+	return render.DriverImplementation()
+}
 
 // String returns a string representing the graphics library.
 func (g GraphicsLibrary) String() string {

@@ -19,6 +19,7 @@ package rendertest_test
 import (
 	"github.com/ironpark/ggfx/host"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver"
 	etesting "github.com/ironpark/ggfx/internal/testing"
 )
 
@@ -28,6 +29,9 @@ const skipNoDriver = true
 func initDriver() error {
 	if err := host.Init(nil); err != nil {
 		return err
+	}
+	if host.CurrentDriver().Library == host.GraphicsLibraryVulkan {
+		return nil
 	}
 	c, err := etesting.NewGLContext()
 	if err != nil {
@@ -40,7 +44,10 @@ func initDriver() error {
 
 // gpuDriverUsed returns the name of a platform driver the process made a device of, if any.
 func gpuDriverUsed() string {
-	if opengl.Created() {
+	switch {
+	case zigdriver.DeviceCreated():
+		return "Zig"
+	case opengl.Created():
 		return "OpenGL"
 	}
 	return ""

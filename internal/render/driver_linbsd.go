@@ -17,13 +17,18 @@
 package render
 
 import (
+	"fmt"
+
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
 )
 
 func newGraphicsDriverFor(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, error) {
-	if lib == GraphicsLibraryOpenGL {
+	switch lib {
+	case GraphicsLibraryOpenGL:
 		return opengl.NewGraphics()
+	case GraphicsLibraryVulkan:
+		return nil, fmt.Errorf("%w: Vulkan is only supported with the Zig driver (set GGFX_DRIVER=zig or GGFX_DRIVER_LIB)", errUnsupported(lib))
 	}
 	return nil, errUnsupported(lib)
 }

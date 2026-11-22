@@ -1,6 +1,6 @@
 # Zig `graphicsdriver` Backend Design (Plan A)
 
-> Status: Deferred design document. Complete the Go-side architecture & quality refactoring first (see Prerequisites below), then implement in phases.
+> Status: **Phase 1 + Phase 2 implemented** (opt-in via `GGFX_DRIVER=zig`, `GGFX_DRIVER_LIB`, or `GGFX_GRAPHICS_LIBRARY=zig|vulkan`). Go remains the default driver when unconfigured; browser (`js/wasm`) stays pure-Go WebGL.
 
 ## 1. Motivation & Scope
 
@@ -32,8 +32,8 @@ Before introducing the Zig driver, clean up the current `graphicsdriver` boundar
 1. **Consolidate side-channel type assertions** *(done in `internal/graphicsdriver/capabilities.go`)*: Optional `Graphics` and `Surface` capability interfaces (`MainThreadRunner`, `GLContextSetter`, `ESReporter`, `DirectCompositionReporter`, `OcclusionReporter`, `ForcedFrameFinisher`, `FramebufferSizer`, `Closer`, `KeptSurface`, `DamagedSurface`, `WindowStateSurface`, `ReadableSurface`) are now named and documented in `internal/graphicsdriver`.
 2. **Add `Graphics.Close()`** *(done via `graphicsdriver.Closer`)*: `render.Terminate()` invokes `Close()` after draining the render thread so native/Zig backends can release GPU handles cleanly.
 3. **Shared driver conformance suite** *(done in `internal/graphicsdriver/drivertest`)*: Reusable contract tests verify pixel round-trips (RGBA8 and A8), shader drawing, blend modes, scissor clipping, and uniform version caching against any `graphicsdriver.Graphics`.
-4. **Decouple `NewShader` from Go `*naga/ir.Module`** *(deferred to Plan A Phase 1)*: Pass backend-ready shader payloads (compiled MSL/HLSL/GLSL/SPIR-V source or bytecode + reflection metadata: `TextureCount`, `UniformDwordCount`, `FragmentReadsInternalUniforms`) rather than a Go-only IR pointer.
-5. **Typed native surface descriptors** *(deferred to Plan A Phase 1)*: Replace `NewSurface(target any, transparent bool)` with a typed union/descriptor supporting `NSView`, `HWND`, X11 (`Display`, `Window`), Wayland (`wl_display`, `wl_surface`), WebGL `Canvas`, and `RemoteTarget`.
+4. **Decouple `NewShader` from Go `*naga/ir.Module`** *(done via `graphicsdriver.ShaderDescriptor` + `ShaderSource`)*: `NewShader` accepts backend-ready compiled stage payloads (MSL/HLSL/GLSL/SPIR-V source or bytecode + reflection metadata: `TextureCount`, `UniformDwordCount`, `FragmentReadsInternalUniforms`) so `internal/graphicsdriver/zigdriver` has zero dependency on `naga`.
+5. **Typed native surface descriptors** *(done via `graphicsdriver.SurfaceDescriptor`)*: `NewSurface` takes a typed descriptor supporting `NSView`, `HWND`, X11 (`Display`, `Window`), Wayland (`Display`, `Surface`), WebGL `Canvas`, and `RemoteTarget`.
 6. **Centralize `InternalImageSize` rounding & `InternalUniforms` POD layout** *(POD layout compile-time assertions added in `internal/graphicsdriver/capabilities.go`)*.
 7. **Enforce strict thread-confinement contracts** *(driver races on `surfaces`, `damage`, and `Surface.Dispose` fixed in Wave 2)*.
 
@@ -200,14 +200,41 @@ Verify `ggfx_abi_version() == GGFX_DRIVER_ABI_VERSION` immediately after loading
 
 ---
 
-## 7. Phased Rollout Plan
+## 7. Implemented Architecture & Usage
 
-1. **Phase 0 — Go Refactoring (current focus)**: Fix audited defects, unify driver contracts & optional capability interfaces, add `Graphics.Close()`, decouple `NewShader` from `*naga/ir.Module`, and add a shared driver conformance test suite.
-2. **Phase 1 — ABI & macOS Metal PoC**:
-   - Implement `internal/graphicsdriver/zigdriver` (Go encoder + `purego` loader) and `zig/` Metal backend.
-   - Run the full `ggfx` test suite and `internal/rendertest/bench_darwin_test.go` comparing Zig Metal vs. Go Metal (pixel-exactness, CPU time, allocations, leak check).
-3. **Phase 2 — Windows DX12 & Linux Vulkan**:
-   - Implement DX12 and Vulkan inside the same Zig command replayer, sharing buffer/handle/uniform-version state tracking across all backends.
-   - Enable native `PixelFormatA8` across macOS, Windows, and Linux.
-4. **Phase 3 — Re-evaluate Plan B**:
-   - Profile real `ggui` workloads after Phase 2. Only consider moving `graphicscommand`, `atlas`, or `vector` into Zig if profiling proves Go CPU/GC overhead in those layers is a primary bottleneck.
+### Summary of Implementation
+
+- **C ABI v1 (`zig/include/ggfx_driver.h`)**: 14 exported flat-C functions (`ggfx_abi_version`, `ggfx_device_create`, `ggfx_device_destroy`, `ggfx_device_set_main_thread_mode`, `ggfx_submit`, `ggfx_create_shader`, `ggfx_read_pixels`, `ggfx_finish_forced_frame`, `ggfx_present_on_main_thread`, `ggfx_device_is_occluded`, `ggfx_surface_create`, `ggfx_surface_set_window_state`, `ggfx_surface_kept`, `ggfx_debug_stats`) verified by Zig comptime layout checks, `zig cc -std=c11` `_Static_assert` checks (`zig/tests/abi_check.c`), and Go `TestABILayout` / `TestGoldenBatchV1`.
+- **Zero-allocation Go FFI (`internal/graphicsdriver/zigdriver`)**: Resolves symbol addresses via `purego.Dlsym` (Unix) / `windows.GetProcAddress` (Windows) and invokes them directly with `purego.SyscallN` using pooled argument buffers, keeping steady-state `Begin`/`SetVertices`/`DrawTriangles`/`End` at **0 allocs/op**.
+- **Zig Backends (`zig/src/`)**: Shared linear command replayer, dense handle tables, and pipeline/uniform-version state cache driving:
+  - **Metal** (macOS `arm64`/`amd64`): native `R8Unorm` A8 swizzle, unified-memory shared textures, IOSurface swap chain, and configurable main-thread presentation (`inline`, `deferred` via `MainThreadRunner`, or `dispatch` via `GGFX_ZIG_METAL_DISPATCH=1`).
+  - **Direct3D 12** (Windows `amd64`/`arm64`): single `DIRECT` command list, persistently mapped upload ring, WARP software fallback (`GGFX_DIRECTX=warp`), native `R8_UNORM` A8, and DirectComposition/HWND swap chains.
+  - **Vulkan** (Linux `amd64`/`arm64`): X11 and Wayland swap chains, native `VK_FORMAT_R8_UNORM` A8, and software testing via Mesa lavapipe.
+  - **Null** (`-Dbackend=null` / `zig build test`): deterministic software replayer and allocator leak checker used in unit and conformance testing.
+
+### Opt-in Runtime Configuration
+
+| Environment Variable | Effect |
+|---|---|
+| `GGFX_DRIVER=zig` | Opt in to the Zig driver (falls back to Go driver on failure unless `GGFX_DRIVER_STRICT=1`). Set `GGFX_DRIVER=go` to force Go even if `GGFX_DRIVER_LIB` is set. |
+| `GGFX_DRIVER_LIB=/path/to/lib` | Explicit shared-library path override; enables the Zig driver automatically unless `GGFX_DRIVER=go`. |
+| `GGFX_DRIVER_STRICT=1` | Fail with an error instead of falling back to the Go driver when Zig initialization fails. |
+| `GGFX_GRAPHICS_LIBRARY=zig\|vulkan` | Select the Zig driver (or specifically the Linux Vulkan backend via Zig). |
+| `GGFX_DRIVER_DEBUG=1` | Enable backend validation/debug layers (Metal/D3D12/Vulkan). |
+| `GGFX_DRIVER_SLOTS=2\|3` | Configure command arena ring slot count (default: `2`). |
+
+### Benchmarking
+
+Build the ReleaseFast shared library and compare Go vs. Zig driver latency and allocations (`internal/graphicsdriver/zigdriver` and `internal/rendertest`, printing `benchstat` diffs when installed):
+
+```sh
+./scripts/bench-zig.sh        # default -count=5
+./scripts/bench-zig.sh 10     # custom iteration count
+```
+
+### Rollout Status
+
+1. **Phase 0 — Go Refactoring**: Complete (`capabilities.go`, `Closer`, `drivertest`, `ShaderDescriptor`, `SurfaceDescriptor`, thread-confinement fixes).
+2. **Phase 1 — ABI & macOS Metal**: Complete (`zig/include/ggfx_driver.h`, `internal/graphicsdriver/zigdriver`, Metal backend, 0-alloc `purego.SyscallN` hot path).
+3. **Phase 2 — Windows DX12 & Linux Vulkan**: Complete (shared Zig replayer with DX12, Vulkan, and Null backends; CI coverage in `.github/workflows/test.yml`).
+4. **Phase 3 — Re-evaluate Plan B**: Deferred until real `ggui` workload profiling after Phase 2 adoption indicates Go CPU/GC overhead in `graphicscommand`, `atlas`, or `vector` is a primary bottleneck.
