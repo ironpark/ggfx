@@ -17,6 +17,7 @@ package graphicsdriver
 import (
 	"fmt"
 	"image"
+	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/color"
 	"github.com/ironpark/ggfx/internal/graphics"
@@ -86,6 +87,16 @@ type Graphics interface {
 type UniformVersions struct {
 	Internal uint64
 	User     uint64
+}
+
+// lastUniformVersion is the last version NewUniformVersion returned.
+var lastUniformVersion atomic.Uint64
+
+// NewUniformVersion returns a version no uniform block in the process has had. Whatever makes
+// UniformVersions for a driver takes them from here, so that two of them drawing with one driver
+// cannot give different contents the same version. The versions count up from 1.
+func NewUniformVersion() uint64 {
+	return lastUniformVersion.Add(1)
 }
 
 // Surface is one presentation target: a window's swap chain or layer, or the default framebuffer

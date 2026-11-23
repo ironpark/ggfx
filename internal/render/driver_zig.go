@@ -17,32 +17,11 @@
 package render
 
 import (
-	"cmp"
-	"os"
 	"runtime"
-	"strconv"
-	"strings"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver"
 )
-
-func parseZigDXFeatureLevel(str string) (uint32, bool) {
-	switch str {
-	case "11_0":
-		return 0xb000, true
-	case "11_1":
-		return 0xb100, true
-	case "12_0":
-		return 0xc000, true
-	case "12_1":
-		return 0xc100, true
-	case "12_2":
-		return 0xc200, true
-	default:
-		return 0, false
-	}
-}
 
 func newZigGraphicsDriver(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {
 	var backend uint32
@@ -71,51 +50,11 @@ func newZigGraphicsDriver(lib GraphicsLibrary, o *Options) (graphicsdriver.Graph
 		return nil, 0, errUnsupported(lib)
 	}
 
-	var flags uint32
-	var dxFeatureLevel uint32
-
-	if os.Getenv("GGFX_DRIVER_DEBUG") == "1" {
-		flags |= zigdriver.DeviceFlagDebug
-	}
-	if os.Getenv("GGFX_METAL_SWAPCHAIN") == "0" {
-		flags |= zigdriver.DeviceFlagMetalNoIOSurface
-	}
-	if env := cmp.Or(os.Getenv("GGFX_DIRECTX_FEATURE_LEVEL"), os.Getenv("EBITENGINE_DIRECTX_FEATURE_LEVEL")); env != "" {
-		if fl, ok := parseZigDXFeatureLevel(env); ok {
-			dxFeatureLevel = fl
-		}
-	}
-	if env := cmp.Or(os.Getenv("GGFX_DIRECTX"), os.Getenv("EBITENGINE_DIRECTX"), os.Getenv("EBITEN_DIRECTX")); env != "" {
-		for tok := range strings.SplitSeq(env, ",") {
-			tok = strings.TrimSpace(tok)
-			switch {
-			case tok == "warp":
-				flags |= zigdriver.DeviceFlagWARP
-			case tok == "debug":
-				flags |= zigdriver.DeviceFlagDebug
-			case tok == "dred":
-				flags |= zigdriver.DeviceFlagDRED
-			case strings.HasPrefix(tok, "featurelevel="):
-				if fl, ok := parseZigDXFeatureLevel(tok[len("featurelevel="):]); ok {
-					dxFeatureLevel = fl
-				}
-			}
-		}
-	}
-
-	var slots int
-	if env := os.Getenv("GGFX_DRIVER_SLOTS"); env != "" {
-		if n, err := strconv.Atoi(env); err == nil && (n == 2 || n == 3) {
-			slots = n
-		}
-	}
-
+	// The driver reads its own environment variables (debug layers, DirectX
+	// options, ring slots); only the backend choice is decided here.
 	g, err := zigdriver.NewGraphics(zigdriver.Options{
-		ColorSpace:     o.ColorSpace,
-		Backend:        backend,
-		Flags:          flags,
-		Slots:          slots,
-		DXFeatureLevel: dxFeatureLevel,
+		ColorSpace: o.ColorSpace,
+		Backend:    backend,
 	})
 	if err != nil {
 		return nil, 0, err

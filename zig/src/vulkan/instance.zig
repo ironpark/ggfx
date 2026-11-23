@@ -57,23 +57,16 @@ fn debugUtilsCallback(
     return vk.FALSE;
 }
 
-fn cstrFromArray(arr: []const u8) []const u8 {
-    for (arr, 0..) |b, i| {
-        if (b == 0) return arr[0..i];
-    }
-    return arr;
-}
-
 fn hasExtension(exts: []const vk.ExtensionProperties, name: []const u8) bool {
     for (exts) |*e| {
-        if (std.mem.eql(u8, cstrFromArray(&e.extensionName), name)) return true;
+        if (std.mem.eql(u8, std.mem.sliceTo(&e.extensionName, 0), name)) return true;
     }
     return false;
 }
 
 fn hasLayer(layers: []const vk.LayerProperties, name: []const u8) bool {
     for (layers) |*l| {
-        if (std.mem.eql(u8, cstrFromArray(&l.layerName), name)) return true;
+        if (std.mem.eql(u8, std.mem.sliceTo(&l.layerName, 0), name)) return true;
     }
     return false;
 }

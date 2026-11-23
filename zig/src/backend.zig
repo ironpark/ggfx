@@ -36,6 +36,7 @@ pub fn check(comptime Self: type) void {
     expectDecl(Self, "deinit", fn (*Self) void);
     expectDecl(Self, "beginBatch", fn (*Self, *Diag) E!void);
     expectDecl(Self, "endBatch", fn (*Self, abi.FlushMode, *abi.SubmitResult, *Diag) E!void);
+    expectDecl(Self, "abortBatch", fn (*Self) void);
     expectDecl(Self, "setVertices", fn (*Self, []const f32, []const u32, *Diag) E!void);
     expectDecl(Self, "newImage", fn (*Self, u32, u32, u32, u32, u32, abi.PixelFormat, *Diag) E!void);
     expectDecl(Self, "newScreenImage", fn (*Self, u32, u32, u32, u32, *Diag) E!void);

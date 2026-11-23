@@ -5,6 +5,7 @@ const handles = @import("../handles.zig");
 const state_cache = @import("../state_cache.zig");
 const sync = @import("../sync.zig");
 const replayer = @import("../replayer.zig");
+const upload_arena = @import("../upload_arena.zig");
 
 const win32 = @import("win32.zig");
 const com = @import("com.zig");
@@ -42,10 +43,6 @@ const Image = struct {
             .a8 => dxgi.DXGI_FORMAT_R8_UNORM,
         };
     }
-
-    fn rtvFormat(self: *const Image) dxgi.DXGI_FORMAT {
-        return self.dxgiFormat();
-    }
 };
 
 const DeferredImage = struct {
@@ -58,7 +55,6 @@ const Surface = struct {
     hwnd: win32.HWND,
     swapchain: ?swapchain_mod.SwapChain = null,
     screen_image_id: u32 = 0,
-    window_state: u32 = 0,
     drawn: bool = false,
 
     fn deinit(self: *Surface) void {
@@ -68,28 +64,6 @@ const Surface = struct {
         }
     }
 };
-
-const ValidRect = struct {
-    x0: u32,
-    y0: u32,
-    dx: u32,
-    dy: u32,
-};
-
-fn validateRect(r: abi.Rect, w: u32, h: u32) ?ValidRect {
-    if (r.x0 < 0 or r.y0 < 0 or r.x1 < r.x0 or r.y1 < r.y0) return null;
-    const x0: u32 = @intCast(r.x0);
-    const y0: u32 = @intCast(r.y0);
-    const x1: u32 = @intCast(r.x1);
-    const y1: u32 = @intCast(r.y1);
-    if (x1 > w or y1 > h) return null;
-    return .{
-        .x0 = x0,
-        .y0 = y0,
-        .dx = x1 - x0,
-        .dy = y1 - y0,
-    };
-}
 
 fn dredBreadcrumbOpName(op: i32) []const u8 {
     return switch (op) {
@@ -123,7 +97,6 @@ pub const Backend = struct {
     debug: ?*d3d12.ID3D12Debug = null,
     dred_enabled: bool = false,
     allow_tearing: bool = false,
-    supports_a8: bool = true,
     factory4: *dxgi.IDXGIFactory4,
     device: *d3d12.ID3D12Device,
     cmd_queue: *d3d12.ID3D12CommandQueue,
@@ -166,8 +139,7 @@ pub const Backend = struct {
     // Active vertex/index buffer views for current batch
     active_vbv: d3d12.D3D12_VERTEX_BUFFER_VIEW = .{},
     active_ibv: d3d12.D3D12_INDEX_BUFFER_VIEW = .{},
-    active_vb_valid: bool = false,
-    active_ib_valid: bool = false,
+    active_buffers_valid: bool = false,
 
     // Per-command-list binding state cache (reset on every cmd_list.Reset)
     cache: state_cache.BindCache = .{},
@@ -180,7 +152,6 @@ pub const Backend = struct {
     bound_srv_table_gpu: u64 = 0,
 
     // Cross-thread atomics
-    main_thread_mode: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     occluded: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     // Debug stats
@@ -402,7 +373,6 @@ pub const Backend = struct {
             .debug = debug_iface,
             .dred_enabled = dred_enabled,
             .allow_tearing = allow_tearing,
-            .supports_a8 = true,
             .factory4 = factory4,
             .device = device,
             .cmd_queue = cmd_queue,
@@ -415,7 +385,6 @@ pub const Backend = struct {
             .pipelines = pipe_cache,
             .dummy_cbv_buf = dummy_cbv_buf,
             .dummy_cbv_gpu = dummy_cbv_gpu,
-            .main_thread_mode = std.atomic.Value(u32).init(opts.main_thread_mode),
         };
 
         caps.* = std.mem.zeroes(abi.DriverCaps);
@@ -425,7 +394,7 @@ pub const Backend = struct {
         caps.flags = abi.cap_flips_y |
             abi.cap_needs_clearing_screen |
             abi.cap_shared_upload_arena |
-            (if (self.supports_a8) abi.cap_supports_a8 else 0);
+            abi.cap_supports_a8;
         if (supports_dcomp) {
             caps.flags |= abi.cap_direct_composition;
         }
@@ -685,20 +654,7 @@ pub const Backend = struct {
                 self.frame_index = next;
                 const next_fence = self.fences[next].?;
                 const target_val = self.fence_values[next];
-                const completed = next_fence.getCompletedValue();
-                if (completed == std.math.maxInt(u64)) {
-                    return self.checkDeviceRemovedOr(error.DeviceLost, "Fence::GetCompletedValue", diag);
-                }
-                if (completed < target_val) {
-                    const ev_hr = next_fence.setEventOnCompletion(target_val, self.fence_event);
-                    if (win32.failed(ev_hr)) {
-                        return self.diagnoseError(ev_hr, "Fence::SetEventOnCompletion", diag);
-                    }
-                    if (!win32.waitForSingleObject(self.fence_event, win32.INFINITE)) {
-                        diag.set("directx: WaitForSingleObject(frame fence) failed");
-                        return error.Internal;
-                    }
-                }
+                try self.waitForFence(next_fence, target_val, "frame fence", diag);
 
                 self.reclaimFrame(next);
                 self.completed_frames += 1;
@@ -735,8 +691,7 @@ pub const Backend = struct {
             .SizeInBytes = @intCast(i_bytes.len),
             .Format = dxgi.DXGI_FORMAT_R32_UINT,
         };
-        self.active_vb_valid = true;
-        self.active_ib_valid = true;
+        self.active_buffers_valid = true;
         self.uploaded_bytes += v_bytes.len + i_bytes.len;
     }
 
@@ -759,10 +714,6 @@ pub const Backend = struct {
         if (int_w > d3d12.D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION or int_h > d3d12.D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION) {
             diag.print("directx: invalid internal image dimensions {d}x{d}", .{ int_w, int_h });
             return error.InvalidArgument;
-        }
-        if (fmt == .a8 and !self.supports_a8) {
-            diag.set("directx: A8 pixel format is not supported by this device");
-            return error.Unsupported;
         }
         const dxgi_fmt: dxgi.DXGI_FORMAT = switch (fmt) {
             .rgba8 => dxgi.DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -961,11 +912,7 @@ pub const Backend = struct {
             .cpu_rtv = img.cpu_rtv,
         }) catch {
             // Fallback: wait for GPU idle and release immediately if OOM on deferred list.
-            var dummy = Diag.none();
-            if (self.cmd_list_open) {
-                self.closeAndExecuteCmdList(&dummy) catch {};
-            }
-            self.waitForQueueIdle(&dummy) catch {};
+            self.drainBestEffort();
             if (img.cpu_srv) |s| self.descriptors.freeImageSrv(self.gpa, s);
             if (img.cpu_rtv) |r| self.descriptors.freeImageRtv(self.gpa, r);
             if (img.resource) |res| _ = res.release();
@@ -976,21 +923,13 @@ pub const Backend = struct {
         var sh = try self.shaders.remove(id);
         self.cache.pipeline = 0;
         self.deferred_shaders[self.frame_index].append(self.gpa, sh) catch {
-            var dummy = Diag.none();
-            if (self.cmd_list_open) {
-                self.closeAndExecuteCmdList(&dummy) catch {};
-            }
-            self.waitForQueueIdle(&dummy) catch {};
+            self.drainBestEffort();
             sh.deinit(self.gpa, &self.live_pipelines);
         };
     }
 
     pub fn disposeSurface(self: *Backend, id: u32) Error!void {
-        var dummy = Diag.none();
-        if (self.cmd_list_open) {
-            self.closeAndExecuteCmdList(&dummy) catch {};
-        }
-        self.waitForQueueIdle(&dummy) catch {};
+        self.drainBestEffort();
 
         self.surfaces_lock.lock();
         var surf = self.surfaces.remove(id) catch |err| {
@@ -1021,7 +960,7 @@ pub const Backend = struct {
         // Validate every region upfront before recording any GPU commands.
         var has_non_empty = false;
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("directx: writePixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -1056,21 +995,16 @@ pub const Backend = struct {
         var shared_res: ?*d3d12.ID3D12Resource = null;
         var shared_base_off: u64 = 0;
         if (self.shared_upload_buf) |buf| {
-            if (self.shared_upload_ptr) |base_ptr| {
-                if (payload.len > 0) {
-                    const p_addr: usize = @intFromPtr(payload.ptr);
-                    const b_addr: usize = @intFromPtr(base_ptr);
-                    const cap: usize = @intCast(self.shared_upload_size);
-                    if (p_addr >= b_addr and p_addr - b_addr <= cap and payload.len <= cap - (p_addr - b_addr)) {
-                        shared_res = buf;
-                        shared_base_off = @intCast(p_addr - b_addr);
-                    }
+            if (payload.len > 0) {
+                if (upload_arena.offsetWithin(self.shared_upload_ptr, @intCast(self.shared_upload_size), payload)) |off| {
+                    shared_res = buf;
+                    shared_base_off = off;
                 }
             }
         }
 
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height).?;
+            const bounds = r.rect.validate(img.internal_width, img.internal_height).?;
             if (bounds.dx == 0 or bounds.dy == 0) continue;
 
             const dst_loc = d3d12.D3D12_TEXTURE_COPY_LOCATION.subresource(tex, 0);
@@ -1166,13 +1100,13 @@ pub const Backend = struct {
 
         if (dc.regions.len == 0) return;
 
-        if (!self.active_vb_valid or !self.active_ib_valid) {
+        if (!self.active_buffers_valid) {
             diag.set("directx: drawTriangles called before setVertices");
             return error.InvalidArgument;
         }
 
         const user_bytes: u32 = @intCast(dc.user.len * 4);
-        const user_cb_aligned: u32 = @max(upload.alignUpU32(shader.user_cb_size, @intCast(upload.cbv_alignment)), @as(u32, @intCast(upload.cbv_alignment)));
+        const user_cb_aligned: u32 = @max(std.mem.alignForward(u32, shader.user_cb_size, @intCast(upload.cbv_alignment)), @as(u32, @intCast(upload.cbv_alignment)));
         if (user_bytes > 0 and user_bytes > user_cb_aligned) {
             diag.print("directx: user uniform block ({d} B) exceeds shader size ({d} B)", .{ user_bytes, user_cb_aligned });
             return error.InvalidArgument;
@@ -1316,7 +1250,7 @@ pub const Backend = struct {
             self.device,
             shader,
             dc.blend,
-            dst.rtvFormat(),
+            dst.dxgiFormat(),
             &self.live_pipelines,
             diag,
         );
@@ -1330,7 +1264,7 @@ pub const Backend = struct {
 
         // Root Parameter [0]: Root CBV b0 (internal uniforms, 512 B = align256(288 B)).
         const ring = &self.upload_rings[self.frame_index];
-        const internal_cb_size: usize = comptime upload.alignUp(abi.internal_uniform_bytes, upload.cbv_alignment);
+        const internal_cb_size: usize = comptime std.mem.alignForward(usize, abi.internal_uniform_bytes, upload.cbv_alignment);
         const internal_gpu: d3d12.D3D12_GPU_VIRTUAL_ADDRESS = if (dc.internal_version != 0 and ring.last_internal_version == dc.internal_version)
             ring.last_internal_gpu
         else blk: {
@@ -1434,7 +1368,7 @@ pub const Backend = struct {
         var union_y1: u32 = 0;
 
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("directx: readPixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -1525,7 +1459,7 @@ pub const Backend = struct {
         const src_ptr: [*]const u8 = @ptrCast(mapped_raw.?);
         const row_pitch: usize = layout.Footprint.RowPitch;
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height).?;
+            const bounds = r.rect.validate(img.internal_width, img.internal_height).?;
             if (bounds.dx == 0 or bounds.dy == 0) continue;
             upload.unpackRowsFromFootprint(
                 r.dst.?,
@@ -1591,11 +1525,9 @@ pub const Backend = struct {
     }
 
     pub fn setWindowState(self: *Backend, id: u32, flags: u32) void {
-        self.surfaces_lock.lock();
-        defer self.surfaces_lock.unlock();
-        if (self.surfaces.getOpt(id)) |surf| {
-            surf.window_state = flags;
-        }
+        _ = self;
+        _ = id;
+        _ = flags;
     }
 
     pub fn surfaceKept(self: *Backend, id: u32) bool {
@@ -1605,7 +1537,8 @@ pub const Backend = struct {
     }
 
     pub fn setMainThreadMode(self: *Backend, mode: u32) void {
-        self.main_thread_mode.store(mode, .release);
+        _ = self;
+        _ = mode;
     }
 
     pub fn isOccluded(self: *Backend) bool {
@@ -1618,16 +1551,16 @@ pub const Backend = struct {
         out_arena: *abi.UploadArena,
         diag: *Diag,
     ) Error!void {
-        if (min_bytes > upload.max_shared_arena_size) {
+        if (min_bytes > upload_arena.max_size) {
             diag.print("directx: requested shared upload arena size ({d} B) exceeds maximum ({d} B)", .{
                 min_bytes,
-                upload.max_shared_arena_size,
+                upload_arena.max_size,
             });
             return error.OutOfMemory;
         }
 
         const alignment: u32 = @intCast(upload.texture_placement_alignment); // 512
-        const target_size: u64 = upload.alignUpU64(@max(min_bytes, upload.default_shared_arena_size), alignment);
+        const target_size: u64 = std.mem.alignForward(u64, @max(min_bytes, upload_arena.default_size), alignment);
 
         const mapped = try upload.createMappedUploadBuffer(self.device, target_size, diag);
         errdefer {
@@ -1642,12 +1575,10 @@ pub const Backend = struct {
         self.shared_upload_buf = mapped.resource;
         self.shared_upload_ptr = mapped.cpu_ptr;
         self.shared_upload_size = mapped.size;
-        self.shared_arena_id +%= 1;
-        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
 
         out_arena.* = .{
             .struct_size = @sizeOf(abi.UploadArena),
-            .arena_id = self.shared_arena_id,
+            .arena_id = upload_arena.nextId(&self.shared_arena_id),
             .ptr = mapped.cpu_ptr,
             .capacity = mapped.size,
             .alignment = alignment,
@@ -1730,20 +1661,42 @@ pub const Backend = struct {
         if (win32.failed(sig_hr)) {
             return self.diagnoseError(sig_hr, "CommandQueue::Signal", diag);
         }
+        try self.waitForFence(fence, target, "queue idle", diag);
+    }
+
+    /// Blocks until `fence` has reached `target`. `what` names the wait in diagnostics.
+    fn waitForFence(
+        self: *Backend,
+        fence: *d3d12.ID3D12Fence,
+        target: u64,
+        comptime what: []const u8,
+        diag: *Diag,
+    ) Error!void {
         const completed = fence.getCompletedValue();
         if (completed == std.math.maxInt(u64)) {
             return self.checkDeviceRemovedOr(error.DeviceLost, "Fence::GetCompletedValue", diag);
         }
-        if (completed < target) {
-            const ev_hr = fence.setEventOnCompletion(target, self.fence_event);
-            if (win32.failed(ev_hr)) {
-                return self.diagnoseError(ev_hr, "Fence::SetEventOnCompletion", diag);
-            }
-            if (!win32.waitForSingleObject(self.fence_event, win32.INFINITE)) {
-                diag.set("directx: WaitForSingleObject(queue idle) failed");
-                return error.Internal;
-            }
+        if (completed >= target) return;
+
+        const ev_hr = fence.setEventOnCompletion(target, self.fence_event);
+        if (win32.failed(ev_hr)) {
+            return self.diagnoseError(ev_hr, "Fence::SetEventOnCompletion", diag);
         }
+        if (!win32.waitForSingleObject(self.fence_event, win32.INFINITE)) {
+            diag.set("directx: WaitForSingleObject(" ++ what ++ ") failed");
+            return error.Internal;
+        }
+    }
+
+    /// Submits any open command list and waits for the GPU to go idle, ignoring
+    /// failures. For paths that must release resources immediately and cannot
+    /// report an error.
+    fn drainBestEffort(self: *Backend) void {
+        var dummy = Diag.none();
+        if (self.cmd_list_open) {
+            self.closeAndExecuteCmdList(&dummy) catch {};
+        }
+        self.waitForQueueIdle(&dummy) catch {};
     }
 
     fn reclaimFrame(self: *Backend, frame_idx: usize) void {
@@ -1751,8 +1704,7 @@ pub const Backend = struct {
         self.upload_rings[frame_idx].reset();
         self.descriptors.resetFrame(frame_idx);
         self.allocator_needs_reset[frame_idx] = true;
-        self.active_vb_valid = false;
-        self.active_ib_valid = false;
+        self.active_buffers_valid = false;
     }
 
     fn releaseDeferredForFrame(self: *Backend, frame_idx: usize) void {

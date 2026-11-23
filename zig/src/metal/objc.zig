@@ -43,8 +43,6 @@ pub const Sels = struct {
     // NSObject / NSString / NSError
     alloc: Sel = null,
     new: Sel = null,
-    retain: Sel = null,
-    release: Sel = null,
     respondsToSelector: Sel = null,
     initWithBytes_length_encoding: Sel = null,
     UTF8String: Sel = null,
@@ -63,7 +61,6 @@ pub const Sels = struct {
     commit: Sel = null,
     flush: Sel = null,
     setDisableActions: Sel = null,
-    pixelFormat: Sel = null,
     setDevice: Sel = null,
     setPixelFormat: Sel = null,
     setColorspace: Sel = null,
@@ -71,15 +68,12 @@ pub const Sels = struct {
     setDisplaySyncEnabled: Sel = null,
     setDrawableSize: Sel = null,
     nextDrawable: Sel = null,
-    presentsWithTransaction: Sel = null,
     setPresentsWithTransaction: Sel = null,
     setFramebufferOnly: Sel = null,
     texture: Sel = null,
     present: Sel = null,
 
     // MTLDevice
-    isHeadless: Sel = null,
-    isLowPower: Sel = null,
     hasUnifiedMemory: Sel = null,
     name: Sel = null,
     supportsFamily: Sel = null,
@@ -129,7 +123,6 @@ pub const Sels = struct {
     getBytes_bytesPerRow_fromRegion_mipmapLevel: Sel = null,
 
     // MTLBuffer
-    length: Sel = null,
     contents: Sel = null,
     didModifyRange: Sel = null,
 
@@ -188,30 +181,10 @@ pub const Runtime = struct {
     sels: Sels,
 };
 
-var init_mu: sync.Mutex = .{};
-var runtime_state = std.atomic.Value(u8).init(0); // 0=uninit, 1=ok, 2=failed
-var runtime_storage: Runtime = undefined;
+var loader: sync.LazyOnce(Runtime, loadInternal) = .{};
 
 pub fn ensureLoaded() ?*const Runtime {
-    const st = runtime_state.load(.acquire);
-    if (st == 1) return &runtime_storage;
-    if (st == 2) return null;
-
-    init_mu.lock();
-    defer init_mu.unlock();
-
-    const st2 = runtime_state.load(.acquire);
-    if (st2 == 1) return &runtime_storage;
-    if (st2 == 2) return null;
-
-    if (loadInternal()) |rt| {
-        runtime_storage = rt;
-        runtime_state.store(1, .release);
-        return &runtime_storage;
-    } else {
-        runtime_state.store(2, .release);
-        return null;
-    }
+    return loader.get();
 }
 
 pub fn get() *const Runtime {
@@ -276,8 +249,6 @@ fn loadInternal() ?Runtime {
     rt.sels = .{
         .alloc = sel_reg("alloc"),
         .new = sel_reg("new"),
-        .retain = sel_reg("retain"),
-        .release = sel_reg("release"),
         .respondsToSelector = sel_reg("respondsToSelector:"),
         .initWithBytes_length_encoding = sel_reg("initWithBytes:length:encoding:"),
         .UTF8String = sel_reg("UTF8String"),
@@ -294,7 +265,6 @@ fn loadInternal() ?Runtime {
         .commit = sel_reg("commit"),
         .flush = sel_reg("flush"),
         .setDisableActions = sel_reg("setDisableActions:"),
-        .pixelFormat = sel_reg("pixelFormat"),
         .setDevice = sel_reg("setDevice:"),
         .setPixelFormat = sel_reg("setPixelFormat:"),
         .setColorspace = sel_reg("setColorspace:"),
@@ -302,14 +272,11 @@ fn loadInternal() ?Runtime {
         .setDisplaySyncEnabled = sel_reg("setDisplaySyncEnabled:"),
         .setDrawableSize = sel_reg("setDrawableSize:"),
         .nextDrawable = sel_reg("nextDrawable"),
-        .presentsWithTransaction = sel_reg("presentsWithTransaction"),
         .setPresentsWithTransaction = sel_reg("setPresentsWithTransaction:"),
         .setFramebufferOnly = sel_reg("setFramebufferOnly:"),
         .texture = sel_reg("texture"),
         .present = sel_reg("present"),
 
-        .isHeadless = sel_reg("isHeadless"),
-        .isLowPower = sel_reg("isLowPower"),
         .hasUnifiedMemory = sel_reg("hasUnifiedMemory"),
         .name = sel_reg("name"),
         .supportsFamily = sel_reg("supportsFamily:"),
@@ -355,7 +322,6 @@ fn loadInternal() ?Runtime {
         .newTextureViewWithPixelFormat_textureType_levels_slices_swizzle = sel_reg("newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:"),
         .getBytes_bytesPerRow_fromRegion_mipmapLevel = sel_reg("getBytes:bytesPerRow:fromRegion:mipmapLevel:"),
 
-        .length = sel_reg("length"),
         .contents = sel_reg("contents"),
         .didModifyRange = sel_reg("didModifyRange:"),
 

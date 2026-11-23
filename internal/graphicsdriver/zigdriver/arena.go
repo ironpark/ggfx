@@ -123,29 +123,55 @@ func (a *sharedUploadArena) advanceBatch() {
 	a.cursor = next
 }
 
+// payloadCursor simulates payload reservations without writing anything, so
+// an encoder can check that everything it needs fits before it emits a
+// command. It applies the alignment and bounds rules appendPayload writes by.
+type payloadCursor struct {
+	pos   int // next free byte in the arena
+	base  int // where this batch's payload starts; payload offsets are relative to it
+	align int
+	cap   int // bytes the arena can hold
+	limit int // most payload bytes one batch may span
+}
+
+// reserve claims n bytes at the next aligned position and reports whether
+// they fit. The cursor is left unchanged when they do not.
+func (c *payloadCursor) reserve(n int) bool {
+	off := alignUp(c.pos, c.align)
+	if n < 0 || off < c.pos || off > c.cap || n > c.cap-off {
+		return false
+	}
+	rel := off - c.base
+	if rel < 0 || rel > c.limit || n > c.limit-rel {
+		return false
+	}
+	c.pos = off + n
+	return true
+}
+
+// arenaCursor simulates reservations against the bytes left in the arena
+// alone, with no per-batch limit.
+func (a *sharedUploadArena) arenaCursor() payloadCursor {
+	return payloadCursor{pos: a.cursor, align: a.alignment(), cap: len(a.buf), limit: math.MaxInt}
+}
+
 func (a *sharedUploadArena) canFit(n uint64) bool {
-	if !a.enabled {
+	if !a.enabled || n > math.MaxInt {
 		return false
 	}
-	absOff := alignUp(a.cursor, a.alignment())
-	if absOff < a.cursor || absOff > len(a.buf) {
-		return false
-	}
-	return n <= uint64(len(a.buf)-absOff)
+	c := a.arenaCursor()
+	return c.reserve(int(n))
 }
 
 func (a *sharedUploadArena) canFitWritePixels(args []graphicsdriver.PixelsArgs) bool {
 	if !a.enabled {
 		return false
 	}
-	align := a.alignment()
-	simAbs := a.cursor
+	c := a.arenaCursor()
 	for _, arg := range args {
-		absOff := alignUp(simAbs, align)
-		if absOff < simAbs || absOff > len(a.buf) || len(arg.Pixels) > len(a.buf)-absOff {
+		if !c.reserve(len(arg.Pixels)) {
 			return false
 		}
-		simAbs = absOff + len(arg.Pixels)
 	}
 	return true
 }
@@ -262,31 +288,20 @@ func (s *slot) appendCmd(size int) []byte {
 	return dst
 }
 
-func (s *slot) canAppendPayload(n int) bool {
-	if n < 0 {
-		return false
-	}
+// payloadCursor returns a cursor at the slot's current payload position, in
+// the shared upload arena when the slot is using it and the heap arena otherwise.
+func (s *slot) payloadCursor() payloadCursor {
 	limit := s.payloadLimit()
 	if s.useShared() {
 		sh := s.shared
-		absOff := alignUp(sh.cursor, sh.alignment())
-		if absOff < sh.cursor || absOff > len(sh.buf) || n > len(sh.buf)-absOff {
-			return false
-		}
-		relOff := absOff - sh.batchStart
-		if relOff < 0 || relOff > limit || n > limit-relOff {
-			return false
-		}
-		return true
+		return payloadCursor{pos: sh.cursor, base: sh.batchStart, align: sh.alignment(), cap: len(sh.buf), limit: limit}
 	}
-	if s.payLen > limit {
-		return false
-	}
-	off := align16Up(s.payLen)
-	if off < s.payLen || off > limit {
-		return false
-	}
-	return n <= limit-off
+	return payloadCursor{pos: s.payLen, align: 16, cap: limit, limit: limit}
+}
+
+func (s *slot) canAppendPayload(n int) bool {
+	c := s.payloadCursor()
+	return c.reserve(n)
 }
 
 func (s *slot) appendPayload(b []byte) (uint32, bool) {
@@ -499,30 +514,10 @@ func (s *slot) encodeWritePixels(imageID uint32, args []graphicsdriver.PixelsArg
 		return true
 	}
 	// Pre-flight payload fit check so partial state is never written on overflow.
-	limit := s.payloadLimit()
-	if s.useShared() {
-		sh := s.shared
-		align := sh.alignment()
-		simAbs := sh.cursor
-		for _, a := range args {
-			absOff := alignUp(simAbs, align)
-			if absOff < simAbs || absOff > len(sh.buf) || len(a.Pixels) > len(sh.buf)-absOff {
-				return false
-			}
-			relOff := absOff - sh.batchStart
-			if relOff < 0 || relOff > limit || len(a.Pixels) > limit-relOff {
-				return false
-			}
-			simAbs = absOff + len(a.Pixels)
-		}
-	} else {
-		simLen := s.payLen
-		for _, a := range args {
-			off := align16Up(simLen)
-			if off < simLen || off > limit || len(a.Pixels) > limit-off {
-				return false
-			}
-			simLen = off + len(a.Pixels)
+	fit := s.payloadCursor()
+	for _, a := range args {
+		if !fit.reserve(len(a.Pixels)) {
+			return false
 		}
 	}
 
@@ -574,49 +569,12 @@ func (s *slot) encodeDrawTriangles(
 	needUser := userDwords > 0 && s.lastUserVer != versions.User
 
 	// Pre-flight payload fit check.
-	limit := s.payloadLimit()
-	if s.useShared() {
-		sh := s.shared
-		align := sh.alignment()
-		simAbs := sh.cursor
-		if needInternal {
-			absOff := alignUp(simAbs, align)
-			if absOff < simAbs || absOff > len(sh.buf) || int(InternalUniformBytes) > len(sh.buf)-absOff {
-				return false
-			}
-			relOff := absOff - sh.batchStart
-			if relOff < 0 || relOff > limit || int(InternalUniformBytes) > limit-relOff {
-				return false
-			}
-			simAbs = absOff + int(InternalUniformBytes)
-		}
-		if needUser {
-			absOff := alignUp(simAbs, align)
-			userBytes := int(userDwords) * 4
-			if absOff < simAbs || absOff > len(sh.buf) || userBytes > len(sh.buf)-absOff {
-				return false
-			}
-			relOff := absOff - sh.batchStart
-			if relOff < 0 || relOff > limit || userBytes > limit-relOff {
-				return false
-			}
-		}
-	} else {
-		simLen := s.payLen
-		if needInternal {
-			off := align16Up(simLen)
-			if off < simLen || off > limit || int(InternalUniformBytes) > limit-off {
-				return false
-			}
-			simLen = off + int(InternalUniformBytes)
-		}
-		if needUser {
-			off := align16Up(simLen)
-			userBytes := int(userDwords) * 4
-			if off < simLen || off > limit || userBytes > limit-off {
-				return false
-			}
-		}
+	fit := s.payloadCursor()
+	if needInternal && !fit.reserve(int(InternalUniformBytes)) {
+		return false
+	}
+	if needUser && !fit.reserve(int(userDwords)*4) {
+		return false
 	}
 
 	internalOff := s.lastInternalOff

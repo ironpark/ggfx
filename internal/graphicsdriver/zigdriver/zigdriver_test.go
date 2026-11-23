@@ -424,7 +424,7 @@ func TestErrorPaths(t *testing.T) {
 
 // TestShaderDisposeAndNewInSameBatch verifies that disposing a shader and creating
 // a new shader within the same unsubmitted batch never collides on shader IDs:
-// disposed IDs remain in pendingFreeShaderIDs until the batch carrying OP_DISPOSE_SHADER
+// disposed IDs remain pending in shaderIDs until the batch carrying OP_DISPOSE_SHADER
 // has been submitted, and are reused on subsequent batches.
 func TestShaderDisposeAndNewInSameBatch(t *testing.T) {
 	g := newTestGraphics(t, Options{Slots: 2})

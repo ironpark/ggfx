@@ -170,6 +170,31 @@ pub const Rect = extern struct {
     pub fn eql(a: Rect, b: Rect) bool {
         return a.x0 == b.x0 and a.y0 == b.y0 and a.x1 == b.x1 and a.y1 == b.y1;
     }
+
+    /// A rect known to lie inside a `w` x `h` image, as unsigned origin and extent.
+    pub const Valid = struct {
+        x0: u32,
+        y0: u32,
+        dx: u32,
+        dy: u32,
+    };
+
+    /// Returns null when the rect is inverted or reaches outside `w` x `h`.
+    /// Empty rects are accepted.
+    pub fn validate(r: Rect, w: u32, h: u32) ?Valid {
+        if (r.x0 < 0 or r.y0 < 0 or r.x1 < r.x0 or r.y1 < r.y0) return null;
+        const x0: u32 = @intCast(r.x0);
+        const y0: u32 = @intCast(r.y0);
+        const x1: u32 = @intCast(r.x1);
+        const y1: u32 = @intCast(r.y1);
+        if (x1 > w or y1 > h) return null;
+        return .{
+            .x0 = x0,
+            .y0 = y0,
+            .dx = x1 - x0,
+            .dy = y1 - y0,
+        };
+    }
 };
 
 pub const Blend = extern struct {

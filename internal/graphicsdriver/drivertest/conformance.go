@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"sync/atomic"
 	"testing"
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
@@ -53,19 +52,13 @@ func DefaultRunner(g graphicsdriver.Graphics) func(func(graphicsdriver.Graphics)
 	}
 }
 
-// drivertestVersionBit places conformance-suite uniform versions in a high range
-// below remote.Replayer's 48-bit limit, disjoint from graphicscommand's counter
-// (which counts up from 1) and remote.Replayer's salted versions (bit 63 set).
-// This prevents false cache hits when RunSuite shares a live driver with
-// graphicscommand (e.g. after atlas initialization cleared a page with version 1).
-const drivertestVersionBit uint64 = 1 << 47
-
-var nextVersion atomic.Uint64
-
+// allocVersions returns versions for one draw's uniform blocks. They come from
+// the process-wide allocator, so the suite can share a live driver with
+// graphicscommand without either mistaking the other's blocks for its own.
 func allocVersions() graphicsdriver.UniformVersions {
 	return graphicsdriver.UniformVersions{
-		Internal: drivertestVersionBit | nextVersion.Add(1),
-		User:     drivertestVersionBit | nextVersion.Add(1),
+		Internal: graphicsdriver.NewUniformVersion(),
+		User:     graphicsdriver.NewUniformVersion(),
 	}
 }
 
@@ -228,7 +221,7 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 				return err
 			}
 
-			uniforms := makeInternalUniforms(prog, w, h, g.FlipsY())
+			uniforms := MakeInternalUniforms(prog, w, h, g.FlipsY())
 			clip := image.Rect(4, 4, 12, 12)
 			var srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image
 			srcs[0] = src
@@ -269,7 +262,10 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 	})
 }
 
-func makeInternalUniforms(p *shader.Program, w, h int, flipsY bool) []uint32 {
+// MakeInternalUniforms returns the uniform block for drawing p into a w x h
+// destination: the texture sizes and the projection matrix, with the
+// program's own uniforms left zero.
+func MakeInternalUniforms(p *shader.Program, w, h int, flipsY bool) []uint32 {
 	iw, ih := float32(graphics.InternalImageSize(w)), float32(graphics.InternalImageSize(h))
 	u := make([]uint32, graphics.PreservedUniformDwordCount+p.UniformDwordCount)
 	u[graphics.DstTextureSizeUniformDwordIndex] = math.Float32bits(iw)

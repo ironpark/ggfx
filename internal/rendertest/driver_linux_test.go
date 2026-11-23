@@ -30,7 +30,8 @@ func initDriver() error {
 	if err := host.Init(nil); err != nil {
 		return err
 	}
-	if host.CurrentDriver().Library == host.GraphicsLibraryVulkan {
+	// Only OpenGL draws through a GL context.
+	if host.CurrentDriver().Library != host.GraphicsLibraryOpenGL {
 		return nil
 	}
 	c, err := etesting.NewGLContext()

@@ -17,13 +17,6 @@ const required_a8_features: vk.Flags =
     vk.FormatFeature.transfer_src_bit |
     vk.FormatFeature.transfer_dst_bit;
 
-fn cstrFromArray(arr: []const u8) []const u8 {
-    for (arr, 0..) |b, i| {
-        if (b == 0) return arr[0..i];
-    }
-    return arr;
-}
-
 fn scoreDeviceType(dev_type: vk.PhysicalDeviceType, low_power: bool) u32 {
     if (low_power) {
         return switch (dev_type) {
@@ -80,7 +73,7 @@ fn hasDeviceExtension(
         return false;
     }
     for (exts[0..count]) |*e| {
-        if (std.mem.eql(u8, cstrFromArray(&e.extensionName), ext_name)) return true;
+        if (std.mem.eql(u8, std.mem.sliceTo(&e.extensionName, 0), ext_name)) return true;
     }
     return false;
 }
@@ -228,7 +221,7 @@ pub const Device = struct {
         caps.color_space = opts.color_space;
         caps.frames_in_flight = frames_in_flight;
 
-        const name_slice = cstrFromArray(&best_props.deviceName);
+        const name_slice = std.mem.sliceTo(&best_props.deviceName, 0);
         const copy_len = @min(name_slice.len, caps.device_name.len - 1);
         if (copy_len > 0) @memcpy(caps.device_name[0..copy_len], name_slice[0..copy_len]);
         caps.device_name[copy_len] = 0;

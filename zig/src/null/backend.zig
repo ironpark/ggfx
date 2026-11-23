@@ -5,6 +5,7 @@ const handles = @import("../handles.zig");
 const state_cache = @import("../state_cache.zig");
 const sync = @import("../sync.zig");
 const replayer = @import("../replayer.zig");
+const upload_arena = @import("../upload_arena.zig");
 const Allocator = std.mem.Allocator;
 const Diag = errors.Diag;
 const Error = errors.Error;
@@ -34,7 +35,6 @@ const Surface = struct {
     flags: u32,
     handle1: u64,
     handle2: u64,
-    window_state: u32 = 0,
     drawn: bool = false,
 };
 
@@ -49,7 +49,6 @@ pub const Backend = struct {
     cache: state_cache.BindCache = .{},
     has_drawn: bool = false,
 
-    main_thread_mode: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     occluded: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     submits: u64 = 0,
@@ -66,7 +65,6 @@ pub const Backend = struct {
         const self = gpa.create(Backend) catch return error.OutOfMemory;
         self.* = .{
             .gpa = gpa,
-            .main_thread_mode = std.atomic.Value(u32).init(opts.main_thread_mode),
         };
 
         caps.* = std.mem.zeroes(abi.DriverCaps);
@@ -267,7 +265,7 @@ pub const Backend = struct {
         const img_stride: usize = @as(usize, img.internal_width) * bpp;
 
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("writePixels rect ({d},{d})-({d},{d}) out of image bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -417,7 +415,7 @@ pub const Backend = struct {
         const img_stride: usize = @as(usize, img.internal_width) * bpp;
 
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("readPixels rect ({d},{d})-({d},{d}) out of image bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -485,11 +483,9 @@ pub const Backend = struct {
     }
 
     pub fn setWindowState(self: *Backend, id: u32, flags: u32) void {
-        self.surfaces_lock.lock();
-        defer self.surfaces_lock.unlock();
-        if (self.surfaces.getOpt(id)) |surf| {
-            surf.window_state = flags;
-        }
+        _ = self;
+        _ = id;
+        _ = flags;
     }
 
     pub fn surfaceKept(self: *Backend, id: u32) bool {
@@ -499,7 +495,8 @@ pub const Backend = struct {
     }
 
     pub fn setMainThreadMode(self: *Backend, mode: u32) void {
-        self.main_thread_mode.store(mode, .release);
+        _ = self;
+        _ = mode;
     }
 
     pub fn isOccluded(self: *Backend) bool {
@@ -529,10 +526,9 @@ pub const Backend = struct {
         out_arena: *abi.UploadArena,
         diag: *Diag,
     ) Error!void {
-        const max_cap: u64 = 256 << 20;
         const default_cap: u64 = 256 << 10;
-        if (min_bytes > max_cap) {
-            diag.print("null: acquireUploadArena min_bytes {d} exceeds max {d}", .{ min_bytes, max_cap });
+        if (min_bytes > upload_arena.max_size) {
+            diag.print("null: acquireUploadArena min_bytes {d} exceeds max {d}", .{ min_bytes, upload_arena.max_size });
             return error.OutOfMemory;
         }
         const raw_want: usize = @intCast(@max(min_bytes, default_cap));
@@ -542,11 +538,9 @@ pub const Backend = struct {
             if (self.shared_arena.len > 0) self.gpa.free(self.shared_arena);
             self.shared_arena = next;
         }
-        self.shared_arena_id +%= 1;
-        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
         out_arena.* = .{
             .struct_size = @sizeOf(abi.UploadArena),
-            .arena_id = self.shared_arena_id,
+            .arena_id = upload_arena.nextId(&self.shared_arena_id),
             .ptr = self.shared_arena.ptr,
             .capacity = self.shared_arena.len,
             .alignment = 16,
@@ -554,28 +548,6 @@ pub const Backend = struct {
         };
     }
 };
-
-const ValidRect = struct {
-    x0: u32,
-    y0: u32,
-    dx: u32,
-    dy: u32,
-};
-
-fn validateRect(r: abi.Rect, w: u32, h: u32) ?ValidRect {
-    if (r.x0 < 0 or r.y0 < 0 or r.x1 < r.x0 or r.y1 < r.y0) return null;
-    const x0: u32 = @intCast(r.x0);
-    const y0: u32 = @intCast(r.y0);
-    const x1: u32 = @intCast(r.x1);
-    const y1: u32 = @intCast(r.y1);
-    if (x1 > w or y1 > h) return null;
-    return .{
-        .x0 = x0,
-        .y0 = y0,
-        .dx = x1 - x0,
-        .dy = y1 - y0,
-    };
-}
 
 fn packPipelineKey(shader_id: u32, blend: abi.Blend) usize {
     var h: u64 = shader_id;
@@ -586,96 +558,6 @@ fn packPipelineKey(shader_id: u32, blend: abi.Blend) usize {
     h ^= (@as(u64, blend.op_rgb) << 40) | (@as(u64, blend.op_a) << 48);
     // Reserve 0 for "unbound".
     return if (h == 0) 1 else @intCast(h);
-}
-
-/// Temporary delegating stub for OS backends prior to Wave 3B implementation.
-/// Delegates all operations to the null backend and overrides `caps.backend`.
-pub fn Stub(comptime backend_tag: abi.Backend) type {
-    return struct {
-        const Self = @This();
-
-        inner: *Backend,
-        gpa: Allocator,
-
-        pub fn init(gpa: Allocator, opts: *const abi.DeviceOptions, caps: *abi.DriverCaps, diag: *Diag) Error!*Self {
-            const inner = try Backend.init(gpa, opts, caps, diag);
-            errdefer inner.deinit();
-            const self = gpa.create(Self) catch return error.OutOfMemory;
-            self.* = .{ .inner = inner, .gpa = gpa };
-            caps.backend = @intFromEnum(backend_tag);
-            return self;
-        }
-
-        pub fn deinit(self: *Self) void {
-            const gpa = self.gpa;
-            self.inner.deinit();
-            gpa.destroy(self);
-        }
-
-        pub fn beginBatch(self: *Self, diag: *Diag) Error!void {
-            return self.inner.beginBatch(diag);
-        }
-        pub fn endBatch(self: *Self, mode: abi.FlushMode, res: *abi.SubmitResult, diag: *Diag) Error!void {
-            return self.inner.endBatch(mode, res, diag);
-        }
-        pub fn setVertices(self: *Self, vertices: []const f32, indices: []const u32, diag: *Diag) Error!void {
-            return self.inner.setVertices(vertices, indices, diag);
-        }
-        pub fn newImage(self: *Self, id: u32, w: u32, h: u32, iw: u32, ih: u32, fmt: abi.PixelFormat, diag: *Diag) Error!void {
-            return self.inner.newImage(id, w, h, iw, ih, fmt, diag);
-        }
-        pub fn newScreenImage(self: *Self, id: u32, surface_id: u32, w: u32, h: u32, diag: *Diag) Error!void {
-            return self.inner.newScreenImage(id, surface_id, w, h, diag);
-        }
-        pub fn disposeImage(self: *Self, id: u32) Error!void {
-            return self.inner.disposeImage(id);
-        }
-        pub fn disposeShader(self: *Self, id: u32) Error!void {
-            return self.inner.disposeShader(id);
-        }
-        pub fn disposeSurface(self: *Self, id: u32) Error!void {
-            return self.inner.disposeSurface(id);
-        }
-        pub fn writePixels(self: *Self, id: u32, regions: []align(4) const abi.PixelsRegion, payload: []const u8, diag: *Diag) Error!void {
-            return self.inner.writePixels(id, regions, payload, diag);
-        }
-        pub fn drawTriangles(self: *Self, dc: *const replayer.DrawCall, diag: *Diag) Error!void {
-            return self.inner.drawTriangles(dc, diag);
-        }
-        pub fn setDamage(self: *Self, surface_id: u32, rects: ?[]align(4) const abi.Rect) Error!void {
-            return self.inner.setDamage(surface_id, rects);
-        }
-        pub fn createShader(self: *Self, id: u32, desc: *const abi.ShaderDesc, diag: *Diag) Error!void {
-            return self.inner.createShader(id, desc, diag);
-        }
-        pub fn readPixels(self: *Self, id: u32, regions: []const abi.ReadRegion, diag: *Diag) Error!void {
-            return self.inner.readPixels(id, regions, diag);
-        }
-        pub fn finishForcedFrame(self: *Self, diag: *Diag) Error!void {
-            return self.inner.finishForcedFrame(diag);
-        }
-        pub fn presentOnMainThread(self: *Self, diag: *Diag) Error!void {
-            return self.inner.presentOnMainThread(diag);
-        }
-        pub fn createSurface(self: *Self, id: u32, desc: *const abi.SurfaceDesc, caps: *abi.SurfaceCaps, diag: *Diag) Error!void {
-            return self.inner.createSurface(id, desc, caps, diag);
-        }
-        pub fn setWindowState(self: *Self, id: u32, flags: u32) void {
-            self.inner.setWindowState(id, flags);
-        }
-        pub fn surfaceKept(self: *Self, id: u32) bool {
-            return self.inner.surfaceKept(id);
-        }
-        pub fn setMainThreadMode(self: *Self, mode: u32) void {
-            self.inner.setMainThreadMode(mode);
-        }
-        pub fn isOccluded(self: *Self) bool {
-            return self.inner.isOccluded();
-        }
-        pub fn stats(self: *Self, out: *abi.DebugStats) void {
-            self.inner.stats(out);
-        }
-    };
 }
 
 test "null backend writePixels and readPixels roundtrip (RGBA8 and A8) plus bind cache" {

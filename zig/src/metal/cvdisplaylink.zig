@@ -34,30 +34,10 @@ const Functions = struct {
     lib_cv: dynlib.DynLib,
 };
 
-var load_mu: sync.Mutex = .{};
-var load_state = std.atomic.Value(u8).init(0); // 0=uninit, 1=ok, 2=failed
-var funcs: Functions = undefined;
+var loader: sync.LazyOnce(Functions, loadInternal) = .{};
 
 pub fn ensureLoaded() ?*const Functions {
-    const st = load_state.load(.acquire);
-    if (st == 1) return &funcs;
-    if (st == 2) return null;
-
-    load_mu.lock();
-    defer load_mu.unlock();
-
-    const st2 = load_state.load(.acquire);
-    if (st2 == 1) return &funcs;
-    if (st2 == 2) return null;
-
-    if (loadInternal()) |f| {
-        funcs = f;
-        load_state.store(1, .release);
-        return &funcs;
-    } else {
-        load_state.store(2, .release);
-        return null;
-    }
+    return loader.get();
 }
 
 fn loadInternal() ?Functions {

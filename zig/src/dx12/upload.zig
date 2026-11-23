@@ -9,27 +9,10 @@ const Error = errors.Error;
 const Diag = errors.Diag;
 
 pub const min_ring_size: usize = 256 * 1024;
-pub const default_shared_arena_size: u64 = 4 << 20; // 4 MiB
-pub const max_shared_arena_size: u64 = 256 << 20; // 256 MiB
 pub const vb_ib_alignment: usize = 4;
 pub const cbv_alignment: usize = d3d12.D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT; // 256
 pub const texture_placement_alignment: usize = d3d12.D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512
 pub const texture_pitch_alignment: usize = d3d12.D3D12_TEXTURE_DATA_PITCH_ALIGNMENT; // 256
-
-pub inline fn alignUp(val: usize, alignment: usize) usize {
-    std.debug.assert(std.math.isPowerOfTwo(alignment));
-    return (val + alignment - 1) & ~(alignment - 1);
-}
-
-pub inline fn alignUpU32(val: u32, alignment: u32) u32 {
-    std.debug.assert(std.math.isPowerOfTwo(alignment));
-    return (val + alignment - 1) & ~(alignment - 1);
-}
-
-pub inline fn alignUpU64(val: u64, alignment: u64) u64 {
-    std.debug.assert(std.math.isPowerOfTwo(alignment));
-    return (val + alignment - 1) & ~(alignment - 1);
-}
 
 pub fn createBuffer(
     device: *d3d12.ID3D12Device,
@@ -137,7 +120,7 @@ pub const UploadRing = struct {
         diag: *Diag,
     ) Error!Allocation {
         const req_size = @max(byte_size, 1);
-        var aligned_off = alignUp(self.offset, alignment);
+        var aligned_off = std.mem.alignForward(usize, self.offset, alignment);
 
         if (self.buffer == null or aligned_off + req_size > self.size) {
             if (self.buffer) |old_buf| {
@@ -148,7 +131,7 @@ pub const UploadRing = struct {
                 self.offset = 0;
             }
             const doubled = std.math.mul(usize, self.size, 2) catch self.size;
-            const target_size = @max(@max(doubled, alignUp(req_size, 65536)), min_ring_size);
+            const target_size = @max(@max(doubled, std.mem.alignForward(usize, req_size, 65536)), min_ring_size);
 
             const new_buf = try createBuffer(device, @intCast(target_size), d3d12.D3D12_HEAP_TYPE_UPLOAD, diag);
             var mapped_raw: ?*anyopaque = null;
@@ -221,7 +204,7 @@ pub fn computeTextureFootprint(width: u32, height: u32, bpp: u32) TextureFootpri
         return .{ .row_pitch = 0, .total_bytes = 0 };
     }
     const row_bytes: usize = @as(usize, width) * @as(usize, bpp);
-    const row_pitch: usize = alignUp(row_bytes, texture_pitch_alignment);
+    const row_pitch: usize = std.mem.alignForward(usize, row_bytes, texture_pitch_alignment);
     const total_bytes: usize = row_pitch * @as(usize, height - 1) + row_bytes;
     return .{
         .row_pitch = @intCast(row_pitch),

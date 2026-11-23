@@ -64,7 +64,7 @@ func (g *Graphics) NewImage(width, height int, format graphicsdriver.PixelFormat
 
 	iw := graphics.InternalImageSize(width)
 	ih := graphics.InternalImageSize(height)
-	id := g.allocImageID()
+	id := g.imageIDs.alloc()
 	g.ring.cur().encodeNewImage(id, uint32(width), uint32(height), uint32(iw), uint32(ih), abiFmt)
 	return &Image{
 		g:              g,
@@ -84,7 +84,7 @@ func (i *Image) Dispose() {
 	}
 	i.disposed = true
 	i.g.ring.cur().encodeDisposeImage(i.id)
-	i.g.deferFreeImageID(i.id)
+	i.g.imageIDs.deferRelease(i.id)
 }
 
 func validatePixelRegion(r image.Rectangle, width, height, bpp, pixLen int, op string) error {
@@ -135,7 +135,7 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	cur := i.g.ring.cur()
 	if i.g.shared.enabled && !i.g.shared.canFitWritePixels(args) {
 		totalNeed, ok := i.g.shared.writePixelsNeed(args)
-		if !ok || !i.g.rotateSharedArena(totalNeed) {
+		if !ok || !i.g.acquireSharedArena(totalNeed) {
 			if len(args) == 1 {
 				cur.forceHeap = true
 			}
@@ -158,7 +158,7 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		}
 		cur = i.g.ring.cur()
 		if i.g.shared.enabled && !i.g.shared.canFitWritePixels(single) {
-			if !i.g.rotateSharedArena(uint64(len(args[idx].Pixels))) {
+			if !i.g.acquireSharedArena(uint64(len(args[idx].Pixels))) {
 				cur.forceHeap = true
 			}
 		}
@@ -219,20 +219,13 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 		})
 	}
 
+	// Commands still queued must run before the readback, so they ride along.
 	cur := i.g.ring.cur()
 	var pendingPtr *Batch
-	var usedCmd, usedPay int
-	var usedShared bool
+	var use batchUse
 	if cur.cmdCount > 0 {
-		i.g.ring.nextSeq++
-		cur.seq = i.g.ring.nextSeq
-		cur.fillBatch(&i.g.batch)
+		use = i.g.stageBatch(cur)
 		pendingPtr = &i.g.batch
-		usedCmd = cur.cmdLen
-		usedShared = cur.usingShared
-		if !usedShared {
-			usedPay = cur.payLen
-		}
 	}
 
 	i.g.errBuf[0] = 0
@@ -251,17 +244,7 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 	runtime.KeepAlive(i.g.readRegions)
 
 	if pendingPtr != nil {
-		if usedShared {
-			i.g.shared.advanceBatch()
-		}
-		cur.frameMaxCmd = max(cur.frameMaxCmd, usedCmd)
-		cur.frameMaxPay = max(cur.frameMaxPay, usedPay)
-		cur.reset()
-		if st == StatusOK {
-			i.g.releaseDeferredIDs()
-		} else {
-			i.g.discardDeferredIDs()
-		}
+		i.g.retireBatch(cur, use, st)
 	}
 
 	return statusToError("read_pixels", st, i.g.errBuf[:])

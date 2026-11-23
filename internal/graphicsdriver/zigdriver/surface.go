@@ -36,8 +36,10 @@ type Surface struct {
 	caps     SurfaceCaps
 	disposed atomic.Bool
 
-	// Protected by g.surfacesMu.
+	// Protected by g.surfacesMu. damageRects is reused across frames;
+	// damageFull records that the caller passed nil (the whole surface).
 	damageDirty bool
+	damageFull  bool
 	damageRects []image.Rectangle
 }
 
@@ -154,7 +156,7 @@ func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error
 	}
 	graphicsdriver.CheckSize("zigdriver", width, height, s.g.MaxImageSize())
 
-	id := s.g.allocImageID()
+	id := s.g.imageIDs.alloc()
 	s.g.ring.cur().encodeNewScreenImage(id, s.id, uint32(width), uint32(height))
 	return &Image{
 		g:              s.g,
@@ -197,13 +199,8 @@ func (s *Surface) SetDamage(rects []image.Rectangle) {
 		return
 	}
 	s.g.surfacesMu.Lock()
-	if rects == nil {
-		s.damageRects = nil
-	} else if len(rects) == 0 {
-		s.damageRects = []image.Rectangle{}
-	} else {
-		s.damageRects = slices.Clone(rects)
-	}
+	s.damageFull = rects == nil
+	s.damageRects = append(s.damageRects[:0], rects...)
 	s.damageDirty = true
 	s.g.surfacesMu.Unlock()
 }

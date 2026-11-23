@@ -214,10 +214,6 @@ func (q *commandQueue) sameRegionsAsLast(shader *Shader, dstRegion image.Rectang
 	return true
 }
 
-// lastUniformVersion is the last version given to a uniform block. Versions are never reused,
-// across flushes and queues, so a driver's record of one cannot stand for other contents.
-var lastUniformVersion atomic.Uint64
-
 // uniformVersions returns the versions of the blocks of c, the next draw command run in the flush
 // in progress, whose Y flip is flipsY. A block keeps the version of the draw command run before
 // it when it was equal to that command's at enqueueing and the flip, which only the internal
@@ -225,10 +221,10 @@ var lastUniformVersion atomic.Uint64
 func (q *commandQueue) uniformVersions(c *drawTrianglesCommand, flipsY bool) graphicsdriver.UniformVersions {
 	v := q.execVersions
 	if v.Internal == 0 || !c.sameInternalAsPrev || flipsY != q.execFlipsY {
-		v.Internal = lastUniformVersion.Add(1)
+		v.Internal = graphicsdriver.NewUniformVersion()
 	}
 	if v.User == 0 || !c.sameUserAsPrev {
-		v.User = lastUniformVersion.Add(1)
+		v.User = graphicsdriver.NewUniformVersion()
 	}
 	q.execVersions = v
 	q.execFlipsY = flipsY

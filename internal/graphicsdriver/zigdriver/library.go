@@ -17,6 +17,7 @@
 package zigdriver
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -224,10 +225,6 @@ func (l *library) presentOnMainThread(dev uintptr, errBuf *byte, errCap uintptr)
 	return int32(r)
 }
 
-func (l *library) isOccluded(dev uintptr) uint32 {
-	return uint32(call1(l.fnIsOccluded, dev))
-}
-
 func (l *library) surfaceCreate(dev uintptr, surfaceID uint32, desc *SurfaceDesc, outCaps *SurfaceCaps, errBuf *byte, errCap uintptr) int32 {
 	r := call6(l.fnSurfaceCreate,
 		dev,
@@ -305,27 +302,21 @@ func loadLibrary(pathOverride string) (*library, error) {
 	return loadDefaultLibrary()
 }
 
+// Both loaders hold libCacheMu across the open: loads are rare, and serializing
+// them means a library is never opened twice for the same key.
+
 func loadExplicitLibrary(path string) (*library, error) {
 	libCacheMu.Lock()
+	defer libCacheMu.Unlock()
 	if cached, ok := libCache[path]; ok {
-		libCacheMu.Unlock()
 		return cached, nil
 	}
-	libCacheMu.Unlock()
 
 	lib, err := openAndVerifyLibrary(path)
 	if err != nil {
 		return nil, err
 	}
-
-	libCacheMu.Lock()
-	if existing, ok := libCache[path]; ok {
-		libCacheMu.Unlock()
-		closeLibrary(lib.handle)
-		return existing, nil
-	}
 	libCache[path] = lib
-	libCacheMu.Unlock()
 	return lib, nil
 }
 
@@ -333,11 +324,10 @@ func loadDefaultLibrary() (*library, error) {
 	const autoKey = ""
 
 	libCacheMu.Lock()
+	defer libCacheMu.Unlock()
 	if cached, ok := libCache[autoKey]; ok {
-		libCacheMu.Unlock()
 		return cached, nil
 	}
-	libCacheMu.Unlock()
 
 	name := libFileName()
 	candidates := make([]string, 0, 3)
@@ -354,40 +344,15 @@ func loadDefaultLibrary() (*library, error) {
 	for _, cand := range candidates {
 		lib, err := openAndVerifyLibrary(cand)
 		if err == nil {
-			libCacheMu.Lock()
-			if existing, ok := libCache[autoKey]; ok {
-				libCacheMu.Unlock()
-				closeLibrary(lib.handle)
-				return existing, nil
-			}
 			libCache[autoKey] = lib
-			libCacheMu.Unlock()
 			return lib, nil
 		}
-		if errIsABIMismatch(err) {
+		if errors.Is(err, ErrABIMismatch) {
 			return nil, err
 		}
 		lastErr = err
 	}
 	return nil, fmt.Errorf("%w: could not load %s (%v)", ErrBackendUnavailable, name, lastErr)
-}
-
-func errIsABIMismatch(err error) bool {
-	if err == nil {
-		return false
-	}
-	type unwrapper interface{ Unwrap() error }
-	for e := err; e != nil; {
-		if e == ErrABIMismatch {
-			return true
-		}
-		u, ok := e.(unwrapper)
-		if !ok {
-			return false
-		}
-		e = u.Unwrap()
-	}
-	return false
 }
 
 func openAndVerifyLibrary(path string) (*library, error) {

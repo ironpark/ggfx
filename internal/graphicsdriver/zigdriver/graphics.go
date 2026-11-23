@@ -23,6 +23,7 @@ import (
 	"image"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,10 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
-// Options configures a native Zig graphics driver device.
+// Options configures a native Zig graphics driver device. NewGraphics also
+// reads the environment variables listed in the package documentation: their
+// flags are added to Flags, and they supply Slots and DXFeatureLevel when
+// those are left zero.
 type Options struct {
 	ColorSpace     color.ColorSpace
 	Backend        uint32 // BackendAuto, BackendMetal, BackendDX12, BackendVulkan, BackendNull
@@ -50,11 +54,6 @@ func DeviceCreated() bool {
 	return deviceCreated.Load()
 }
 
-type damageEntry struct {
-	surfaceID uint32
-	rects     []image.Rectangle
-}
-
 // Graphics implements graphicsdriver.Graphics and its optional capabilities
 // by batching commands into a linear arena ring submitted to the Zig native library.
 type Graphics struct {
@@ -64,35 +63,25 @@ type Graphics struct {
 	caps       DriverCaps
 	colorSpace color.ColorSpace
 
-	ring    ring
-	shared  sharedUploadArena
-	inBatch bool
-	closed  atomic.Bool
+	ring   ring
+	shared sharedUploadArena
+	closed atomic.Bool
 
 	occluded atomic.Bool
 
 	mainThreadMu    sync.Mutex
 	runOnMainThread func(func())
 
-	// Render-thread handle allocators (LIFO free-list reuse).
-	// Disposed IDs are held in pendingFree* until the batch carrying OP_DISPOSE_*
-	// has been submitted to Zig so synchronous calls (e.g. NewShader) never collide
-	// with a queued disposal in the same batch.
-	nextImageID         uint32
-	freeImageIDs        []uint32
-	pendingFreeImageIDs []uint32
-
-	nextShaderID         uint32
-	freeShaderIDs        []uint32
-	pendingFreeShaderIDs []uint32
+	// Render-thread handle allocators.
+	imageIDs  idAllocator
+	shaderIDs idAllocator
 
 	// Main-thread surface handle allocator (never reused).
 	nextSurfaceID atomic.Uint32
 
 	// Active surfaces tracked for damage flushing at Begin().
-	surfacesMu    sync.Mutex
-	surfaces      []*Surface
-	pendingDamage []damageEntry
+	surfacesMu sync.Mutex
+	surfaces   []*Surface
 
 	// Reusable FFI descriptors kept on heap-resident Graphics.
 	batch       Batch
@@ -103,6 +92,11 @@ type Graphics struct {
 
 	mainErrMu  sync.Mutex
 	mainErrBuf [1024]byte
+
+	// presentOnMainThread bound once, so handing it to the main-thread runner
+	// does not allocate a closure per frame. presentErr is its result.
+	runPresent func()
+	presentErr error
 }
 
 var (
@@ -121,29 +115,78 @@ func defaultMainThreadMode() uint32 {
 	return MainThreadInline
 }
 
-func applyDirectXEnvFlags(backend, flags uint32) uint32 {
-	if runtime.GOOS != "windows" || (backend != BackendAuto && backend != BackendDX12) {
-		return flags
+// withEnv returns o with the driver's environment variables applied. This is
+// the only place they are read, so every caller of NewGraphics sees the same
+// settings whether or not it goes through internal/render.
+func (o Options) withEnv() Options {
+	if os.Getenv("GGFX_DRIVER_DEBUG") == "1" {
+		o.Flags |= DeviceFlagDebug
 	}
-	env := cmp.Or(os.Getenv("GGFX_DIRECTX"), os.Getenv("EBITENGINE_DIRECTX"), os.Getenv("EBITEN_DIRECTX"))
-	if env == "" {
-		return flags
+	if os.Getenv("GGFX_METAL_SWAPCHAIN") == "0" {
+		o.Flags |= DeviceFlagMetalNoIOSurface
 	}
-	for tok := range strings.SplitSeq(env, ",") {
-		switch strings.TrimSpace(tok) {
-		case "warp":
-			flags |= DeviceFlagWARP
-		case "debug":
-			flags |= DeviceFlagDebug
-		case "dred":
-			flags |= DeviceFlagDRED
+	if o.Slots == 0 {
+		if n, err := strconv.Atoi(os.Getenv("GGFX_DRIVER_SLOTS")); err == nil && (n == 2 || n == 3) {
+			o.Slots = n
 		}
 	}
-	return flags
+	if runtime.GOOS == "windows" && (o.Backend == BackendAuto || o.Backend == BackendDX12) {
+		o.applyDirectXEnv()
+	}
+	return o
+}
+
+// applyDirectXEnv applies GGFX_DIRECTX and GGFX_DIRECTX_FEATURE_LEVEL, with
+// the same tokens and fallback variable names as the Go DirectX driver. A
+// "featurelevel=" token takes precedence over the standalone variable.
+func (o *Options) applyDirectXEnv() {
+	level := cmp.Or(os.Getenv("GGFX_DIRECTX_FEATURE_LEVEL"), os.Getenv("EBITENGINE_DIRECTX_FEATURE_LEVEL"))
+	env := cmp.Or(os.Getenv("GGFX_DIRECTX"), os.Getenv("EBITENGINE_DIRECTX"), os.Getenv("EBITEN_DIRECTX"))
+	if env != "" {
+		for tok := range strings.SplitSeq(env, ",") {
+			tok = strings.TrimSpace(tok)
+			switch {
+			case tok == "warp":
+				o.Flags |= DeviceFlagWARP
+			case tok == "debug":
+				o.Flags |= DeviceFlagDebug
+			case tok == "dred":
+				o.Flags |= DeviceFlagDRED
+			case strings.HasPrefix(tok, "featurelevel="):
+				if _, ok := parseDXFeatureLevel(tok[len("featurelevel="):]); ok {
+					level = tok[len("featurelevel="):]
+				}
+			}
+		}
+	}
+	if o.DXFeatureLevel == 0 {
+		if fl, ok := parseDXFeatureLevel(level); ok {
+			o.DXFeatureLevel = fl
+		}
+	}
+}
+
+// parseDXFeatureLevel maps a feature level name to its D3D_FEATURE_LEVEL value.
+func parseDXFeatureLevel(s string) (uint32, bool) {
+	switch s {
+	case "11_0":
+		return 0xb000, true
+	case "11_1":
+		return 0xb100, true
+	case "12_0":
+		return 0xc000, true
+	case "12_1":
+		return 0xc100, true
+	case "12_2":
+		return 0xc200, true
+	default:
+		return 0, false
+	}
 }
 
 // NewGraphics loads the native Zig driver library and creates a GPU device.
 func NewGraphics(o Options) (*Graphics, error) {
+	o = o.withEnv()
 	lib, err := loadLibrary(o.LibPath)
 	if err != nil {
 		return nil, err
@@ -158,15 +201,14 @@ func NewGraphics(o Options) (*Graphics, error) {
 		lib:        lib,
 		colorSpace: o.ColorSpace,
 	}
-
-	flags := applyDirectXEnvFlags(o.Backend, o.Flags)
+	g.runPresent = g.presentOnMainThread
 
 	devOpts := DeviceOptions{
 		StructSize:     uint32(unsafe.Sizeof(DeviceOptions{})),
 		ABIVersion:     DriverABIVersion,
 		Backend:        o.Backend,
 		ColorSpace:     uint32(o.ColorSpace),
-		Flags:          flags,
+		Flags:          o.Flags,
 		FramesInFlight: uint32(slots),
 		DXFeatureLevel: o.DXFeatureLevel,
 		MainThreadMode: defaultMainThreadMode(),
@@ -207,10 +249,6 @@ func (g *Graphics) acquireSharedArena(minBytes uint64) bool {
 		return false
 	}
 	return g.shared.set(g.uploadArena)
-}
-
-func (g *Graphics) rotateSharedArena(minBytes uint64) bool {
-	return g.acquireSharedArena(minBytes)
 }
 
 // SharedUploadArenaActive reports whether the device is currently writing batch
@@ -325,31 +363,23 @@ func (g *Graphics) Begin() error {
 	if g.closed.Load() {
 		return ErrClosed
 	}
-	g.inBatch = true
-
-	// Snapshot dirty surface damage hints and emit OP_SET_DAMAGE at the head of the batch.
-	g.pendingDamage = g.pendingDamage[:0]
+	// Emit OP_SET_DAMAGE for dirty surfaces at the head of the batch.
 	g.surfacesMu.Lock()
 	for _, s := range g.surfaces {
-		if s.damageDirty {
-			g.pendingDamage = append(g.pendingDamage, damageEntry{
-				surfaceID: s.id,
-				rects:     s.damageRects,
-			})
-			s.damageDirty = false
-			s.damageRects = nil
+		if !s.damageDirty {
+			continue
 		}
+		s.damageDirty = false
+		// encodeSetDamage reads nil as "whole surface" and an empty slice as "nothing".
+		rects := s.damageRects
+		if s.damageFull {
+			rects = nil
+		} else if rects == nil {
+			rects = []image.Rectangle{}
+		}
+		g.ring.cur().encodeSetDamage(s.id, rects)
 	}
 	g.surfacesMu.Unlock()
-
-	if len(g.pendingDamage) > 0 {
-		cur := g.ring.cur()
-		for _, d := range g.pendingDamage {
-			cur.encodeSetDamage(d.surfaceID, d.rects)
-		}
-		clear(g.pendingDamage)
-		g.pendingDamage = g.pendingDamage[:0]
-	}
 	return nil
 }
 
@@ -358,8 +388,6 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	if g.closed.Load() {
 		return ErrClosed
 	}
-	g.inBatch = false
-
 	cur := g.ring.cur()
 	if mode == graphicsdriver.FlushModeIntermediate && cur.cmdCount == 0 {
 		return nil
@@ -367,18 +395,48 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	return g.submitCurrent(uint32(mode))
 }
 
-func (g *Graphics) submitCurrent(flushMode uint32) error {
-	cur := g.ring.cur()
+// batchUse is how much of a slot one batch consumed.
+type batchUse struct {
+	cmd, pay int  // bytes of commands and of heap payload
+	shared   bool // payload went to the shared upload arena instead
+}
+
+// stageBatch stamps cur with the next sequence number and describes it in
+// g.batch, ready to hand to the native driver.
+func (g *Graphics) stageBatch(cur *slot) batchUse {
 	g.ring.nextSeq++
 	cur.seq = g.ring.nextSeq
 	cur.fillBatch(&g.batch)
 
-	usedCmd := cur.cmdLen
-	usedShared := cur.usingShared
-	usedPay := 0
-	if !usedShared {
-		usedPay = cur.payLen
+	use := batchUse{cmd: cur.cmdLen, shared: cur.usingShared}
+	if !use.shared {
+		use.pay = cur.payLen
 	}
+	return use
+}
+
+// retireBatch empties cur once the native driver has consumed or rejected the
+// staged batch (st is its status), settles the IDs disposed in that batch, and
+// folds the batch's size into the frame's peak usage.
+func (g *Graphics) retireBatch(cur *slot, use batchUse, st int32) {
+	if use.shared {
+		g.shared.advanceBatch()
+	}
+	cur.reset()
+	if st == StatusOK {
+		g.imageIDs.commit()
+		g.shaderIDs.commit()
+	} else {
+		g.imageIDs.discard()
+		g.shaderIDs.discard()
+	}
+	cur.frameMaxCmd = max(cur.frameMaxCmd, use.cmd)
+	cur.frameMaxPay = max(cur.frameMaxPay, use.pay)
+}
+
+func (g *Graphics) submitCurrent(flushMode uint32) error {
+	cur := g.ring.cur()
+	use := g.stageBatch(cur)
 
 	g.errBuf[0] = 0
 	st := g.lib.submit(g.dev, &g.batch, flushMode, &g.submitRes, &g.errBuf[0], uintptr(len(g.errBuf)))
@@ -386,23 +444,11 @@ func (g *Graphics) submitCurrent(flushMode uint32) error {
 	runtime.KeepAlive(&g.batch)
 	runtime.KeepAlive(&g.submitRes)
 
-	if usedShared {
-		g.shared.advanceBatch()
-	}
-	cur.reset()
-	if st == StatusOK {
-		g.releaseDeferredIDs()
-	} else {
-		g.discardDeferredIDs()
-	}
-	if flushMode == FlushIntermediate {
-		cur.frameMaxCmd = max(cur.frameMaxCmd, usedCmd)
-		cur.frameMaxPay = max(cur.frameMaxPay, usedPay)
-	} else {
-		frameCmd := max(cur.frameMaxCmd, usedCmd)
-		framePay := max(cur.frameMaxPay, usedPay)
-		cur.frameMaxCmd = 0
-		cur.frameMaxPay = 0
+	g.retireBatch(cur, use, st)
+	if flushMode != FlushIntermediate {
+		// End of frame: size the slot for the frame's peak, then move on.
+		frameCmd, framePay := cur.frameMaxCmd, cur.frameMaxPay
+		cur.frameMaxCmd, cur.frameMaxPay = 0, 0
 		cur.shrink(frameCmd, framePay)
 		g.ring.advance()
 	}
@@ -414,30 +460,28 @@ func (g *Graphics) submitCurrent(flushMode uint32) error {
 	g.occluded.Store(g.submitRes.Flags&ResultFlagOccluded != 0)
 
 	if g.submitRes.Flags&ResultFlagNeedsMainThreadPresent != 0 {
-		var presentErr error
-		runPresent := func() {
-			g.mainErrMu.Lock()
-			defer g.mainErrMu.Unlock()
-			g.mainErrBuf[0] = 0
-			pst := g.lib.presentOnMainThread(g.dev, &g.mainErrBuf[0], uintptr(len(g.mainErrBuf)))
-			presentErr = statusToError("present_on_main_thread", pst, g.mainErrBuf[:])
-		}
-
 		g.mainThreadMu.Lock()
 		runner := g.runOnMainThread
 		g.mainThreadMu.Unlock()
 
+		g.presentErr = nil
 		if runner != nil {
-			runner(runPresent)
+			runner(g.runPresent)
 		} else {
-			runPresent()
+			g.presentOnMainThread()
 		}
-		if presentErr != nil {
-			return presentErr
-		}
+		return g.presentErr
 	}
 
 	return nil
+}
+
+func (g *Graphics) presentOnMainThread() {
+	g.mainErrMu.Lock()
+	defer g.mainErrMu.Unlock()
+	g.mainErrBuf[0] = 0
+	st := g.lib.presentOnMainThread(g.dev, &g.mainErrBuf[0], uintptr(len(g.mainErrBuf)))
+	g.presentErr = statusToError("present_on_main_thread", st, g.mainErrBuf[:])
 }
 
 // SetVertices implements graphicsdriver.Graphics.
@@ -514,10 +558,13 @@ func (g *Graphics) DrawTriangles(
 		OpA:    uint8(blend.BlendOperationAlpha),
 	}
 
-	if g.ring.cur().encodeDrawTriangles(
-		dstImg.id, sh.id, srcIDs, uint32(indexOffset), abiBlend,
-		dstRegions, uniforms, versions, sh.userUniformDwords,
-	) {
+	encode := func(s *slot) bool {
+		return s.encodeDrawTriangles(
+			dstImg.id, sh.id, srcIDs, uint32(indexOffset), abiBlend,
+			dstRegions, uniforms, versions, sh.userUniformDwords,
+		)
+	}
+	if encode(g.ring.cur()) {
 		return nil
 	}
 
@@ -532,21 +579,15 @@ func (g *Graphics) DrawTriangles(
 	if g.shared.enabled {
 		need := g.shared.drawUniformsNeed(sh.userUniformDwords)
 		if !g.shared.canFit(need) {
-			if !g.rotateSharedArena(need) {
+			if !g.acquireSharedArena(need) {
 				cur.forceHeap = true
 			}
 		}
 	}
-	if !cur.encodeDrawTriangles(
-		dstImg.id, sh.id, srcIDs, uint32(indexOffset), abiBlend,
-		dstRegions, uniforms, versions, sh.userUniformDwords,
-	) {
+	if !encode(cur) {
 		if !cur.forceHeap && g.shared.enabled {
 			cur.forceHeap = true
-			if cur.encodeDrawTriangles(
-				dstImg.id, sh.id, srcIDs, uint32(indexOffset), abiBlend,
-				dstRegions, uniforms, versions, sh.userUniformDwords,
-			) {
+			if encode(cur) {
 				return nil
 			}
 		}
@@ -584,56 +625,51 @@ func (g *Graphics) Close() error {
 	return errors.Join(flushErr, destroyErr)
 }
 
-func (g *Graphics) allocImageID() uint32 {
-	if n := len(g.freeImageIDs); n > 0 {
-		id := g.freeImageIDs[n-1]
-		g.freeImageIDs = g.freeImageIDs[:n-1]
+// idAllocator hands out handle IDs starting at 1 and reuses released ones,
+// most recently released first.
+//
+// An ID released with deferRelease stays unavailable until commit, which runs
+// once the batch carrying its OP_DISPOSE_* has reached the native driver. A
+// synchronous call such as NewShader therefore never reuses an ID whose
+// disposal is still queued.
+type idAllocator struct {
+	next    uint32
+	free    []uint32
+	pending []uint32
+}
+
+func (a *idAllocator) alloc() uint32 {
+	if n := len(a.free); n > 0 {
+		id := a.free[n-1]
+		a.free = a.free[:n-1]
 		return id
 	}
-	g.nextImageID++
-	return g.nextImageID
+	a.next++
+	return a.next
 }
 
-func (g *Graphics) deferFreeImageID(id uint32) {
+// release makes id available again at once. Use it only for an ID the native
+// driver never learned about.
+func (a *idAllocator) release(id uint32) {
 	if id != 0 {
-		g.pendingFreeImageIDs = append(g.pendingFreeImageIDs, id)
+		a.free = append(a.free, id)
 	}
 }
 
-func (g *Graphics) allocShaderID() uint32 {
-	if n := len(g.freeShaderIDs); n > 0 {
-		id := g.freeShaderIDs[n-1]
-		g.freeShaderIDs = g.freeShaderIDs[:n-1]
-		return id
-	}
-	g.nextShaderID++
-	return g.nextShaderID
-}
-
-func (g *Graphics) freeShaderID(id uint32) {
+func (a *idAllocator) deferRelease(id uint32) {
 	if id != 0 {
-		g.freeShaderIDs = append(g.freeShaderIDs, id)
+		a.pending = append(a.pending, id)
 	}
 }
 
-func (g *Graphics) deferFreeShaderID(id uint32) {
-	if id != 0 {
-		g.pendingFreeShaderIDs = append(g.pendingFreeShaderIDs, id)
-	}
+// commit makes every deferred ID available.
+func (a *idAllocator) commit() {
+	a.free = append(a.free, a.pending...)
+	a.pending = a.pending[:0]
 }
 
-func (g *Graphics) releaseDeferredIDs() {
-	if len(g.pendingFreeImageIDs) > 0 {
-		g.freeImageIDs = append(g.freeImageIDs, g.pendingFreeImageIDs...)
-		g.pendingFreeImageIDs = g.pendingFreeImageIDs[:0]
-	}
-	if len(g.pendingFreeShaderIDs) > 0 {
-		g.freeShaderIDs = append(g.freeShaderIDs, g.pendingFreeShaderIDs...)
-		g.pendingFreeShaderIDs = g.pendingFreeShaderIDs[:0]
-	}
-}
-
-func (g *Graphics) discardDeferredIDs() {
-	g.pendingFreeImageIDs = g.pendingFreeImageIDs[:0]
-	g.pendingFreeShaderIDs = g.pendingFreeShaderIDs[:0]
+// discard drops every deferred ID without making it available: the batch that
+// disposed them failed, so the native driver may still hold them.
+func (a *idAllocator) discard() {
+	a.pending = a.pending[:0]
 }

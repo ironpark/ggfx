@@ -33,6 +33,44 @@ const win = if (is_windows) struct {
     extern "kernel32" fn GetLastError() callconv(.winapi) u32;
 } else struct {};
 
+/// Loads a `T` on first use and keeps the outcome: a failed load is remembered
+/// and not retried. `get` may be called from any thread.
+pub fn LazyOnce(comptime T: type, comptime load: fn () ?T) type {
+    return struct {
+        const Self = @This();
+        const State = enum(u8) { unloaded, loaded, failed };
+
+        mu: Mutex = .{},
+        state: std.atomic.Value(State) = .init(.unloaded),
+        value: T = undefined,
+
+        pub fn get(self: *Self) ?*const T {
+            if (self.peek()) |known| return known;
+
+            self.mu.lock();
+            defer self.mu.unlock();
+            if (self.peek()) |known| return known;
+
+            if (load()) |v| {
+                self.value = v;
+                self.state.store(.loaded, .release);
+                return &self.value;
+            }
+            self.state.store(.failed, .release);
+            return null;
+        }
+
+        /// The settled outcome, or null (outer optional) while still unloaded.
+        fn peek(self: *Self) ??*const T {
+            return switch (self.state.load(.acquire)) {
+                .unloaded => null,
+                .loaded => @as(?*const T, &self.value),
+                .failed => @as(?*const T, null),
+            };
+        }
+    };
+}
+
 pub const Mutex = struct {
     raw: if (is_windows) win.SRWLOCK else std.c.pthread_mutex_t =
         if (is_windows) .{} else std.c.PTHREAD_MUTEX_INITIALIZER,
@@ -157,4 +195,29 @@ test "mutex and condition timedWaitNs" {
     const res = cv.timedWaitNs(&mu, 2 * std.time.ns_per_ms);
     mu.unlock();
     try std.testing.expectEqual(TimedWaitResult.timed_out, res);
+}
+
+test "LazyOnce loads once and remembers failure" {
+    const Counted = struct {
+        var ok_calls: u32 = 0;
+        var fail_calls: u32 = 0;
+        fn ok() ?u32 {
+            ok_calls += 1;
+            return 7;
+        }
+        fn fail() ?u32 {
+            fail_calls += 1;
+            return null;
+        }
+    };
+
+    var good: LazyOnce(u32, Counted.ok) = .{};
+    try std.testing.expectEqual(@as(u32, 7), good.get().?.*);
+    try std.testing.expectEqual(@as(u32, 7), good.get().?.*);
+    try std.testing.expectEqual(@as(u32, 1), Counted.ok_calls);
+
+    var bad: LazyOnce(u32, Counted.fail) = .{};
+    try std.testing.expect(bad.get() == null);
+    try std.testing.expect(bad.get() == null);
+    try std.testing.expectEqual(@as(u32, 1), Counted.fail_calls);
 }

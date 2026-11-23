@@ -5,6 +5,7 @@ const handles = @import("../handles.zig");
 const state_cache = @import("../state_cache.zig");
 const sync = @import("../sync.zig");
 const replayer = @import("../replayer.zig");
+const upload_arena = @import("../upload_arena.zig");
 const vk = @import("vk.zig");
 const loader_mod = @import("loader.zig");
 const instance_mod = @import("instance.zig");
@@ -231,8 +232,6 @@ pub const Backend = struct {
     bound_internal_offset: u32 = 0,
     bound_user_offset: u32 = 0,
     bound_src_views: [abi.max_src_images]vk.ImageView = @splat(.null_handle),
-    bound_internal_version: u64 = 0,
-    bound_user_version: u64 = 0,
     has_bound_desc: bool = false,
 
     // Cached last uploaded uniform slices (within current frame slot).
@@ -257,7 +256,6 @@ pub const Backend = struct {
     shared_upload_chunk: ?upload_mod.Chunk = null,
     shared_arena_id: u32 = 0,
 
-    main_thread_mode: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     next_shader_gen: u64 = 1,
 
     submits: u64 = 0,
@@ -297,7 +295,6 @@ pub const Backend = struct {
             .descs = undefined,
             .pipelines = undefined,
             .frames_in_flight = frames_in_flight,
-            .main_thread_mode = std.atomic.Value(u32).init(opts.main_thread_mode),
         };
         // Point MemoryAllocator at the pinned self.dev address.
         self.mem = memory_mod.MemoryAllocator.init(gpa, &self.dev);
@@ -413,8 +410,6 @@ pub const Backend = struct {
         self.bound_internal_offset = 0;
         self.bound_user_offset = 0;
         self.bound_src_views = @splat(.null_handle);
-        self.bound_internal_version = 0;
-        self.bound_user_version = 0;
         self.has_bound_desc = false;
     }
 
@@ -1046,7 +1041,6 @@ pub const Backend = struct {
         }
         const img = try self.images.remove(id);
         if (!img.is_screen) {
-            self.cache.invalidateTexture(@intFromEnum(img.sample_view));
             for (self.bound_src_views) |v| {
                 if (v == img.sample_view) {
                     self.has_bound_desc = false;
@@ -1132,7 +1126,7 @@ pub const Backend = struct {
         // Validate all regions up front.
         var covers_full_internal = false;
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("vulkan: writePixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -1199,22 +1193,17 @@ pub const Backend = struct {
         var shared_base_off: u64 = 0;
         var shared_cap: u64 = 0;
         if (self.shared_upload_chunk) |chunk| {
-            if (chunk.alloc.mapped) |chunk_base_ptr| {
-                if (payload.len > 0) {
-                    const p_addr: usize = @intFromPtr(payload.ptr);
-                    const c_addr: usize = @intFromPtr(chunk_base_ptr);
-                    const c_cap: usize = @intCast(chunk.capacity);
-                    if (p_addr >= c_addr and p_addr - c_addr <= c_cap and payload.len <= c_cap - (p_addr - c_addr)) {
-                        shared_buf = chunk.buffer;
-                        shared_base_off = @intCast(p_addr - c_addr);
-                        shared_cap = chunk.capacity;
-                    }
+            if (payload.len > 0) {
+                if (upload_arena.offsetWithin(chunk.alloc.mapped, @intCast(chunk.capacity), payload)) |off| {
+                    shared_buf = chunk.buffer;
+                    shared_base_off = off;
+                    shared_cap = chunk.capacity;
                 }
             }
         }
 
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height).?;
+            const bounds = r.rect.validate(img.internal_width, img.internal_height).?;
             if (bounds.dx == 0 or bounds.dy == 0 or r.payload_len == 0) continue;
 
             if (shared_buf != .null_handle) {
@@ -1440,7 +1429,6 @@ pub const Backend = struct {
             self.current_dst_is_screen = dst.is_screen;
             self.current_dst_surface_id = dst.surface_id;
             self.current_dst_extent = rp_extent;
-            self.cache.viewport = .{ rp_extent.width, rp_extent.height };
             self.cache.scissor_valid = false;
         }
 
@@ -1577,8 +1565,6 @@ pub const Backend = struct {
             self.bound_internal_offset = internal_off;
             self.bound_user_offset = user_off;
             self.bound_src_views = src_views;
-            self.bound_internal_version = dc.internal_version;
-            self.bound_user_version = dc.user_version;
             self.has_bound_desc = true;
         }
 
@@ -1661,7 +1647,7 @@ pub const Backend = struct {
         var total_bytes: u64 = 0;
         var has_non_empty = false;
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("vulkan: readPixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -1700,7 +1686,7 @@ pub const Backend = struct {
 
         var cur_off: u64 = 0;
         for (regions, 0..) |r, i| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height).?;
+            const bounds = r.rect.validate(img.internal_width, img.internal_height).?;
             if (bounds.dx == 0 or bounds.dy == 0 or r.dst_len == 0) {
                 offsets[i] = 0;
                 continue;
@@ -1819,7 +1805,8 @@ pub const Backend = struct {
     }
 
     pub fn setMainThreadMode(self: *Backend, mode: u32) void {
-        self.main_thread_mode.store(mode, .release);
+        _ = self;
+        _ = mode;
     }
 
     pub fn isOccluded(self: *Backend) bool {
@@ -1833,17 +1820,17 @@ pub const Backend = struct {
         out_arena: *abi.UploadArena,
         diag: *Diag,
     ) Error!void {
-        if (min_bytes > upload_mod.max_shared_arena_size) {
+        if (min_bytes > upload_arena.max_size) {
             diag.print("vulkan: requested shared upload arena size ({d} B) exceeds maximum ({d} B)", .{
                 min_bytes,
-                upload_mod.max_shared_arena_size,
+                upload_arena.max_size,
             });
             return error.OutOfMemory;
         }
 
         const raw_align: u32 = @intCast(@min(self.dev.props.limits.optimalBufferCopyOffsetAlignment, @as(u64, 4096)));
         const alignment: u32 = std.math.ceilPowerOfTwoAssert(u32, @max(@as(u32, 16), raw_align));
-        const capacity: u64 = memory_mod.alignUp(@max(min_bytes, upload_mod.default_shared_arena_size), 16);
+        const capacity: u64 = memory_mod.alignUp(@max(min_bytes, upload_arena.default_size), 16);
 
         const new_chunk = try upload_mod.createSharedChunk(&self.dev, &self.mem, capacity, diag);
         errdefer upload_mod.destroyChunk(&self.dev, &self.mem, new_chunk);
@@ -1858,12 +1845,10 @@ pub const Backend = struct {
         }
 
         self.shared_upload_chunk = new_chunk;
-        self.shared_arena_id +%= 1;
-        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
 
         out_arena.* = .{
             .struct_size = @sizeOf(abi.UploadArena),
-            .arena_id = self.shared_arena_id,
+            .arena_id = upload_arena.nextId(&self.shared_arena_id),
             .ptr = mapped_ptr,
             .capacity = new_chunk.capacity,
             .alignment = alignment,
@@ -1888,25 +1873,3 @@ pub const Backend = struct {
         };
     }
 };
-
-const ValidRect = struct {
-    x0: u32,
-    y0: u32,
-    dx: u32,
-    dy: u32,
-};
-
-fn validateRect(r: abi.Rect, w: u32, h: u32) ?ValidRect {
-    if (r.x0 < 0 or r.y0 < 0 or r.x1 < r.x0 or r.y1 < r.y0) return null;
-    const x0: u32 = @intCast(r.x0);
-    const y0: u32 = @intCast(r.y0);
-    const x1: u32 = @intCast(r.x1);
-    const y1: u32 = @intCast(r.y1);
-    if (x1 > w or y1 > h) return null;
-    return .{
-        .x0 = x0,
-        .y0 = y0,
-        .dx = x1 - x0,
-        .dy = y1 - y0,
-    };
-}

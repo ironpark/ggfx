@@ -18,37 +18,15 @@ package zigdriver
 
 import (
 	"image"
-	"math"
 	"runtime"
 	"testing"
 
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/drivertest"
 	"github.com/ironpark/ggfx/internal/shader"
 )
-
-func makeBenchUniforms(p *shader.Program, w, h int, flipsY bool) []uint32 {
-	iw, ih := float32(graphics.InternalImageSize(w)), float32(graphics.InternalImageSize(h))
-	u := make([]uint32, graphics.PreservedUniformDwordCount+p.UniformDwordCount)
-	u[graphics.DstTextureSizeUniformDwordIndex] = math.Float32bits(iw)
-	u[graphics.DstTextureSizeUniformDwordIndex+1] = math.Float32bits(ih)
-	u[graphics.SourceTextureSizeUniformDwordIndex] = math.Float32bits(iw)
-	u[graphics.SourceTextureSizeUniformDwordIndex+1] = math.Float32bits(ih)
-	m := u[graphics.ProjectionMatrixUniformDwordIndex : graphics.ProjectionMatrixUniformDwordIndex+16]
-	m[0] = math.Float32bits(2 / iw)
-	if flipsY {
-		m[5] = math.Float32bits(-2 / ih)
-		m[13] = math.Float32bits(1)
-	} else {
-		m[5] = math.Float32bits(2 / ih)
-		m[13] = math.Float32bits(-1)
-	}
-	m[10] = math.Float32bits(1)
-	m[12] = math.Float32bits(-1)
-	m[15] = math.Float32bits(1)
-	return u
-}
 
 func runBenchDrivers(b *testing.B, fn func(b *testing.B, g graphicsdriver.Graphics)) {
 	b.Run("zig", func(b *testing.B) {
@@ -114,7 +92,7 @@ func BenchmarkDraw10k(b *testing.B) {
 		vs := make([]float32, 4*graphics.VertexFloatCount)
 		graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, 16, 16, 0, 0, 16, 16, 1, 1, 1, 1)
 		is := graphics.QuadIndices()
-		uniforms := makeBenchUniforms(prog, w, h, g.FlipsY())
+		uniforms := drivertest.MakeInternalUniforms(prog, w, h, g.FlipsY())
 		var srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image
 		srcs[0] = src
 		regions := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, w, h), IndexCount: len(is)}}

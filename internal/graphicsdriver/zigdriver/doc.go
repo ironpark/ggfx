@@ -32,7 +32,11 @@
 //   - GGFX_DRIVER_DEBUG: When "1", enables backend validation/debug layers
 //     (Vulkan validation layers, D3D12 debug layer, etc.).
 //   - GGFX_DRIVER_SLOTS: Configures the command arena ring slot count ("2" or
-//     "3"; default is "2").
+//     "3"; default is "2") when [Options.Slots] is zero.
+//   - GGFX_METAL_SWAPCHAIN: When "0", the Metal backend presents through
+//     CAMetalLayer drawables instead of its IOSurface swap chain.
+//   - GGFX_DIRECTX, GGFX_DIRECTX_FEATURE_LEVEL: On Windows, the same "warp",
+//     "debug", "dred" and "featurelevel=" settings the Go DirectX driver reads.
 //   - GGFX_ZIG_METAL_DISPATCH: When "1" and no [graphicsdriver.MainThreadRunner]
 //     is installed, instructs the Metal backend to dispatch main-thread presents
 //     via GCD dispatch_sync_f instead of inline execution.

@@ -16,20 +16,18 @@ package drivertest
 
 import "testing"
 
-func TestAllocVersionsNamespace(t *testing.T) {
-	const remoteVersionLimit uint64 = 1 << 48
+func TestAllocVersionsAreDistinctAndNonzero(t *testing.T) {
 	v1 := allocVersions()
 	v2 := allocVersions()
 
+	seen := map[uint64]bool{}
 	for _, v := range []uint64{v1.Internal, v1.User, v2.Internal, v2.User} {
-		if v < drivertestVersionBit {
-			t.Fatalf("version %#x must be >= drivertestVersionBit (%#x)", v, drivertestVersionBit)
+		if v == 0 {
+			t.Fatalf("version must not be 0: v1=%+v v2=%+v", v1, v2)
 		}
-		if v >= remoteVersionLimit {
-			t.Fatalf("version %#x must be < remote 48-bit limit (%#x)", v, remoteVersionLimit)
+		if seen[v] {
+			t.Fatalf("version %d was given twice: v1=%+v v2=%+v", v, v1, v2)
 		}
-	}
-	if v1.Internal == v1.User || v1.Internal == v2.Internal || v1.User == v2.User {
-		t.Fatalf("expected distinct versions, got v1=%+v v2=%+v", v1, v2)
+		seen[v] = true
 	}
 }

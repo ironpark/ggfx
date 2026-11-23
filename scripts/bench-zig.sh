@@ -23,9 +23,13 @@ COUNT="${1:-5}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# internal/rendertest has benchmarks on macOS only (bench_darwin_test.go).
+HAS_RENDERTEST_BENCH=0
+
 case "$(uname -s)" in
   Darwin*)
     LIB_REL="zig/zig-out/lib/libggfx_driver.dylib"
+    HAS_RENDERTEST_BENCH=1
     ;;
   Linux*)
     LIB_REL="zig/zig-out/lib/libggfx_driver.so"
@@ -67,17 +71,19 @@ GGFX_DRIVER_LIB="$LIB_PATH" \
   go test -bench=. -benchmem -count="$COUNT" -run='^$' ./internal/graphicsdriver/zigdriver \
   | tee "$TMP_DIR/zigdriver.txt"
 
-echo ""
-echo "==> Running internal/rendertest benchmarks (Go driver, -count=$COUNT)..."
-GGFX_DRIVER=go \
-  go test -bench=. -benchmem -count="$COUNT" -run='^$' ./internal/rendertest \
-  | tee "$TMP_DIR/rendertest_go.txt"
+if [[ "$HAS_RENDERTEST_BENCH" == 1 ]]; then
+  echo ""
+  echo "==> Running internal/rendertest benchmarks (Go driver, -count=$COUNT)..."
+  GGFX_DRIVER=go \
+    go test -bench=. -benchmem -count="$COUNT" -run='^$' ./internal/rendertest \
+    | tee "$TMP_DIR/rendertest_go.txt"
 
-echo ""
-echo "==> Running internal/rendertest benchmarks (Zig driver, -count=$COUNT)..."
-GGFX_DRIVER=zig GGFX_DRIVER_STRICT=1 GGFX_DRIVER_LIB="$LIB_PATH" \
-  go test -bench=. -benchmem -count="$COUNT" -run='^$' ./internal/rendertest \
-  | tee "$TMP_DIR/rendertest_zig.txt"
+  echo ""
+  echo "==> Running internal/rendertest benchmarks (Zig driver, -count=$COUNT)..."
+  GGFX_DRIVER=zig GGFX_DRIVER_STRICT=1 GGFX_DRIVER_LIB="$LIB_PATH" \
+    go test -bench=. -benchmem -count="$COUNT" -run='^$' ./internal/rendertest \
+    | tee "$TMP_DIR/rendertest_zig.txt"
+fi
 
 if command -v benchstat >/dev/null 2>&1; then
   echo ""
@@ -106,7 +112,7 @@ if command -v benchstat >/dev/null 2>&1; then
     echo "(skipped: Go baseline sub-benchmarks unavailable on this platform)"
   fi
 
-  if grep -q '^Benchmark' "$TMP_DIR/rendertest_go.txt" && grep -q '^Benchmark' "$TMP_DIR/rendertest_zig.txt"; then
+  if [[ "$HAS_RENDERTEST_BENCH" == 1 ]] && grep -q '^Benchmark' "$TMP_DIR/rendertest_go.txt" && grep -q '^Benchmark' "$TMP_DIR/rendertest_zig.txt"; then
     echo ""
     echo "==> benchstat: internal/rendertest (go vs zig)"
     benchstat "$TMP_DIR/rendertest_go.txt" "$TMP_DIR/rendertest_zig.txt"

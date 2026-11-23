@@ -7,6 +7,7 @@ const state_cache = @import("../state_cache.zig");
 const sync = @import("../sync.zig");
 const time = @import("../time.zig");
 const replayer = @import("../replayer.zig");
+const upload_arena = @import("../upload_arena.zig");
 
 const objc = @import("objc.zig");
 const mtl = @import("mtl.zig");
@@ -26,9 +27,40 @@ const metal_vertex_buffer_index: usize = 0;
 const metal_internal_uniform_buffer_index: usize = 1;
 const metal_user_uniform_buffer_index: usize = 2;
 const metal_max_inline_uniform_bytes: usize = 4096;
-const max_shared_arena_bytes: u64 = 256 << 20;
-const default_shared_arena_bytes: usize = 4 << 20;
 const housekeeping_tick_ns: u64 = 50 * std.time.ns_per_ms;
+
+/// Copy of the live surface list, taken so Metal calls run without `surfaces_lock` held.
+/// Apps have a handful of surfaces; past the inline capacity the list spills to the heap.
+const SurfaceSnapshot = struct {
+    stack: [16]*Surface = undefined,
+    spill: std.ArrayList(*Surface) = .empty,
+    len: usize = 0,
+
+    fn take(self: *SurfaceSnapshot, be: *Backend) Error!void {
+        be.surfaces_lock.lock();
+        defer be.surfaces_lock.unlock();
+        for (be.surfaces.items.items) |slot| {
+            const s = slot orelse continue;
+            if (self.len < self.stack.len) {
+                self.stack[self.len] = s;
+            } else {
+                if (self.spill.items.len == 0) {
+                    self.spill.appendSlice(be.gpa, &self.stack) catch return error.OutOfMemory;
+                }
+                self.spill.append(be.gpa, s) catch return error.OutOfMemory;
+            }
+            self.len += 1;
+        }
+    }
+
+    fn items(self: *SurfaceSnapshot) []*Surface {
+        return if (self.spill.items.len > 0) self.spill.items else self.stack[0..self.len];
+    }
+
+    fn deinit(self: *SurfaceSnapshot, gpa: Allocator) void {
+        self.spill.deinit(gpa);
+    }
+};
 
 const Image = struct {
     width: u32,
@@ -305,37 +337,10 @@ pub const Backend = struct {
         self.drainMainPresents();
 
         const mode = self.main_thread_mode.load(.acquire);
-        var stack_surfs: [16]*Surface = undefined;
-        var dyn_surfs: std.ArrayList(*Surface) = .empty;
-        defer dyn_surfs.deinit(self.gpa);
-
-        var surf_count: usize = 0;
-        self.surfaces_lock.lock();
-        for (self.surfaces.items.items) |slot| {
-            if (slot) |s| {
-                if (surf_count < stack_surfs.len) {
-                    stack_surfs[surf_count] = s;
-                } else {
-                    if (dyn_surfs.items.len == 0) {
-                        dyn_surfs.appendSlice(self.gpa, stack_surfs[0..surf_count]) catch {
-                            self.surfaces_lock.unlock();
-                            return error.OutOfMemory;
-                        };
-                    }
-                    dyn_surfs.append(self.gpa, s) catch {
-                        self.surfaces_lock.unlock();
-                        return error.OutOfMemory;
-                    };
-                }
-                surf_count += 1;
-            }
-        }
-        self.surfaces_lock.unlock();
-
-        const surfs: []*Surface = if (dyn_surfs.items.len > 0)
-            dyn_surfs.items
-        else
-            stack_surfs[0..surf_count];
+        var snapshot: SurfaceSnapshot = .{};
+        defer snapshot.deinit(self.gpa);
+        try snapshot.take(self);
+        const surfs = snapshot.items();
 
         for (surfs) |surf| {
             surf.updatePresentationState(mode, &self.ring);
@@ -506,7 +511,6 @@ pub const Backend = struct {
     }
 
     pub fn disposeImage(self: *Backend, id: u32) Error!void {
-        self.flushBlitCommandEncoderIfNeeded();
         const img = try self.images.remove(id);
         if (self.last_dst_id == id) {
             self.flushRenderCommandEncoderIfNeeded();
@@ -591,7 +595,7 @@ pub const Backend = struct {
         var total_raw: u64 = 0;
 
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("metal: writePixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -628,21 +632,7 @@ pub const Backend = struct {
             }
             for (regions) |r| {
                 if (r.payload_len == 0) continue;
-                const dx: usize = @intCast(r.rect.x1 - r.rect.x0);
-                const dy: usize = @intCast(r.rect.y1 - r.rect.y0);
-                const bpr = bpp * dx;
-                const bpi = bpr * dy;
-                bce.copyFromBuffer(
-                    self.shared_upload_buf,
-                    base_off + r.payload_offset,
-                    bpr,
-                    bpi,
-                    .{ .width = dx, .height = dy, .depth = 1 },
-                    img.texture,
-                    0,
-                    0,
-                    .{ .x = @intCast(r.rect.x0), .y = @intCast(r.rect.y0), .z = 0 },
-                );
+                copyRegionToTexture(bce, self.shared_upload_buf, base_off + r.payload_offset, bpp, r.rect, img.texture);
             }
             self.uploaded_bytes += total_raw;
             return;
@@ -672,25 +662,36 @@ pub const Backend = struct {
         o = alloc.offset;
         for (regions) |r| {
             if (r.payload_len == 0) continue;
-            const dx: usize = @intCast(r.rect.x1 - r.rect.x0);
-            const dy: usize = @intCast(r.rect.y1 - r.rect.y0);
-            const bpr = bpp * dx;
-            const bpi = bpr * dy;
-            bce.copyFromBuffer(
-                alloc.buf,
-                o,
-                bpr,
-                bpi,
-                .{ .width = dx, .height = dy, .depth = 1 },
-                img.texture,
-                0,
-                0,
-                .{ .x = @intCast(r.rect.x0), .y = @intCast(r.rect.y0), .z = 0 },
-            );
+            copyRegionToTexture(bce, alloc.buf, o, bpp, r.rect, img.texture);
             o += buffers.alignUploadOffset(r.payload_len);
         }
 
         self.uploaded_bytes += total_raw;
+    }
+
+    /// Blits tightly packed pixels for `rect` from `buf` at `offset` into `texture`.
+    fn copyRegionToTexture(
+        bce: mtl.BlitCommandEncoder,
+        buf: mtl.Buffer,
+        offset: usize,
+        bpp: usize,
+        rect: abi.Rect,
+        texture: mtl.Texture,
+    ) void {
+        const dx: usize = @intCast(rect.x1 - rect.x0);
+        const dy: usize = @intCast(rect.y1 - rect.y0);
+        const bpr = bpp * dx;
+        bce.copyFromBuffer(
+            buf,
+            offset,
+            bpr,
+            bpr * dy,
+            .{ .width = dx, .height = dy, .depth = 1 },
+            texture,
+            0,
+            0,
+            .{ .x = @intCast(rect.x0), .y = @intCast(rect.y0), .z = 0 },
+        );
     }
 
     pub fn drawTriangles(self: *Backend, dc: *const replayer.DrawCall, diag: *Diag) Error!void {
@@ -999,7 +1000,7 @@ pub const Backend = struct {
         // Validate all regions up front before waiting on GPU.
         const bpp: usize = img.format.bytesPerPixel();
         for (regions) |r| {
-            const bounds = validateRect(r.rect, img.internal_width, img.internal_height) orelse {
+            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
                 diag.print("metal: readPixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
                     r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
                 });
@@ -1142,10 +1143,10 @@ pub const Backend = struct {
         out_arena: *abi.UploadArena,
         diag: *Diag,
     ) Error!void {
-        if (min_bytes > max_shared_arena_bytes) {
+        if (min_bytes > upload_arena.max_size) {
             diag.print("metal: requested upload arena ({d} bytes) exceeds max ({d} bytes)", .{
                 min_bytes,
-                max_shared_arena_bytes,
+                upload_arena.max_size,
             });
             return error.OutOfMemory;
         }
@@ -1162,7 +1163,7 @@ pub const Backend = struct {
             self.shared_upload_ptr = null;
         }
 
-        const req: usize = @max(@as(usize, @intCast(min_bytes)), default_shared_arena_bytes);
+        const req: usize = @intCast(@max(min_bytes, upload_arena.default_size));
         const buf = self.ring.acquireStandaloneBuffer(self.gpa, req) catch {
             diag.print("metal: allocating shared upload arena ({d} bytes) failed", .{req});
             return error.OutOfMemory;
@@ -1175,12 +1176,10 @@ pub const Backend = struct {
 
         self.shared_upload_buf = buf;
         self.shared_upload_ptr = ptr;
-        self.shared_arena_id +%= 1;
-        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
 
         out_arena.* = .{
             .struct_size = @sizeOf(abi.UploadArena),
-            .arena_id = self.shared_arena_id,
+            .arena_id = upload_arena.nextId(&self.shared_arena_id),
             .ptr = ptr,
             .capacity = buf.length,
             .alignment = buffers.upload_alignment,
@@ -1243,14 +1242,7 @@ pub const Backend = struct {
 
     fn sharedPayloadOffset(self: *const Backend, slice: []const u8) ?usize {
         if (self.shared_upload_buf.isNull() or slice.len == 0) return null;
-        const base_ptr = self.shared_upload_ptr orelse return null;
-        const base = @intFromPtr(base_ptr);
-        const start = @intFromPtr(slice.ptr);
-        if (start < base) return null;
-        const off = start - base;
-        if (off > self.shared_upload_buf.length) return null;
-        if (slice.len > self.shared_upload_buf.length - off) return null;
-        return off;
+        return upload_arena.offsetWithin(self.shared_upload_ptr, self.shared_upload_buf.length, slice);
     }
 
     pub fn encoderCommandBuffer(self: *Backend) Error!mtl.CommandBuffer {
@@ -1339,41 +1331,14 @@ pub const Backend = struct {
         self.flushBlitCommandEncoderIfNeeded();
         self.flushRenderCommandEncoderIfNeeded();
 
-        // Snapshot live surfaces (few in practice, typically 0..4) without holding lock during Metal calls.
-        var stack_surfs: [16]*Surface = undefined;
-        var dyn_surfs: std.ArrayList(*Surface) = .empty;
-        defer dyn_surfs.deinit(self.gpa);
+        if (self.cb.isNull() and !present) return;
 
-        var surf_count: usize = 0;
-        self.surfaces_lock.lock();
-        for (self.surfaces.items.items) |slot| {
-            if (slot) |s| {
-                if (surf_count < stack_surfs.len) {
-                    stack_surfs[surf_count] = s;
-                } else {
-                    if (dyn_surfs.items.len == 0) {
-                        dyn_surfs.appendSlice(self.gpa, stack_surfs[0..surf_count]) catch {
-                            self.surfaces_lock.unlock();
-                            return error.OutOfMemory;
-                        };
-                    }
-                    dyn_surfs.append(self.gpa, s) catch {
-                        self.surfaces_lock.unlock();
-                        return error.OutOfMemory;
-                    };
-                }
-                surf_count += 1;
-            }
-        }
-        self.surfaces_lock.unlock();
-
-        const surfs: []*Surface = if (dyn_surfs.items.len > 0)
-            dyn_surfs.items
-        else
-            stack_surfs[0..surf_count];
+        var snapshot: SurfaceSnapshot = .{};
+        defer snapshot.deinit(self.gpa);
+        try snapshot.take(self);
+        const surfs = snapshot.items();
 
         if (self.cb.isNull()) {
-            if (!present) return;
             var has_pending = false;
             for (surfs) |s| {
                 if (s.chained or !s.drawable.isNull()) {
@@ -1498,25 +1463,3 @@ pub const Backend = struct {
         }
     }
 };
-
-const ValidRect = struct {
-    x0: u32,
-    y0: u32,
-    dx: u32,
-    dy: u32,
-};
-
-fn validateRect(r: abi.Rect, w: u32, h: u32) ?ValidRect {
-    if (r.x0 < 0 or r.y0 < 0 or r.x1 < r.x0 or r.y1 < r.y0) return null;
-    const x0: u32 = @intCast(r.x0);
-    const y0: u32 = @intCast(r.y0);
-    const x1: u32 = @intCast(r.x1);
-    const y1: u32 = @intCast(r.y1);
-    if (x1 > w or y1 > h) return null;
-    return .{
-        .x0 = x0,
-        .y0 = y0,
-        .dx = x1 - x0,
-        .dy = y1 - y0,
-    };
-}

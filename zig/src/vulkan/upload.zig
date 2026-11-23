@@ -12,9 +12,6 @@ const initial_chunk_size: u64 = 2 * 1024 * 1024; // 2 MiB
 const max_chunk_size: u64 = 256 * 1024 * 1024; // 256 MiB (keeps dynamic UBO offsets well inside u32)
 const min_readback_size: u64 = 64 * 1024; // 64 KiB
 
-pub const default_shared_arena_size: u64 = 4 << 20; // 4 MiB
-pub const max_shared_arena_size: u64 = 256 << 20; // 256 MiB
-
 pub const UploadSlice = struct {
     buffer: vk.Buffer,
     offset: u64,

@@ -7,6 +7,7 @@ pub const time = @import("time.zig");
 pub const dynlib = @import("dynlib.zig");
 pub const handles = @import("handles.zig");
 pub const state_cache = @import("state_cache.zig");
+pub const upload_arena = @import("upload_arena.zig");
 pub const replayer = @import("replayer.zig");
 pub const backend = @import("backend.zig");
 pub const null_backend = @import("null/backend.zig");
@@ -32,10 +33,20 @@ inline fn leaveAutoreleasePool(pool: ?*anyopaque) void {
     }
 }
 
-inline fn abortBatch(impl: *backend.Impl) void {
-    if (@hasDecl(backend.Impl, "abortBatch")) {
+/// Replays one batch between beginBatch and endBatch, aborting the batch if replay fails.
+fn runBatch(
+    impl: *backend.Impl,
+    batch: *const abi.Batch,
+    mode: abi.FlushMode,
+    out_res: *abi.SubmitResult,
+    diag: *Diag,
+) Error!void {
+    try impl.beginBatch(diag);
+    replayer.replay(impl, batch, diag) catch |err| {
         impl.abortBatch();
-    }
+        return err;
+    };
+    try impl.endBatch(mode, out_res, diag);
 }
 
 fn parseFlushMode(mode: u32) Error!abi.FlushMode {
@@ -173,12 +184,7 @@ pub export fn ggfx_submit(
         return .err_invalid_argument;
     };
 
-    dev.impl.beginBatch(&diag) catch |err| return errors.toStatus(err);
-    replayer.replay(dev.impl, batch, &diag) catch |err| {
-        abortBatch(dev.impl);
-        return errors.toStatus(err);
-    };
-    dev.impl.endBatch(flush_mode, out_res, &diag) catch |err| return errors.toStatus(err);
+    runBatch(dev.impl, batch, flush_mode, out_res, &diag) catch |err| return errors.toStatus(err);
     return .ok;
 }
 
@@ -242,12 +248,7 @@ pub export fn ggfx_read_pixels(
 
     if (pending_opt) |pending| {
         var dummy_res = std.mem.zeroes(abi.SubmitResult);
-        dev.impl.beginBatch(&diag) catch |err| return errors.toStatus(err);
-        replayer.replay(dev.impl, pending, &diag) catch |err| {
-            abortBatch(dev.impl);
-            return errors.toStatus(err);
-        };
-        dev.impl.endBatch(.intermediate, &dummy_res, &diag) catch |err| return errors.toStatus(err);
+        runBatch(dev.impl, pending, .intermediate, &dummy_res, &diag) catch |err| return errors.toStatus(err);
     }
 
     dev.impl.readPixels(image_id, regions, &diag) catch |err| return errors.toStatus(err);
@@ -379,12 +380,8 @@ pub export fn ggfx_acquire_upload_arena(
     };
     out_arena.* = std.mem.zeroes(abi.UploadArena);
 
-    if (@hasDecl(backend.Impl, "acquireUploadArena")) {
-        dev.impl.acquireUploadArena(min_bytes, out_arena, &diag) catch |err| return errors.toStatus(err);
-        return .ok;
-    }
-    diag.set("shared upload arena is not supported by this backend");
-    return .err_unsupported;
+    dev.impl.acquireUploadArena(min_bytes, out_arena, &diag) catch |err| return errors.toStatus(err);
+    return .ok;
 }
 
 test {
@@ -393,5 +390,6 @@ test {
     _ = sync;
     _ = time;
     _ = dynlib;
+    _ = upload_arena;
     _ = null_backend;
 }

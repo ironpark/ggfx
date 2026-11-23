@@ -255,16 +255,12 @@ func appendStruct[T any](buf *bytes.Buffer, v T) {
 	buf.Write(p)
 }
 
-func align16(n int) int {
-	return (n + 15) &^ 15
-}
-
 func buildGoldenBatchV1() []byte {
 	var cmds bytes.Buffer
 	var payload bytes.Buffer
 
 	appendPayload := func(data []byte) uint32 {
-		pad := align16(payload.Len()) - payload.Len()
+		pad := align16Up(payload.Len()) - payload.Len()
 		for range pad {
 			payload.WriteByte(0)
 		}

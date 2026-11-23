@@ -107,7 +107,7 @@ func (g *Graphics) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdri
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	id := g.allocShaderID()
+	id := g.shaderIDs.alloc()
 	sd := ShaderDesc{
 		StructSize:        uint32(unsafe.Sizeof(ShaderDesc{})),
 		Format:            g.caps.ShaderFormat,
@@ -127,7 +127,7 @@ func (g *Graphics) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdri
 	runtime.KeepAlive(&sd)
 
 	if st != StatusOK {
-		g.freeShaderID(id)
+		g.shaderIDs.release(id)
 		return nil, statusToError("create_shader", st, g.errBuf[:])
 	}
 
@@ -145,5 +145,5 @@ func (s *Shader) Dispose() {
 	}
 	s.disposed = true
 	s.g.ring.cur().encodeDisposeShader(s.id)
-	s.g.deferFreeShaderID(s.id)
+	s.g.shaderIDs.deferRelease(s.id)
 }
