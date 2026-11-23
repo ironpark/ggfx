@@ -19,10 +19,12 @@ fn addDriverLibrary(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     null_backend: bool,
+    alloc_trace_frames: usize,
 ) *std.Build.Step.Compile {
     const os = target.result.os.tag;
     const opts = b.addOptions();
     opts.addOption(bool, "null_backend", null_backend);
+    opts.addOption(usize, "alloc_trace_frames", alloc_trace_frames);
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
@@ -49,8 +51,13 @@ pub fn build(b: *std.Build) void {
         "backend",
         "auto = OS native, null = test backend",
     ) orelse .auto;
+    const alloc_trace_frames = b.option(
+        usize,
+        "alloc-trace-frames",
+        "Stack frames the debug allocator records per allocation in Debug and ReleaseSafe builds; 0 records none (default: 8)",
+    ) orelse 8;
 
-    const lib = addDriverLibrary(b, target, optimize, backend_opt == .null);
+    const lib = addDriverLibrary(b, target, optimize, backend_opt == .null, alloc_trace_frames);
     b.installArtifact(lib);
 
     // Test step: always uses null backend + runs C ABI static assertions.
@@ -58,6 +65,7 @@ pub fn build(b: *std.Build) void {
 
     const test_opts = b.addOptions();
     test_opts.addOption(bool, "null_backend", true);
+    test_opts.addOption(usize, "alloc_trace_frames", alloc_trace_frames);
 
     const host_os = target.result.os.tag;
     const link_libc_host = (host_os == .macos or host_os == .linux);
@@ -118,7 +126,7 @@ pub fn build(b: *std.Build) void {
     const cross_step = b.step("cross", "Build dynamic library for all 6 desktop targets");
     for (cross_targets) |query| {
         const resolved = b.resolveTargetQuery(query);
-        const cross_lib = addDriverLibrary(b, resolved, optimize, backend_opt == .null);
+        const cross_lib = addDriverLibrary(b, resolved, optimize, backend_opt == .null, alloc_trace_frames);
         const triple = query.zigTriple(b.allocator) catch @panic("OOM");
         const install = b.addInstallArtifact(cross_lib, .{
             .dest_dir = .{

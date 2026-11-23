@@ -232,6 +232,17 @@ Build the ReleaseFast shared library and compare Go vs. Zig driver latency and a
 ./scripts/bench-zig.sh 10     # custom iteration count
 ```
 
+### Testing the Vulkan Backend Without a Linux Host
+
+Cross-compile the driver and the `zigdriver` tests and run them on Mesa's lavapipe (software Vulkan) in a Linux container. Presenting to a surface is not covered, as the container has no window system:
+
+```sh
+./scripts/test-zig-vulkan-docker.sh            # all zigdriver tests
+./scripts/test-zig-vulkan-docker.sh -test.v -test.run TestDriverConformance
+```
+
+The script builds with `-Dalloc-trace-frames=0`, which stops the debug allocator from recording allocation stack traces. Zig 0.17.1's unwinder panics and then hangs in sandboxed container runtimes whose vDSO has a wrapping load address; leak detection and safety checks stay on.
+
 ### Rollout Status
 
 1. **Phase 0 — Go Refactoring**: Complete (`capabilities.go`, `Closer`, `drivertest`, `ShaderDescriptor`, `SurfaceDescriptor`, thread-confinement fixes).
