@@ -12,13 +12,16 @@ const initial_chunk_size: u64 = 2 * 1024 * 1024; // 2 MiB
 const max_chunk_size: u64 = 256 * 1024 * 1024; // 256 MiB (keeps dynamic UBO offsets well inside u32)
 const min_readback_size: u64 = 64 * 1024; // 64 KiB
 
+pub const default_shared_arena_size: u64 = 4 << 20; // 4 MiB
+pub const max_shared_arena_size: u64 = 256 << 20; // 256 MiB
+
 pub const UploadSlice = struct {
     buffer: vk.Buffer,
     offset: u64,
     ptr: [*]u8,
 };
 
-const Chunk = struct {
+pub const Chunk = struct {
     buffer: vk.Buffer,
     alloc: memory_mod.Allocation,
     capacity: u64,
@@ -89,6 +92,12 @@ pub const UploadRing = struct {
         };
     }
 
+    /// Moves an external chunk (e.g. a rotated shared upload arena) into this frame's
+    /// retired list so it is destroyed only after this frame's GPU fence completes.
+    pub fn retireChunk(self: *UploadRing, gpa: Allocator, chunk: Chunk) Error!void {
+        self.retired.append(gpa, chunk) catch return error.OutOfMemory;
+    }
+
     /// Resets active offset and frees retired chunks (must only be called after frame fence signals).
     pub fn reset(self: *UploadRing, dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator) void {
         for (self.retired.items) |chunk| {
@@ -110,25 +119,24 @@ pub const UploadRing = struct {
     }
 };
 
-fn createUploadChunk(
+fn createChunkWithUsage(
     dev: *const device_mod.Device,
     mem: *memory_mod.MemoryAllocator,
     capacity: u64,
+    usage: vk.Flags,
+    label: []const u8,
     diag: *Diag,
 ) Error!Chunk {
     const bci = vk.BufferCreateInfo{
         .size = capacity,
-        .usage = vk.BufferUsage.vertex_buffer_bit |
-            vk.BufferUsage.index_buffer_bit |
-            vk.BufferUsage.uniform_buffer_bit |
-            vk.BufferUsage.transfer_src_bit,
+        .usage = usage,
         .sharingMode = .exclusive,
     };
     var buf: vk.Buffer = .null_handle;
     try loader_mod.check(
         dev.disp.vkCreateBuffer(dev.handle, &bci, null, &buf),
         diag,
-        "vkCreateBuffer(upload)",
+        label,
     );
     errdefer dev.disp.vkDestroyBuffer(dev.handle, buf, null);
 
@@ -160,7 +168,43 @@ fn createUploadChunk(
     };
 }
 
-fn destroyChunk(dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator, chunk: Chunk) void {
+fn createUploadChunk(
+    dev: *const device_mod.Device,
+    mem: *memory_mod.MemoryAllocator,
+    capacity: u64,
+    diag: *Diag,
+) Error!Chunk {
+    return createChunkWithUsage(
+        dev,
+        mem,
+        capacity,
+        vk.BufferUsage.vertex_buffer_bit |
+            vk.BufferUsage.index_buffer_bit |
+            vk.BufferUsage.uniform_buffer_bit |
+            vk.BufferUsage.transfer_src_bit,
+        "vkCreateBuffer(upload)",
+        diag,
+    );
+}
+
+/// Creates a HOST_VISIBLE | HOST_COHERENT persistently-mapped VkBuffer for the shared upload arena.
+pub fn createSharedChunk(
+    dev: *const device_mod.Device,
+    mem: *memory_mod.MemoryAllocator,
+    capacity: u64,
+    diag: *Diag,
+) Error!Chunk {
+    return createChunkWithUsage(
+        dev,
+        mem,
+        capacity,
+        vk.BufferUsage.transfer_src_bit | vk.BufferUsage.uniform_buffer_bit,
+        "vkCreateBuffer(shared_upload)",
+        diag,
+    );
+}
+
+pub fn destroyChunk(dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator, chunk: Chunk) void {
     if (chunk.buffer != .null_handle) {
         dev.disp.vkDestroyBuffer(dev.handle, chunk.buffer, null);
     }

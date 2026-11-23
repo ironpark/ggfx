@@ -147,6 +147,12 @@ pub const Backend = struct {
     dummy_cbv_buf: *d3d12.ID3D12Resource,
     dummy_cbv_gpu: d3d12.D3D12_GPU_VIRTUAL_ADDRESS,
 
+    // Active GPU-mapped shared upload arena (zero-copy writePixels)
+    shared_upload_buf: ?*d3d12.ID3D12Resource = null,
+    shared_upload_ptr: ?[*]u8 = null,
+    shared_upload_size: u64 = 0,
+    shared_arena_id: u32 = 0,
+
     // Resource handle tables
     images: handles.HandleTable(Image) = .{},
     shaders: handles.HandleTable(pipeline.Shader) = .{},
@@ -416,7 +422,10 @@ pub const Backend = struct {
         caps.struct_size = @sizeOf(abi.DriverCaps);
         caps.backend = @intFromEnum(abi.Backend.dx12);
         caps.max_image_size = d3d12.D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
-        caps.flags = abi.cap_flips_y | abi.cap_needs_clearing_screen | (if (self.supports_a8) abi.cap_supports_a8 else 0);
+        caps.flags = abi.cap_flips_y |
+            abi.cap_needs_clearing_screen |
+            abi.cap_shared_upload_arena |
+            (if (self.supports_a8) abi.cap_supports_a8 else 0);
         if (supports_dcomp) {
             caps.flags |= abi.cap_direct_composition;
         }
@@ -493,7 +502,14 @@ pub const Backend = struct {
         self.surfaces_lock.unlock();
         self.surfaces_lock.deinit();
 
-        // Release upload rings, dummy CBV, pipelines, descriptors.
+        // Release shared upload arena, upload rings, dummy CBV, pipelines, descriptors.
+        if (self.shared_upload_buf) |buf| {
+            buf.unmap(0, null);
+            _ = buf.release();
+            self.shared_upload_buf = null;
+            self.shared_upload_ptr = null;
+            self.shared_upload_size = 0;
+        }
         for (&self.upload_rings) |*ring| {
             ring.deinit(gpa);
         }
@@ -1036,9 +1052,60 @@ pub const Backend = struct {
         const dxgi_fmt = img.dxgiFormat();
         const ring = &self.upload_rings[self.frame_index];
 
+        // Check if payload resides inside the active GPU-mapped shared upload arena.
+        var shared_res: ?*d3d12.ID3D12Resource = null;
+        var shared_base_off: u64 = 0;
+        if (self.shared_upload_buf) |buf| {
+            if (self.shared_upload_ptr) |base_ptr| {
+                if (payload.len > 0) {
+                    const p_addr: usize = @intFromPtr(payload.ptr);
+                    const b_addr: usize = @intFromPtr(base_ptr);
+                    const cap: usize = @intCast(self.shared_upload_size);
+                    if (p_addr >= b_addr and p_addr - b_addr <= cap and payload.len <= cap - (p_addr - b_addr)) {
+                        shared_res = buf;
+                        shared_base_off = @intCast(p_addr - b_addr);
+                    }
+                }
+            }
+        }
+
         for (regions) |r| {
             const bounds = validateRect(r.rect, img.internal_width, img.internal_height).?;
             if (bounds.dx == 0 or bounds.dy == 0) continue;
+
+            const dst_loc = d3d12.D3D12_TEXTURE_COPY_LOCATION.subresource(tex, 0);
+            const src_box = d3d12.D3D12_BOX{
+                .left = 0,
+                .top = 0,
+                .front = 0,
+                .right = bounds.dx,
+                .bottom = bounds.dy,
+                .back = 1,
+            };
+
+            const bpr: u64 = @as(u64, bounds.dx) * @as(u64, bpp);
+            if (shared_res) |sbuf| {
+                const placed_off = shared_base_off + @as(u64, r.payload_offset);
+                if ((bpr % upload.texture_pitch_alignment) == 0 and
+                    (placed_off % upload.texture_placement_alignment) == 0 and
+                    placed_off + r.payload_len <= self.shared_upload_size)
+                {
+                    // Zero-copy directly from the persistently-mapped shared upload arena.
+                    const src_loc = d3d12.D3D12_TEXTURE_COPY_LOCATION.placedFootprint(sbuf, .{
+                        .Offset = placed_off,
+                        .Footprint = .{
+                            .Format = dxgi_fmt,
+                            .Width = bounds.dx,
+                            .Height = bounds.dy,
+                            .Depth = 1,
+                            .RowPitch = @intCast(bpr),
+                        },
+                    });
+                    self.cmd_list.copyTextureRegion(&dst_loc, bounds.x0, bounds.y0, 0, &src_loc, &src_box);
+                    self.uploaded_bytes += r.payload_len;
+                    continue;
+                }
+            }
 
             const fp = upload.computeTextureFootprint(bounds.dx, bounds.dy, bpp);
             const staging = try ring.alloc(
@@ -1052,7 +1119,6 @@ pub const Backend = struct {
             const src_pixels = payload[r.payload_offset .. r.payload_offset + r.payload_len];
             upload.packRowsToFootprint(staging.cpu_ptr, fp.row_pitch, src_pixels, bounds.dx, bounds.dy, bpp);
 
-            const dst_loc = d3d12.D3D12_TEXTURE_COPY_LOCATION.subresource(tex, 0);
             const src_loc = d3d12.D3D12_TEXTURE_COPY_LOCATION.placedFootprint(staging.resource, .{
                 .Offset = staging.offset,
                 .Footprint = .{
@@ -1063,14 +1129,6 @@ pub const Backend = struct {
                     .RowPitch = fp.row_pitch,
                 },
             });
-            const src_box = d3d12.D3D12_BOX{
-                .left = 0,
-                .top = 0,
-                .front = 0,
-                .right = bounds.dx,
-                .bottom = bounds.dy,
-                .back = 1,
-            };
             self.cmd_list.copyTextureRegion(&dst_loc, bounds.x0, bounds.y0, 0, &src_loc, &src_box);
             self.uploaded_bytes += r.payload_len;
         }
@@ -1552,6 +1610,49 @@ pub const Backend = struct {
 
     pub fn isOccluded(self: *Backend) bool {
         return self.occluded.load(.acquire);
+    }
+
+    pub fn acquireUploadArena(
+        self: *Backend,
+        min_bytes: u64,
+        out_arena: *abi.UploadArena,
+        diag: *Diag,
+    ) Error!void {
+        if (min_bytes > upload.max_shared_arena_size) {
+            diag.print("directx: requested shared upload arena size ({d} B) exceeds maximum ({d} B)", .{
+                min_bytes,
+                upload.max_shared_arena_size,
+            });
+            return error.OutOfMemory;
+        }
+
+        const alignment: u32 = @intCast(upload.texture_placement_alignment); // 512
+        const target_size: u64 = upload.alignUpU64(@max(min_bytes, upload.default_shared_arena_size), alignment);
+
+        const mapped = try upload.createMappedUploadBuffer(self.device, target_size, diag);
+        errdefer {
+            mapped.resource.unmap(0, null);
+            _ = mapped.resource.release();
+        }
+
+        if (self.shared_upload_buf) |old_buf| {
+            self.upload_rings[self.frame_index].retired.append(self.gpa, old_buf) catch return error.OutOfMemory;
+        }
+
+        self.shared_upload_buf = mapped.resource;
+        self.shared_upload_ptr = mapped.cpu_ptr;
+        self.shared_upload_size = mapped.size;
+        self.shared_arena_id +%= 1;
+        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
+
+        out_arena.* = .{
+            .struct_size = @sizeOf(abi.UploadArena),
+            .arena_id = self.shared_arena_id,
+            .ptr = mapped.cpu_ptr,
+            .capacity = mapped.size,
+            .alignment = alignment,
+            .flags = abi.arena_flag_gpu_mapped | abi.arena_flag_coherent,
+        };
     }
 
     pub fn stats(self: *Backend, out: *abi.DebugStats) void {

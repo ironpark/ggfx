@@ -209,3 +209,43 @@ func BenchmarkSubmitEmpty(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkWritePixelsLarge(b *testing.B) {
+	runBenchDrivers(b, func(b *testing.B, g graphicsdriver.Graphics) {
+		const w, h = 1024, 1024
+		if err := g.Begin(); err != nil {
+			b.Fatal(err)
+		}
+		img, err := g.NewImage(w, h, graphicsdriver.PixelFormatRGBA8)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer img.Dispose()
+		if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+			b.Fatal(err)
+		}
+
+		pix := make([]byte, 4*w*h)
+		for i := range pix {
+			pix[i] = byte(i)
+		}
+		args := []graphicsdriver.PixelsArgs{{
+			Pixels: pix,
+			Region: image.Rect(0, 0, w, h),
+		}}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := g.Begin(); err != nil {
+				b.Fatal(err)
+			}
+			if err := img.WritePixels(args); err != nil {
+				b.Fatal(err)
+			}
+			if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

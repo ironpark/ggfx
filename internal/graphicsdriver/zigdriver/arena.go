@@ -31,8 +31,17 @@ const (
 	maxPayloadBytes = math.MaxUint32 &^ 15 // 16B-aligned uint32 payload upper bound
 )
 
+func alignUp(n, align int) int {
+	return (n + align - 1) &^ (align - 1)
+}
+
 func align16Up(n int) int {
-	return (n + 15) &^ 15
+	return alignUp(n, 16)
+}
+
+func nativeBytes(ptr uintptr, n int) []byte {
+	base := *(*unsafe.Pointer)(unsafe.Pointer(&ptr))
+	return unsafe.Slice((*byte)(base), n)
 }
 
 func allocAligned16(size int) (raw, aligned []byte) {
@@ -46,13 +55,139 @@ func allocAligned16(size int) (raw, aligned []byte) {
 	return raw, aligned
 }
 
+// sharedUploadArena tracks a driver-owned GPU-mapped upload buffer shared across
+// batches on the render thread. Each submitted batch occupies a monotonic slice
+// [batchStart:cursor] so subsequent batches never overwrite bytes already handed
+// to the GPU until the backend rotates in an idle buffer via acquireUploadArena.
+type sharedUploadArena struct {
+	enabled    bool
+	arenaID    uint32
+	buf        []byte
+	align      int // >= 16, power of 2
+	batchStart int
+	cursor     int
+	flags      uint32
+}
+
+func (a *sharedUploadArena) set(ua UploadArena) bool {
+	if ua.Ptr == 0 || ua.Capacity == 0 || ua.Ptr%16 != 0 {
+		return false
+	}
+	align := int(ua.Alignment)
+	if align < 16 {
+		align = 16
+	}
+	if align&(align-1) != 0 {
+		align = recent.NextPowerOf2(align)
+	}
+	capBytes := ua.Capacity
+	if capBytes > uint64(maxPayloadBytes) {
+		capBytes = uint64(maxPayloadBytes)
+	}
+	a.buf = nativeBytes(ua.Ptr, int(capBytes))
+	a.arenaID = ua.ArenaID
+	a.align = align
+	a.batchStart = 0
+	a.cursor = 0
+	a.flags = ua.Flags
+	a.enabled = true
+	return true
+}
+
+func (a *sharedUploadArena) clear() {
+	a.enabled = false
+	a.arenaID = 0
+	a.buf = nil
+	a.align = 0
+	a.batchStart = 0
+	a.cursor = 0
+	a.flags = 0
+}
+
+func (a *sharedUploadArena) alignment() int {
+	if a.align >= 16 {
+		return a.align
+	}
+	return 16
+}
+
+func (a *sharedUploadArena) advanceBatch() {
+	if !a.enabled {
+		return
+	}
+	next := alignUp(a.cursor, a.alignment())
+	if next < a.cursor || next > len(a.buf) {
+		next = len(a.buf)
+	}
+	a.batchStart = next
+	a.cursor = next
+}
+
+func (a *sharedUploadArena) canFit(n uint64) bool {
+	if !a.enabled {
+		return false
+	}
+	absOff := alignUp(a.cursor, a.alignment())
+	if absOff < a.cursor || absOff > len(a.buf) {
+		return false
+	}
+	return n <= uint64(len(a.buf)-absOff)
+}
+
+func (a *sharedUploadArena) canFitWritePixels(args []graphicsdriver.PixelsArgs) bool {
+	if !a.enabled {
+		return false
+	}
+	align := a.alignment()
+	simAbs := a.cursor
+	for _, arg := range args {
+		absOff := alignUp(simAbs, align)
+		if absOff < simAbs || absOff > len(a.buf) || len(arg.Pixels) > len(a.buf)-absOff {
+			return false
+		}
+		simAbs = absOff + len(arg.Pixels)
+	}
+	return true
+}
+
+func (a *sharedUploadArena) writePixelsNeed(args []graphicsdriver.PixelsArgs) (uint64, bool) {
+	align := uint64(a.alignment())
+	var total uint64
+	for _, arg := range args {
+		off := (total + align - 1) &^ (align - 1)
+		if off < total {
+			return 0, false
+		}
+		n := uint64(len(arg.Pixels))
+		if off > math.MaxUint64-n {
+			return 0, false
+		}
+		total = off + n
+	}
+	return total, true
+}
+
+func (a *sharedUploadArena) drawUniformsNeed(userDwords uint32) uint64 {
+	total := uint64(InternalUniformBytes)
+	if userDwords > 0 {
+		align := uint64(a.alignment())
+		off := (total + align - 1) &^ (align - 1)
+		total = off + uint64(userDwords)*4
+	}
+	return total
+}
+
 // slot is one linear command + payload arena in the submission ring.
 type slot struct {
 	cmds     []uint64 // 8B-aligned backing store; byte capacity = len(cmds) * 8
 	cmdLen   int      // bytes written into cmds (always a multiple of 8)
 	cmdCount uint32
 
-	payRaw  []byte // cap + 15 raw backing allocation
+	shared      *sharedUploadArena
+	usingShared bool // true while current batch's payload resides in shared.buf
+	forceHeap   bool // true while current batch falls back to Go heap payload
+
+	payRaw  []byte // cap + 15 raw backing allocation (lazily allocated)
 	payload []byte // 16B-aligned view into payRaw
 	payLen  int
 
@@ -76,8 +211,19 @@ type slot struct {
 
 func (s *slot) init() {
 	s.cmds = make([]uint64, minCmdBytes/8)
-	s.payRaw, s.payload = allocAligned16(minPayloadBytes)
+	s.payRaw = nil
+	s.payload = nil
 	s.maxPayload = maxPayloadBytes
+}
+
+func (s *slot) useShared() bool {
+	if s.shared == nil || !s.shared.enabled {
+		return false
+	}
+	if s.usingShared {
+		return true
+	}
+	return s.payLen == 0 && !s.forceHeap
 }
 
 func (s *slot) payloadLimit() int {
@@ -121,6 +267,18 @@ func (s *slot) canAppendPayload(n int) bool {
 		return false
 	}
 	limit := s.payloadLimit()
+	if s.useShared() {
+		sh := s.shared
+		absOff := alignUp(sh.cursor, sh.alignment())
+		if absOff < sh.cursor || absOff > len(sh.buf) || n > len(sh.buf)-absOff {
+			return false
+		}
+		relOff := absOff - sh.batchStart
+		if relOff < 0 || relOff > limit || n > limit-relOff {
+			return false
+		}
+		return true
+	}
 	if s.payLen > limit {
 		return false
 	}
@@ -134,6 +292,19 @@ func (s *slot) canAppendPayload(n int) bool {
 func (s *slot) appendPayload(b []byte) (uint32, bool) {
 	if !s.canAppendPayload(len(b)) {
 		return 0, false
+	}
+	if s.useShared() {
+		sh := s.shared
+		absOff := alignUp(sh.cursor, sh.alignment())
+		end := absOff + len(b)
+		if absOff > sh.cursor {
+			clear(sh.buf[sh.cursor:absOff])
+		}
+		copy(sh.buf[absOff:end], b)
+		sh.cursor = end
+		s.usingShared = true
+		s.payLen = end - sh.batchStart
+		return uint32(absOff - sh.batchStart), true
 	}
 	off := align16Up(s.payLen)
 	end := off + len(b)
@@ -167,6 +338,8 @@ func (s *slot) reset() {
 	s.cmdLen = 0
 	s.cmdCount = 0
 	s.payLen = 0
+	s.usingShared = false
+	s.forceHeap = false
 	clear(s.pinsF)
 	s.pinsF = s.pinsF[:0]
 	clear(s.pinsU)
@@ -187,12 +360,14 @@ func (s *slot) shrink(usedCmds, usedPay int) {
 	}
 
 	curPayCap := len(s.payload)
-	wantPayCap := s.payPeak.Capacity(curPayCap, usedPay, minPayloadBytes)
-	if limit := s.payloadLimit(); wantPayCap > limit {
-		wantPayCap = limit
-	}
-	if wantPayCap < curPayCap {
-		s.payRaw, s.payload = allocAligned16(wantPayCap)
+	if curPayCap > 0 {
+		wantPayCap := s.payPeak.Capacity(curPayCap, usedPay, minPayloadBytes)
+		if limit := s.payloadLimit(); wantPayCap > limit {
+			wantPayCap = limit
+		}
+		if wantPayCap < curPayCap {
+			s.payRaw, s.payload = allocAligned16(wantPayCap)
+		}
 	}
 }
 
@@ -202,8 +377,17 @@ func (s *slot) fillBatch(dst *Batch) {
 		cmdsPtr = uintptr(unsafe.Pointer(&s.cmds[0]))
 	}
 	var payPtr uintptr
-	if s.payLen > 0 {
+	var payLen uint64
+	if s.usingShared {
+		sh := s.shared
+		n := sh.cursor - sh.batchStart
+		if n > 0 {
+			payPtr = uintptr(unsafe.Pointer(&sh.buf[sh.batchStart]))
+			payLen = uint64(n)
+		}
+	} else if s.payLen > 0 {
 		payPtr = uintptr(unsafe.Pointer(&s.payload[0]))
+		payLen = uint64(s.payLen)
 	}
 	*dst = Batch{
 		StructSize: uint32(unsafe.Sizeof(Batch{})),
@@ -211,7 +395,7 @@ func (s *slot) fillBatch(dst *Batch) {
 		Cmds:       cmdsPtr,
 		CmdsLen:    uint64(s.cmdLen),
 		Payload:    payPtr,
-		PayloadLen: uint64(s.payLen),
+		PayloadLen: payLen,
 		Sequence:   s.seq,
 	}
 }
@@ -316,13 +500,30 @@ func (s *slot) encodeWritePixels(imageID uint32, args []graphicsdriver.PixelsArg
 	}
 	// Pre-flight payload fit check so partial state is never written on overflow.
 	limit := s.payloadLimit()
-	simLen := s.payLen
-	for _, a := range args {
-		off := align16Up(simLen)
-		if off < simLen || off > limit || len(a.Pixels) > limit-off {
-			return false
+	if s.useShared() {
+		sh := s.shared
+		align := sh.alignment()
+		simAbs := sh.cursor
+		for _, a := range args {
+			absOff := alignUp(simAbs, align)
+			if absOff < simAbs || absOff > len(sh.buf) || len(a.Pixels) > len(sh.buf)-absOff {
+				return false
+			}
+			relOff := absOff - sh.batchStart
+			if relOff < 0 || relOff > limit || len(a.Pixels) > limit-relOff {
+				return false
+			}
+			simAbs = absOff + len(a.Pixels)
 		}
-		simLen = off + len(a.Pixels)
+	} else {
+		simLen := s.payLen
+		for _, a := range args {
+			off := align16Up(simLen)
+			if off < simLen || off > limit || len(a.Pixels) > limit-off {
+				return false
+			}
+			simLen = off + len(a.Pixels)
+		}
 	}
 
 	const hdrSz = int(unsafe.Sizeof(CmdWritePixels{}))
@@ -374,21 +575,48 @@ func (s *slot) encodeDrawTriangles(
 
 	// Pre-flight payload fit check.
 	limit := s.payloadLimit()
-	simLen := s.payLen
-	if needInternal {
-		off := align16Up(simLen)
-		if off < simLen || off > limit || int(InternalUniformBytes) > limit-off {
-			return false
+	if s.useShared() {
+		sh := s.shared
+		align := sh.alignment()
+		simAbs := sh.cursor
+		if needInternal {
+			absOff := alignUp(simAbs, align)
+			if absOff < simAbs || absOff > len(sh.buf) || int(InternalUniformBytes) > len(sh.buf)-absOff {
+				return false
+			}
+			relOff := absOff - sh.batchStart
+			if relOff < 0 || relOff > limit || int(InternalUniformBytes) > limit-relOff {
+				return false
+			}
+			simAbs = absOff + int(InternalUniformBytes)
 		}
-		simLen = off + int(InternalUniformBytes)
-	}
-	if needUser {
-		off := align16Up(simLen)
-		userBytes := int(userDwords) * 4
-		if off < simLen || off > limit || userBytes > limit-off {
-			return false
+		if needUser {
+			absOff := alignUp(simAbs, align)
+			userBytes := int(userDwords) * 4
+			if absOff < simAbs || absOff > len(sh.buf) || userBytes > len(sh.buf)-absOff {
+				return false
+			}
+			relOff := absOff - sh.batchStart
+			if relOff < 0 || relOff > limit || userBytes > limit-relOff {
+				return false
+			}
 		}
-		simLen = off + userBytes
+	} else {
+		simLen := s.payLen
+		if needInternal {
+			off := align16Up(simLen)
+			if off < simLen || off > limit || int(InternalUniformBytes) > limit-off {
+				return false
+			}
+			simLen = off + int(InternalUniformBytes)
+		}
+		if needUser {
+			off := align16Up(simLen)
+			userBytes := int(userDwords) * 4
+			if off < simLen || off > limit || userBytes > limit-off {
+				return false
+			}
+		}
 	}
 
 	internalOff := s.lastInternalOff
@@ -512,6 +740,12 @@ func (r *ring) init(n int) {
 	r.k = 0
 	for i := range n {
 		r.slots[i].init()
+	}
+}
+
+func (r *ring) setShared(shared *sharedUploadArena) {
+	for i := range r.n {
+		r.slots[i].shared = shared
 	}
 }
 

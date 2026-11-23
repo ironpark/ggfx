@@ -125,6 +125,15 @@ CHECK_OFF(GgfxDebugStats, draws, 40);
 CHECK_OFF(GgfxDebugStats, binds_skipped, 48);
 CHECK_OFF(GgfxDebugStats, uploaded_bytes, 56);
 
+/* GgfxUploadArena: 32 B */
+CHECK_SIZE(GgfxUploadArena, 32);
+CHECK_OFF(GgfxUploadArena, struct_size, 0);
+CHECK_OFF(GgfxUploadArena, arena_id, 4);
+CHECK_OFF(GgfxUploadArena, ptr, 8);
+CHECK_OFF(GgfxUploadArena, capacity, 16);
+CHECK_OFF(GgfxUploadArena, alignment, 24);
+CHECK_OFF(GgfxUploadArena, flags, 28);
+
 /* Command records */
 CHECK_SIZE(GgfxCmdSetVertices, 32);
 CHECK_OFF(GgfxCmdSetVertices, hdr, 0);

@@ -712,3 +712,192 @@ func TestSurfaceMethodsConcurrentClose(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestSharedUploadArenaActiveAndRollover verifies that backends advertising
+// CapFlagSharedUploadArena activate the GPU-mapped shared upload arena without
+// pre-allocating Go heap payload buffers, automatically rotate arenas when
+// continuous WritePixels/DrawTriangles exceed capacity, preserve pixel data
+// integrity across rollovers, and release all native resources cleanly on Close.
+func TestSharedUploadArenaActiveAndRollover(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	closed := false
+	defer func() {
+		if !closed {
+			_ = g.Close()
+		}
+	}()
+
+	if g.Caps().Flags&CapFlagSharedUploadArena == 0 {
+		if g.Caps().Backend == BackendNull {
+			t.Fatalf("null backend must advertise CapFlagSharedUploadArena")
+		}
+		t.Skip("backend does not advertise CapFlagSharedUploadArena")
+	}
+	if !g.SharedUploadArenaActive() {
+		t.Fatalf("SharedUploadArenaActive() = false, want true")
+	}
+
+	// Verify lazy Go heap payload init: no slot should have allocated payRaw yet.
+	for i := range g.ring.n {
+		if len(g.ring.slots[i].payRaw) != 0 || len(g.ring.slots[i].payload) != 0 {
+			t.Fatalf("slot[%d] pre-allocated Go heap payload: raw=%d pay=%d",
+				i, len(g.ring.slots[i].payRaw), len(g.ring.slots[i].payload))
+		}
+	}
+
+	initialCap := len(g.shared.buf)
+	if initialCap <= 0 {
+		t.Fatalf("shared arena capacity = %d, want > 0", initialCap)
+	}
+
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+
+	const imgW, imgH = 256, 256
+	img, err := g.NewImage(imgW, imgH, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatalf("NewImage: %v", err)
+	}
+
+	// Stream 64 KiB stripes continuously across more than 2x arena capacity without
+	// calling End() in between so WritePixels triggers automatic arena rollovers.
+	const stripeH = 64
+	const stripeBytes = imgW * stripeH * 4
+	const fullBytes = imgW * imgH * 4
+	passes := (initialCap*2)/fullBytes + 2
+
+	want := make([]byte, fullBytes)
+	prevArenaID := g.shared.arenaID
+	rotations := 0
+
+	for pass := range passes {
+		for s := 0; s < imgH/stripeH; s++ {
+			off := s * stripeBytes
+			stripe := want[off : off+stripeBytes]
+			seed := byte((pass*31 + s*17 + 5) & 0xff)
+			for i := range stripe {
+				stripe[i] = byte((int(seed) + i*13) & 0xff)
+			}
+			rect := image.Rect(0, s*stripeH, imgW, (s+1)*stripeH)
+			if err := img.WritePixels([]graphicsdriver.PixelsArgs{
+				{Pixels: stripe, Region: rect},
+			}); err != nil {
+				t.Fatalf("WritePixels pass=%d stripe=%d: %v", pass, s, err)
+			}
+			if g.shared.arenaID != prevArenaID {
+				rotations++
+				prevArenaID = g.shared.arenaID
+			}
+		}
+	}
+	if rotations == 0 {
+		t.Fatalf("expected at least one shared arena rollover after writing %d bytes into %d-byte arena",
+			passes*fullBytes, initialCap)
+	}
+
+	got := make([]byte, fullBytes)
+	if err := img.ReadPixels([]graphicsdriver.PixelsArgs{
+		{Pixels: got, Region: image.Rect(0, 0, imgW, imgH)},
+	}); err != nil {
+		t.Fatalf("ReadPixels after rollover: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("pixel readback mismatch after shared arena rollover")
+	}
+
+	// Single WritePixels exceeding initialCap forces dynamic arena growth via acquireUploadArena(minBytes).
+	if initialCap <= 1<<20 {
+		const bigW, bigH = 512, 256 // 512 KiB (> null backend 256 KiB default)
+		bigImg, err := g.NewImage(bigW, bigH, graphicsdriver.PixelFormatRGBA8)
+		if err != nil {
+			t.Fatalf("NewImage big: %v", err)
+		}
+		bigWant := make([]byte, bigW*bigH*4)
+		for i := range bigWant {
+			bigWant[i] = byte((i*41 + 7) & 0xff)
+		}
+		if err := bigImg.WritePixels([]graphicsdriver.PixelsArgs{
+			{Pixels: bigWant, Region: image.Rect(0, 0, bigW, bigH)},
+		}); err != nil {
+			t.Fatalf("WritePixels big (%d bytes): %v", len(bigWant), err)
+		}
+		bigGot := make([]byte, len(bigWant))
+		if err := bigImg.ReadPixels([]graphicsdriver.PixelsArgs{
+			{Pixels: bigGot, Region: image.Rect(0, 0, bigW, bigH)},
+		}); err != nil {
+			t.Fatalf("ReadPixels big: %v", err)
+		}
+		if !bytes.Equal(bigGot, bigWant) {
+			t.Fatalf("big image readback mismatch after arena growth")
+		}
+		bigImg.Dispose()
+	}
+
+	// Also exercise DrawTriangles rollover when remaining shared arena space is exhausted.
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End before draw rollover: %v", err)
+	}
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := g.NewShader(prog.Descriptor())
+	if err != nil {
+		t.Fatalf("NewShader: %v", err)
+	}
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	// Position cursor at the end of the current shared arena so DrawTriangles must rotate it.
+	g.shared.batchStart = len(g.shared.buf)
+	g.shared.cursor = len(g.shared.buf)
+	arenaBeforeDraw := g.shared.arenaID
+
+	vs := make([]float32, 4*graphics.VertexFloatCount)
+	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, imgW, imgH, 0, 0, imgW, imgH, 1, 1, 1, 1)
+	is := graphics.QuadIndices()
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatal(err)
+	}
+	uniforms := make([]uint32, InternalUniformDwords+uint32(prog.UniformDwordCount))
+	uniforms[56] = 0x3f800000
+	var srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image
+	regions := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, imgW, imgH), IndexCount: len(is)}}
+	if err := g.DrawTriangles(img, srcs, sh, regions, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1, User: 1}); err != nil {
+		t.Fatalf("DrawTriangles rollover: %v", err)
+	}
+	if g.shared.arenaID == arenaBeforeDraw && g.shared.cursor == len(g.shared.buf) {
+		t.Fatalf("expected DrawTriangles to rotate exhausted shared arena")
+	}
+
+	sh.Dispose()
+	img.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End final: %v", err)
+	}
+
+	// Go heap payload buffers must remain unallocated throughout the shared arena fast path.
+	for i := range g.ring.n {
+		if len(g.ring.slots[i].payRaw) != 0 || len(g.ring.slots[i].payload) != 0 {
+			t.Fatalf("slot[%d] allocated Go heap payload on shared arena fast path: raw=%d pay=%d",
+				i, len(g.ring.slots[i].payRaw), len(g.ring.slots[i].payload))
+		}
+	}
+
+	st, err := g.DebugStats()
+	if err != nil {
+		t.Fatalf("DebugStats: %v", err)
+	}
+	if st.LiveImages != 0 || st.LiveShaders != 0 || st.LiveSurfaces != 0 {
+		t.Fatalf("unexpected live handles before Close: %+v", st)
+	}
+
+	closed = true
+	if err := g.Close(); err != nil {
+		t.Fatalf("Close (leak check): %v", err)
+	}
+	if g.SharedUploadArenaActive() {
+		t.Fatalf("SharedUploadArenaActive() = true after Close, want false")
+	}
+}

@@ -55,6 +55,7 @@ pub fn check(comptime Self: type) void {
     expectDecl(Self, "setMainThreadMode", fn (*Self, u32) void);
     expectDecl(Self, "isOccluded", fn (*Self) bool);
     expectDecl(Self, "stats", fn (*Self, *abi.DebugStats) void);
+    expectDecl(Self, "acquireUploadArena", fn (*Self, u64, *abi.UploadArena, *Diag) E!void);
 }
 
 comptime {

@@ -33,15 +33,24 @@ func TestSlotAlignmentAndGrowth(t *testing.T) {
 	if uintptr(unsafe.Pointer(&s.cmds[0]))%8 != 0 {
 		t.Fatalf("initial cmds not 8B aligned")
 	}
-	if uintptr(unsafe.Pointer(&s.payload[0]))%16 != 0 {
-		t.Fatalf("initial payload not 16B aligned")
-	}
 	if s.cmdCapBytes() != minCmdBytes {
 		t.Fatalf("initial cmd cap = %d, want %d", s.cmdCapBytes(), minCmdBytes)
+	}
+	if len(s.payRaw) != 0 || len(s.payload) != 0 {
+		t.Fatalf("expected lazy payload allocation on init, got payRaw=%d payload=%d", len(s.payRaw), len(s.payload))
+	}
+
+	// First heap payload write lazily allocates minPayloadBytes with 16B alignment.
+	if off, ok := s.appendPayload([]byte{1, 2, 3, 4}); !ok || off != 0 {
+		t.Fatalf("initial lazy appendPayload = (%d, %v), want (0, true)", off, ok)
+	}
+	if uintptr(unsafe.Pointer(&s.payload[0]))%16 != 0 {
+		t.Fatalf("initial payload not 16B aligned")
 	}
 	if len(s.payload) != minPayloadBytes {
 		t.Fatalf("initial payload cap = %d, want %d", len(s.payload), minPayloadBytes)
 	}
+	s.reset()
 
 	// Grow cmds past minCmdBytes.
 	for i := range 2000 {
@@ -279,5 +288,133 @@ func TestRingSlotsAndShrink(t *testing.T) {
 	}
 	if uintptr(unsafe.Pointer(&s.payload[0]))%16 != 0 {
 		t.Fatalf("shrunk payload not 16B aligned")
+	}
+}
+
+func TestSlotSharedUploadArena(t *testing.T) {
+	_, backing := allocAligned16(2048)
+
+	var sh sharedUploadArena
+	ok := sh.set(UploadArena{
+		StructSize: uint32(unsafe.Sizeof(UploadArena{})),
+		ArenaID:    1,
+		Ptr:        uintptr(unsafe.Pointer(&backing[0])),
+		Capacity:   uint64(len(backing)),
+		Alignment:  64,
+		Flags:      ArenaFlagGPUMapped | ArenaFlagCoherent,
+	})
+	if !ok {
+		t.Fatal("sharedUploadArena.set failed")
+	}
+
+	var s slot
+	s.init()
+	s.shared = &sh
+
+	// Batch 1: multi-region WritePixels uses shared arena directly with 64B alignment and zero heap allocation.
+	p0 := bytes.Repeat([]byte{0x11}, 20)
+	p1 := bytes.Repeat([]byte{0x22}, 36)
+	args := []graphicsdriver.PixelsArgs{
+		{Pixels: p0, Region: image.Rect(0, 0, 5, 1)},
+		{Pixels: p1, Region: image.Rect(0, 1, 9, 2)},
+	}
+	if !s.encodeWritePixels(1, args) {
+		t.Fatal("encodeWritePixels in shared arena failed")
+	}
+	if !s.usingShared {
+		t.Fatal("expected s.usingShared == true")
+	}
+	if len(s.payRaw) != 0 || len(s.payload) != 0 {
+		t.Fatalf("shared arena path unexpectedly allocated Go heap payload: raw=%d pay=%d", len(s.payRaw), len(s.payload))
+	}
+
+	var b Batch
+	s.fillBatch(&b)
+	if b.Payload != uintptr(unsafe.Pointer(&sh.buf[0])) {
+		t.Fatalf("batch 1 Payload = %#x, want %#x", b.Payload, uintptr(unsafe.Pointer(&sh.buf[0])))
+	}
+	// p0 at [0:20], aligned to 64 -> p1 at [64:100] -> PayloadLen == 100.
+	if b.PayloadLen != 100 {
+		t.Fatalf("batch 1 PayloadLen = %d, want 100", b.PayloadLen)
+	}
+	if !bytes.Equal(sh.buf[0:20], p0) || !bytes.Equal(sh.buf[64:100], p1) {
+		t.Fatal("shared arena pixel payload mismatch")
+	}
+
+	sh.advanceBatch()
+	s.reset()
+	if sh.batchStart != 128 || sh.cursor != 128 {
+		t.Fatalf("after advanceBatch: batchStart=%d cursor=%d, want 128,128", sh.batchStart, sh.cursor)
+	}
+
+	// Batch 2: DrawTriangles with uniform dedup starts at batchStart=128 with relative offset 0.
+	uniforms := make([]uint32, InternalUniformDwords+4)
+	for i := range uniforms {
+		uniforms[i] = uint32(0x200 + i)
+	}
+	regions := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 16, 16), IndexCount: 6}}
+	v1 := graphicsdriver.UniformVersions{Internal: 1, User: 2}
+	if !s.encodeDrawTriangles(1, 2, [MaxSrcImages]uint32{3}, 0, Blend{}, regions, uniforms, v1, 4) {
+		t.Fatal("first shared DrawTriangles failed")
+	}
+	cursorAfterFirst := sh.cursor
+	if !s.encodeDrawTriangles(1, 2, [MaxSrcImages]uint32{3}, 6, Blend{}, regions, uniforms, v1, 4) {
+		t.Fatal("second deduplicated shared DrawTriangles failed")
+	}
+	if sh.cursor != cursorAfterFirst {
+		t.Fatalf("shared cursor grew on deduplicated draw: %d != %d", sh.cursor, cursorAfterFirst)
+	}
+	s.fillBatch(&b)
+	if b.Payload != uintptr(unsafe.Pointer(&sh.buf[128])) {
+		t.Fatalf("batch 2 Payload = %#x, want %#x", b.Payload, uintptr(unsafe.Pointer(&sh.buf[128])))
+	}
+	// InternalUniformBytes (288) aligned to 64 -> 320, plus 16 user bytes -> 336.
+	if b.PayloadLen != 336 {
+		t.Fatalf("batch 2 PayloadLen = %d, want 336", b.PayloadLen)
+	}
+	cmd0 := (*CmdDrawTriangles)(unsafe.Pointer(&s.cmdBytes()[0]))
+	if cmd0.InternalOffset != 0 || cmd0.UserOffset != 320 {
+		t.Fatalf("shared draw relative offsets = (%d, %d), want (0, 320)", cmd0.InternalOffset, cmd0.UserOffset)
+	}
+
+	// Multi-region pre-flight check: if total exceeds remaining shared space, nothing is mutated.
+	savedCmdLen, savedCmdCount, savedCursor := s.cmdLen, s.cmdCount, sh.cursor
+	big := make([]byte, 900)
+	overflowArgs := []graphicsdriver.PixelsArgs{
+		{Pixels: big, Region: image.Rect(0, 0, 225, 1)},
+		{Pixels: big, Region: image.Rect(0, 1, 225, 2)},
+	}
+	if s.encodeWritePixels(1, overflowArgs) {
+		t.Fatal("expected multi-region WritePixels to overflow shared arena")
+	}
+	if s.cmdLen != savedCmdLen || s.cmdCount != savedCmdCount || sh.cursor != savedCursor {
+		t.Fatalf("slot/shared mutated on overflow: cmdLen=%d/%d cmdCount=%d/%d cursor=%d/%d",
+			s.cmdLen, savedCmdLen, s.cmdCount, savedCmdCount, sh.cursor, savedCursor)
+	}
+
+	sh.advanceBatch()
+	s.reset()
+
+	// Single-batch Go heap fallback when rotation fails: shared cursor stays untouched,
+	// and reset() restores shared arena mode on the following batch.
+	cursorBeforeFallback := sh.cursor
+	s.forceHeap = true
+	if !s.encodeWritePixels(1, []graphicsdriver.PixelsArgs{{Pixels: p0, Region: image.Rect(0, 0, 5, 1)}}) {
+		t.Fatal("heap fallback encodeWritePixels failed")
+	}
+	if s.usingShared {
+		t.Fatal("expected s.usingShared == false during forceHeap fallback")
+	}
+	if sh.cursor != cursorBeforeFallback {
+		t.Fatalf("shared cursor advanced during heap fallback: %d != %d", sh.cursor, cursorBeforeFallback)
+	}
+	s.fillBatch(&b)
+	if b.Payload != uintptr(unsafe.Pointer(&s.payload[0])) || b.PayloadLen != 20 {
+		t.Fatalf("heap fallback batch mismatch: ptr=%#x len=%d", b.Payload, b.PayloadLen)
+	}
+
+	s.reset()
+	if !s.useShared() {
+		t.Fatal("expected slot to resume shared arena mode after reset()")
 	}
 }

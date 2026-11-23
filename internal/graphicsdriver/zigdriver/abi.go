@@ -111,6 +111,13 @@ const (
 	CapFlagUnifiedMemory       uint32 = 1 << 4
 	CapFlagKeptSurfaces        uint32 = 1 << 5
 	CapFlagDamageSurfaces      uint32 = 1 << 6
+	CapFlagSharedUploadArena   uint32 = 1 << 7
+)
+
+// UploadArena.Flags bits.
+const (
+	ArenaFlagGPUMapped uint32 = 1 << 0
+	ArenaFlagCoherent  uint32 = 1 << 1
 )
 
 // SubmitResult.Flags bits.
@@ -298,6 +305,17 @@ type DebugStats struct {
 	UploadedBytes uint64
 }
 
+// UploadArena mirrors GgfxUploadArena (32 B).
+type UploadArena struct {
+	_          structs.HostLayout
+	StructSize uint32
+	ArenaID    uint32
+	Ptr        uintptr
+	Capacity   uint64
+	Alignment  uint32
+	Flags      uint32
+}
+
 // CmdSetVertices mirrors GgfxCmdSetVertices (32 B).
 type CmdSetVertices struct {
 	_                structs.HostLayout
@@ -445,6 +463,9 @@ const (
 
 	_ = uint(unsafe.Sizeof(DebugStats{}) - 64)
 	_ = uint(64 - unsafe.Sizeof(DebugStats{}))
+
+	_ = uint(unsafe.Sizeof(UploadArena{}) - 32)
+	_ = uint(32 - unsafe.Sizeof(UploadArena{}))
 
 	_ = uint(unsafe.Sizeof(CmdSetVertices{}) - 32)
 	_ = uint(32 - unsafe.Sizeof(CmdSetVertices{}))

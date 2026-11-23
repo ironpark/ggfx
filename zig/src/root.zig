@@ -358,6 +358,35 @@ pub export fn ggfx_debug_stats(
     return .ok;
 }
 
+pub export fn ggfx_acquire_upload_arena(
+    dev_opt: ?*Device,
+    min_bytes: u64,
+    out_arena_opt: ?*abi.UploadArena,
+    err_buf: ?[*]u8,
+    err_cap: usize,
+) callconv(.c) abi.Status {
+    const pool = enterAutoreleasePool();
+    defer leaveAutoreleasePool(pool);
+
+    var diag = Diag.init(err_buf, err_cap);
+    const dev = dev_opt orelse {
+        diag.set("dev is null");
+        return .err_invalid_argument;
+    };
+    const out_arena = out_arena_opt orelse {
+        diag.set("out_arena is null");
+        return .err_invalid_argument;
+    };
+    out_arena.* = std.mem.zeroes(abi.UploadArena);
+
+    if (@hasDecl(backend.Impl, "acquireUploadArena")) {
+        dev.impl.acquireUploadArena(min_bytes, out_arena, &diag) catch |err| return errors.toStatus(err);
+        return .ok;
+    }
+    diag.set("shared upload arena is not supported by this backend");
+    return .err_unsupported;
+}
+
 test {
     _ = abi;
     _ = errors;

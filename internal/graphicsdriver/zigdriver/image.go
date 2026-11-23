@@ -124,17 +124,28 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		return nil
 	}
 
-	// Flush pending commands and retry once with an empty slot.
+	// Flush pending commands and retry once with an empty slot (rotating the shared
+	// upload arena if the remaining bytes cannot hold the full write).
 	if i.g.ring.cur().cmdCount > 0 {
 		if err := i.g.submitCurrent(FlushIntermediate); err != nil {
 			return err
 		}
 	}
-	if i.g.ring.cur().encodeWritePixels(i.id, args) {
+
+	cur := i.g.ring.cur()
+	if i.g.shared.enabled && !i.g.shared.canFitWritePixels(args) {
+		totalNeed, ok := i.g.shared.writePixelsNeed(args)
+		if !ok || !i.g.rotateSharedArena(totalNeed) {
+			if len(args) == 1 {
+				cur.forceHeap = true
+			}
+		}
+	}
+	if cur.encodeWritePixels(i.id, args) {
 		return nil
 	}
 
-	// If multiple regions combined exceed the slot payload limit, stream them one by one.
+	// If multiple regions combined exceed the arena or slot payload limit, stream them one by one.
 	for idx := range args {
 		single := args[idx : idx+1]
 		if i.g.ring.cur().encodeWritePixels(i.id, single) {
@@ -145,7 +156,22 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 				return err
 			}
 		}
-		if !i.g.ring.cur().encodeWritePixels(i.id, single) {
+		cur = i.g.ring.cur()
+		if i.g.shared.enabled && !i.g.shared.canFitWritePixels(single) {
+			if !i.g.rotateSharedArena(uint64(len(args[idx].Pixels))) {
+				cur.forceHeap = true
+			}
+		}
+		if !cur.encodeWritePixels(i.id, single) {
+			if !cur.forceHeap && i.g.shared.enabled {
+				cur.forceHeap = true
+				if cur.encodeWritePixels(i.id, single) {
+					continue
+				}
+			}
+			if cur.cmdCount == 0 && cur.payLen == 0 {
+				cur.forceHeap = false
+			}
 			return fmt.Errorf("%w: WritePixels region (%d bytes) exceeds slot payload limit", ErrOutOfMemory, len(args[idx].Pixels))
 		}
 	}
@@ -196,13 +222,17 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 	cur := i.g.ring.cur()
 	var pendingPtr *Batch
 	var usedCmd, usedPay int
+	var usedShared bool
 	if cur.cmdCount > 0 {
 		i.g.ring.nextSeq++
 		cur.seq = i.g.ring.nextSeq
 		cur.fillBatch(&i.g.batch)
 		pendingPtr = &i.g.batch
 		usedCmd = cur.cmdLen
-		usedPay = cur.payLen
+		usedShared = cur.usingShared
+		if !usedShared {
+			usedPay = cur.payLen
+		}
 	}
 
 	i.g.errBuf[0] = 0
@@ -221,6 +251,9 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 	runtime.KeepAlive(i.g.readRegions)
 
 	if pendingPtr != nil {
+		if usedShared {
+			i.g.shared.advanceBatch()
+		}
 		cur.frameMaxCmd = max(cur.frameMaxCmd, usedCmd)
 		cur.frameMaxPay = max(cur.frameMaxPay, usedPay)
 		cur.reset()

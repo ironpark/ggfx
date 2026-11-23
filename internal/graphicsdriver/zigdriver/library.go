@@ -77,7 +77,7 @@ func callN(fn uintptr, n int, a1, a2, a3, a4, a5, a6, a7 uintptr) uintptr {
 	return r
 }
 
-// library holds resolved symbol addresses for the 14 exported C ABI functions.
+// library holds resolved symbol addresses for the 15 exported C ABI functions.
 // Methods invoke each symbol directly via purego.SyscallN to avoid per-call
 // reflection boxing allocations. Every parameter is strictly a pointer or
 // integer scalar.
@@ -99,6 +99,7 @@ type library struct {
 	fnSurfaceSetWindowState uintptr
 	fnSurfaceKept           uintptr
 	fnDebugStats            uintptr
+	fnAcquireUploadArena    uintptr
 }
 
 type libSymbol struct {
@@ -122,6 +123,7 @@ func (l *library) symbols() []libSymbol {
 		{"ggfx_surface_set_window_state", &l.fnSurfaceSetWindowState},
 		{"ggfx_surface_kept", &l.fnSurfaceKept},
 		{"ggfx_debug_stats", &l.fnDebugStats},
+		{"ggfx_acquire_upload_arena", &l.fnAcquireUploadArena},
 	}
 }
 
@@ -252,6 +254,19 @@ func (l *library) surfaceKept(dev uintptr, surfaceID uint32) uint32 {
 func (l *library) debugStats(dev uintptr, out *DebugStats) int32 {
 	r := call2(l.fnDebugStats, dev, uintptr(unsafe.Pointer(out)))
 	runtime.KeepAlive(out)
+	return int32(r)
+}
+
+func (l *library) acquireUploadArena(dev uintptr, minBytes uint64, outArena *UploadArena, errBuf *byte, errCap uintptr) int32 {
+	r := call5(l.fnAcquireUploadArena,
+		dev,
+		uintptr(minBytes),
+		uintptr(unsafe.Pointer(outArena)),
+		uintptr(unsafe.Pointer(errBuf)),
+		errCap,
+	)
+	runtime.KeepAlive(outArena)
+	runtime.KeepAlive(errBuf)
 	return int32(r)
 }
 

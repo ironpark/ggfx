@@ -9,6 +9,8 @@ const Error = errors.Error;
 const Diag = errors.Diag;
 
 pub const min_ring_size: usize = 256 * 1024;
+pub const default_shared_arena_size: u64 = 4 << 20; // 4 MiB
+pub const max_shared_arena_size: u64 = 256 << 20; // 256 MiB
 pub const vb_ib_alignment: usize = 4;
 pub const cbv_alignment: usize = d3d12.D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT; // 256
 pub const texture_placement_alignment: usize = d3d12.D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512
@@ -20,6 +22,11 @@ pub inline fn alignUp(val: usize, alignment: usize) usize {
 }
 
 pub inline fn alignUpU32(val: u32, alignment: u32) u32 {
+    std.debug.assert(std.math.isPowerOfTwo(alignment));
+    return (val + alignment - 1) & ~(alignment - 1);
+}
+
+pub inline fn alignUpU64(val: u64, alignment: u64) u64 {
     std.debug.assert(std.math.isPowerOfTwo(alignment));
     return (val + alignment - 1) & ~(alignment - 1);
 }
@@ -65,6 +72,34 @@ pub fn createBuffer(
         return win32.hrToError(hr);
     }
     return res.?;
+}
+
+pub const MappedUploadBuffer = struct {
+    resource: *d3d12.ID3D12Resource,
+    cpu_ptr: [*]u8,
+    size: u64,
+};
+
+/// Creates and persistently maps a D3D12_HEAP_TYPE_UPLOAD buffer for the shared upload arena.
+pub fn createMappedUploadBuffer(
+    device: *d3d12.ID3D12Device,
+    size_bytes: u64,
+    diag: *Diag,
+) Error!MappedUploadBuffer {
+    const buf = try createBuffer(device, size_bytes, d3d12.D3D12_HEAP_TYPE_UPLOAD, diag);
+    var mapped_raw: ?*anyopaque = null;
+    const read_range = d3d12.D3D12_RANGE{ .Begin = 0, .End = 0 };
+    const hr = buf.map(0, &read_range, &mapped_raw);
+    if (win32.failed(hr) or mapped_raw == null) {
+        _ = buf.release();
+        diag.print("directx: ID3D12Resource::Map(shared upload arena) failed (0x{x:0>8})", .{win32.hrHex(hr)});
+        return win32.hrToError(hr);
+    }
+    return .{
+        .resource = buf,
+        .cpu_ptr = @ptrCast(mapped_raw.?),
+        .size = size_bytes,
+    };
 }
 
 pub const Allocation = struct {

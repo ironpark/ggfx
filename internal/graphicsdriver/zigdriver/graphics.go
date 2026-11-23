@@ -65,6 +65,7 @@ type Graphics struct {
 	colorSpace color.ColorSpace
 
 	ring    ring
+	shared  sharedUploadArena
 	inBatch bool
 	closed  atomic.Bool
 
@@ -96,6 +97,7 @@ type Graphics struct {
 	// Reusable FFI descriptors kept on heap-resident Graphics.
 	batch       Batch
 	submitRes   SubmitResult
+	uploadArena UploadArena
 	readRegions []ReadRegion
 	errBuf      [1024]byte
 
@@ -186,8 +188,35 @@ func NewGraphics(o Options) (*Graphics, error) {
 		g.colorSpace = color.ColorSpace(g.caps.ColorSpace)
 	}
 	g.ring.init(slots)
+	g.ring.setShared(&g.shared)
+	if g.caps.Flags&CapFlagSharedUploadArena != 0 {
+		_ = g.acquireSharedArena(0)
+	}
 	deviceCreated.Store(true)
 	return g, nil
+}
+
+func (g *Graphics) acquireSharedArena(minBytes uint64) bool {
+	if g.dev == 0 || g.caps.Flags&CapFlagSharedUploadArena == 0 {
+		return false
+	}
+	g.errBuf[0] = 0
+	g.uploadArena = UploadArena{}
+	st := g.lib.acquireUploadArena(g.dev, minBytes, &g.uploadArena, &g.errBuf[0], uintptr(len(g.errBuf)))
+	if st != StatusOK {
+		return false
+	}
+	return g.shared.set(g.uploadArena)
+}
+
+func (g *Graphics) rotateSharedArena(minBytes uint64) bool {
+	return g.acquireSharedArena(minBytes)
+}
+
+// SharedUploadArenaActive reports whether the device is currently writing batch
+// payloads directly into a native GPU-mapped shared upload arena.
+func (g *Graphics) SharedUploadArenaActive() bool {
+	return g.shared.enabled && len(g.shared.buf) > 0
 }
 
 // Initialize implements graphicsdriver.Graphics. Device initialization happens in NewGraphics.
@@ -345,7 +374,11 @@ func (g *Graphics) submitCurrent(flushMode uint32) error {
 	cur.fillBatch(&g.batch)
 
 	usedCmd := cur.cmdLen
-	usedPay := cur.payLen
+	usedShared := cur.usingShared
+	usedPay := 0
+	if !usedShared {
+		usedPay = cur.payLen
+	}
 
 	g.errBuf[0] = 0
 	st := g.lib.submit(g.dev, &g.batch, flushMode, &g.submitRes, &g.errBuf[0], uintptr(len(g.errBuf)))
@@ -353,6 +386,9 @@ func (g *Graphics) submitCurrent(flushMode uint32) error {
 	runtime.KeepAlive(&g.batch)
 	runtime.KeepAlive(&g.submitRes)
 
+	if usedShared {
+		g.shared.advanceBatch()
+	}
 	cur.reset()
 	if st == StatusOK {
 		g.releaseDeferredIDs()
@@ -491,10 +527,32 @@ func (g *Graphics) DrawTriangles(
 			return err
 		}
 	}
-	if !g.ring.cur().encodeDrawTriangles(
+
+	cur := g.ring.cur()
+	if g.shared.enabled {
+		need := g.shared.drawUniformsNeed(sh.userUniformDwords)
+		if !g.shared.canFit(need) {
+			if !g.rotateSharedArena(need) {
+				cur.forceHeap = true
+			}
+		}
+	}
+	if !cur.encodeDrawTriangles(
 		dstImg.id, sh.id, srcIDs, uint32(indexOffset), abiBlend,
 		dstRegions, uniforms, versions, sh.userUniformDwords,
 	) {
+		if !cur.forceHeap && g.shared.enabled {
+			cur.forceHeap = true
+			if cur.encodeDrawTriangles(
+				dstImg.id, sh.id, srcIDs, uint32(indexOffset), abiBlend,
+				dstRegions, uniforms, versions, sh.userUniformDwords,
+			) {
+				return nil
+			}
+		}
+		if cur.cmdCount == 0 && cur.payLen == 0 {
+			cur.forceHeap = false
+		}
 		return fmt.Errorf("%w: uniform payload exceeds slot limit", ErrOutOfMemory)
 	}
 	return nil
@@ -514,6 +572,7 @@ func (g *Graphics) Close() error {
 
 	g.devMu.Lock()
 	defer g.devMu.Unlock()
+	g.shared.clear()
 	if g.dev == 0 {
 		return flushErr
 	}

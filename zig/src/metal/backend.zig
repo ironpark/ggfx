@@ -26,6 +26,8 @@ const metal_vertex_buffer_index: usize = 0;
 const metal_internal_uniform_buffer_index: usize = 1;
 const metal_user_uniform_buffer_index: usize = 2;
 const metal_max_inline_uniform_bytes: usize = 4096;
+const max_shared_arena_bytes: u64 = 256 << 20;
+const default_shared_arena_bytes: usize = 4 << 20;
 const housekeeping_tick_ns: u64 = 50 * std.time.ns_per_ms;
 
 const Image = struct {
@@ -63,9 +65,10 @@ pub const Backend = struct {
     max_image_size: u32,
     supports_a8: bool,
 
-    // Active command buffer & render encoder (render thread only).
+    // Active command buffer & encoders (render thread only; at most one encoder active at a time).
     cb: mtl.CommandBuffer = .{},
     rce: mtl.RenderCommandEncoder = .{},
+    bce: mtl.BlitCommandEncoder = .{},
     encoders: u32 = 0,
     encoder_has_drawn: bool = false,
     cache: state_cache.BindCache = .{},
@@ -75,6 +78,11 @@ pub const Backend = struct {
     // Current vertex & index buffers (owned by ring's current FrameResources).
     vb: mtl.Buffer = .{},
     ib: mtl.Buffer = .{},
+
+    // Standalone GPU-mapped shared upload arena (exclusively owned by Backend until retired).
+    shared_upload_buf: mtl.Buffer = .{},
+    shared_upload_ptr: ?[*]u8 = null,
+    shared_arena_id: u32 = 0,
 
     ring: buffers.ResourceRing,
     vertex_cache: pipeline.VertexStageCache = .{},
@@ -165,6 +173,7 @@ pub const Backend = struct {
             (if (supports_a8) abi.cap_supports_a8 else 0) |
             abi.cap_kept_surfaces |
             abi.cap_damage_surfaces |
+            abi.cap_shared_upload_arena |
             (if (dev.has_unified_memory) abi.cap_unified_memory else 0);
         caps.shader_format = @intFromEnum(abi.ShaderFormat.msl);
         caps.shader_version = 0;
@@ -196,6 +205,7 @@ pub const Backend = struct {
 
         // 2. End any active encoder and commit any active command buffer so waits never stall.
         self.flushRenderCommandEncoderIfNeeded();
+        self.flushBlitCommandEncoderIfNeeded();
         if (!self.cb.isNull()) {
             self.cb.commit();
             self.cb = .{};
@@ -215,6 +225,11 @@ pub const Backend = struct {
 
         // 4. Wait for all in-flight GPU work and release pooled/transient buffers & CBs.
         self.ring.deinit(gpa);
+        if (!self.shared_upload_buf.isNull()) {
+            self.shared_upload_buf.release();
+            self.shared_upload_buf = .{};
+            self.shared_upload_ptr = null;
+        }
 
         // 5. Release all live images.
         for (self.images.items.items) |*slot| {
@@ -329,6 +344,7 @@ pub const Backend = struct {
 
     pub fn abortBatch(self: *Backend) void {
         self.flushRenderCommandEncoderIfNeeded();
+        self.flushBlitCommandEncoderIfNeeded();
         if (!self.cb.isNull()) {
             // Discard uncommitted command buffer cleanly so partial commands are never sent to GPU.
             self.ring.untrackCommandBuffer(self.cb);
@@ -490,6 +506,7 @@ pub const Backend = struct {
     }
 
     pub fn disposeImage(self: *Backend, id: u32) Error!void {
+        self.flushBlitCommandEncoderIfNeeded();
         const img = try self.images.remove(id);
         if (self.last_dst_id == id) {
             self.flushRenderCommandEncoderIfNeeded();
@@ -592,9 +609,47 @@ pub const Backend = struct {
         }
         if (total_aligned == 0) return;
 
-        self.flushRenderCommandEncoderIfNeeded();
+        // Zero-copy fast path: payload already resides in the GPU-mapped shared upload arena.
+        if (self.sharedPayloadOffset(payload)) |base_off| {
+            const bce = try self.ensureBlitCommandEncoder(diag);
+            if (!self.device.has_unified_memory) {
+                var min_off: usize = std.math.maxInt(usize);
+                var max_end: usize = 0;
+                for (regions) |r| {
+                    if (r.payload_len == 0) continue;
+                    const r_off: usize = base_off + r.payload_offset;
+                    const r_end: usize = r_off + r.payload_len;
+                    if (r_off < min_off) min_off = r_off;
+                    if (r_end > max_end) max_end = r_end;
+                }
+                if (max_end > min_off) {
+                    self.shared_upload_buf.didModifyRange(min_off, max_end - min_off);
+                }
+            }
+            for (regions) |r| {
+                if (r.payload_len == 0) continue;
+                const dx: usize = @intCast(r.rect.x1 - r.rect.x0);
+                const dy: usize = @intCast(r.rect.y1 - r.rect.y0);
+                const bpr = bpp * dx;
+                const bpi = bpr * dy;
+                bce.copyFromBuffer(
+                    self.shared_upload_buf,
+                    base_off + r.payload_offset,
+                    bpr,
+                    bpi,
+                    .{ .width = dx, .height = dy, .depth = 1 },
+                    img.texture,
+                    0,
+                    0,
+                    .{ .x = @intCast(r.rect.x0), .y = @intCast(r.rect.y0), .z = 0 },
+                );
+            }
+            self.uploaded_bytes += total_raw;
+            return;
+        }
 
-        try self.ensureCommandBuffer();
+        // Fallback staging path: copy into per-frame upload ring buffer, sharing the active blit encoder.
+        const bce = try self.ensureBlitCommandEncoder(diag);
         const alloc = self.ring.uploadSpace(self.gpa, total_aligned) catch {
             diag.print("metal: writePixels uploadSpace({d}) failed", .{total_aligned});
             return error.OutOfMemory;
@@ -614,8 +669,6 @@ pub const Backend = struct {
         }
         alloc.buf.didModifyRange(alloc.offset, total_aligned);
 
-        const cb = try self.encoderCommandBuffer();
-        const bce = cb.blitCommandEncoder();
         o = alloc.offset;
         for (regions) |r| {
             if (r.payload_len == 0) continue;
@@ -636,12 +689,13 @@ pub const Backend = struct {
             );
             o += buffers.alignUploadOffset(r.payload_len);
         }
-        bce.endEncoding();
 
         self.uploaded_bytes += total_raw;
     }
 
     pub fn drawTriangles(self: *Backend, dc: *const replayer.DrawCall, diag: *Diag) Error!void {
+        self.flushBlitCommandEncoderIfNeeded();
+
         const dst = self.images.get(dc.dst) catch {
             diag.print("metal: drawTriangles unknown dst image {d}", .{dc.dst});
             return error.UnknownHandle;
@@ -781,7 +835,7 @@ pub const Backend = struct {
             }
         }
 
-        // 5. User uniform block (<=4096B inline via setFragmentBytes, >4096B via 16B-aligned upload buffer).
+        // 5. User uniform block (<=4096B inline via setFragmentBytes, >4096B via shared arena or upload buffer).
         if (dc.user.len > 0) {
             if (self.cache.user_version == dc.user_version) {
                 self.binds_skipped += 1;
@@ -789,6 +843,12 @@ pub const Backend = struct {
                 const user_bytes = std.mem.sliceAsBytes(dc.user);
                 if (user_bytes.len <= metal_max_inline_uniform_bytes) {
                     self.rce.setFragmentBytes(user_bytes.ptr, user_bytes.len, metal_user_uniform_buffer_index);
+                } else if (self.sharedPayloadOffset(user_bytes)) |off| {
+                    if (!self.device.has_unified_memory) {
+                        self.shared_upload_buf.didModifyRange(off, user_bytes.len);
+                    }
+                    self.rce.setFragmentBuffer(self.shared_upload_buf, off, metal_user_uniform_buffer_index);
+                    self.uploaded_bytes += user_bytes.len;
                 } else {
                     const alloc = self.ring.uploadSpace(self.gpa, user_bytes.len) catch {
                         diag.print("metal: allocating user uniform upload buffer ({d} bytes) failed", .{user_bytes.len});
@@ -957,6 +1017,7 @@ pub const Backend = struct {
         }
 
         // Flush any open encoder and commit pending CB without presenting.
+        self.flushBlitCommandEncoderIfNeeded();
         try self.flushCommandBufferIfNeeded(false, null);
 
         if (self.device.has_unified_memory) {
@@ -1075,6 +1136,59 @@ pub const Backend = struct {
         return self.occluded.load(.acquire);
     }
 
+    pub fn acquireUploadArena(
+        self: *Backend,
+        min_bytes: u64,
+        out_arena: *abi.UploadArena,
+        diag: *Diag,
+    ) Error!void {
+        if (min_bytes > max_shared_arena_bytes) {
+            diag.print("metal: requested upload arena ({d} bytes) exceeds max ({d} bytes)", .{
+                min_bytes,
+                max_shared_arena_bytes,
+            });
+            return error.OutOfMemory;
+        }
+
+        // Flush any open command buffer so commands referencing the previous shared arena
+        // are committed and tracked before we retire the buffer.
+        if (!self.cb.isNull()) {
+            try self.flushCommandBufferIfNeeded(false, null);
+        }
+
+        if (!self.shared_upload_buf.isNull()) {
+            self.ring.retireSharedBuffer(self.gpa, self.shared_upload_buf);
+            self.shared_upload_buf = .{};
+            self.shared_upload_ptr = null;
+        }
+
+        const req: usize = @max(@as(usize, @intCast(min_bytes)), default_shared_arena_bytes);
+        const buf = self.ring.acquireStandaloneBuffer(self.gpa, req) catch {
+            diag.print("metal: allocating shared upload arena ({d} bytes) failed", .{req});
+            return error.OutOfMemory;
+        };
+        const ptr = buf.contents() orelse {
+            buf.release();
+            diag.set("metal: shared upload buffer contents() returned null");
+            return error.Internal;
+        };
+
+        self.shared_upload_buf = buf;
+        self.shared_upload_ptr = ptr;
+        self.shared_arena_id +%= 1;
+        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
+
+        out_arena.* = .{
+            .struct_size = @sizeOf(abi.UploadArena),
+            .arena_id = self.shared_arena_id,
+            .ptr = ptr,
+            .capacity = buf.length,
+            .alignment = buffers.upload_alignment,
+            .flags = abi.arena_flag_gpu_mapped |
+                (if (self.device.has_unified_memory) abi.arena_flag_coherent else 0),
+        };
+    }
+
     pub fn stats(self: *Backend, out: *abi.DebugStats) void {
         self.surfaces_lock.lock();
         const live_surfaces: u64 = self.surfaces.live;
@@ -1127,7 +1241,20 @@ pub const Backend = struct {
         try self.ring.trackCommandBuffer(self.gpa, cb);
     }
 
+    fn sharedPayloadOffset(self: *const Backend, slice: []const u8) ?usize {
+        if (self.shared_upload_buf.isNull() or slice.len == 0) return null;
+        const base_ptr = self.shared_upload_ptr orelse return null;
+        const base = @intFromPtr(base_ptr);
+        const start = @intFromPtr(slice.ptr);
+        if (start < base) return null;
+        const off = start - base;
+        if (off > self.shared_upload_buf.length) return null;
+        if (slice.len > self.shared_upload_buf.length - off) return null;
+        return off;
+    }
+
     pub fn encoderCommandBuffer(self: *Backend) Error!mtl.CommandBuffer {
+        std.debug.assert(self.bce.isNull());
         if (!self.cb.isNull() and self.encoders >= max_encoders_per_command_buffer) {
             try self.flushCommandBufferIfNeeded(false, null);
         }
@@ -1145,6 +1272,27 @@ pub const Backend = struct {
         self.cache.reset();
         self.last_dst_id = 0;
         self.last_dst_surface_id = 0;
+    }
+
+    pub fn flushBlitCommandEncoderIfNeeded(self: *Backend) void {
+        if (self.bce.isNull()) return;
+        self.bce.endEncoding();
+        self.bce.release();
+        self.bce = .{};
+    }
+
+    fn ensureBlitCommandEncoder(self: *Backend, diag: *Diag) Error!mtl.BlitCommandEncoder {
+        self.flushRenderCommandEncoderIfNeeded();
+        if (!self.bce.isNull()) return self.bce;
+        const cb = try self.encoderCommandBuffer();
+        const bce = cb.blitCommandEncoder();
+        if (bce.isNull()) {
+            diag.set("metal: blitCommandEncoder returned nil");
+            return error.Internal;
+        }
+        bce.retain();
+        self.bce = bce;
+        return bce;
     }
 
     const DispatchSwapCtx = struct {
@@ -1188,6 +1336,9 @@ pub const Backend = struct {
     }
 
     fn flushCommandBufferIfNeeded(self: *Backend, present: bool, out_res: ?*abi.SubmitResult) Error!void {
+        self.flushBlitCommandEncoderIfNeeded();
+        self.flushRenderCommandEncoderIfNeeded();
+
         // Snapshot live surfaces (few in practice, typically 0..4) without holding lock during Metal calls.
         var stack_surfs: [16]*Surface = undefined;
         var dyn_surfs: std.ArrayList(*Surface) = .empty;
@@ -1233,8 +1384,6 @@ pub const Backend = struct {
             if (!has_pending) return;
             try self.ensureCommandBuffer();
         }
-
-        self.flushRenderCommandEncoderIfNeeded();
 
         const cb = self.cb;
         const mode = self.main_thread_mode.load(.acquire);

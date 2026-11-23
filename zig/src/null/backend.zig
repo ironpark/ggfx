@@ -58,6 +58,9 @@ pub const Backend = struct {
     uploaded_bytes: u64 = 0,
     completed_frames: u64 = 0,
 
+    shared_arena: []align(16) u8 = &.{},
+    shared_arena_id: u32 = 0,
+
     pub fn init(gpa: Allocator, opts: *const abi.DeviceOptions, caps: *abi.DriverCaps, diag: *Diag) Error!*Backend {
         _ = diag;
         const self = gpa.create(Backend) catch return error.OutOfMemory;
@@ -70,7 +73,7 @@ pub const Backend = struct {
         caps.struct_size = @sizeOf(abi.DriverCaps);
         caps.backend = @intFromEnum(abi.Backend.null);
         caps.max_image_size = max_image_size;
-        caps.flags = abi.cap_supports_a8;
+        caps.flags = abi.cap_supports_a8 | abi.cap_shared_upload_arena;
         caps.shader_format = @intFromEnum(abi.ShaderFormat.spirv);
         caps.shader_version = 10;
         caps.color_space = opts.color_space;
@@ -97,6 +100,11 @@ pub const Backend = struct {
         self.surfaces.deinit(gpa);
         self.surfaces_lock.unlock();
         self.surfaces_lock.deinit();
+
+        if (self.shared_arena.len > 0) {
+            gpa.free(self.shared_arena);
+            self.shared_arena = &.{};
+        }
 
         gpa.destroy(self);
     }
@@ -512,6 +520,37 @@ pub const Backend = struct {
             .draws = self.draws,
             .binds_skipped = self.binds_skipped,
             .uploaded_bytes = self.uploaded_bytes,
+        };
+    }
+
+    pub fn acquireUploadArena(
+        self: *Backend,
+        min_bytes: u64,
+        out_arena: *abi.UploadArena,
+        diag: *Diag,
+    ) Error!void {
+        const max_cap: u64 = 256 << 20;
+        const default_cap: u64 = 256 << 10;
+        if (min_bytes > max_cap) {
+            diag.print("null: acquireUploadArena min_bytes {d} exceeds max {d}", .{ min_bytes, max_cap });
+            return error.OutOfMemory;
+        }
+        const raw_want: usize = @intCast(@max(min_bytes, default_cap));
+        const want = (raw_want + 15) & ~@as(usize, 15);
+        if (self.shared_arena.len < want) {
+            const next = self.gpa.alignedAlloc(u8, .@"16", want) catch return error.OutOfMemory;
+            if (self.shared_arena.len > 0) self.gpa.free(self.shared_arena);
+            self.shared_arena = next;
+        }
+        self.shared_arena_id +%= 1;
+        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
+        out_arena.* = .{
+            .struct_size = @sizeOf(abi.UploadArena),
+            .arena_id = self.shared_arena_id,
+            .ptr = self.shared_arena.ptr,
+            .capacity = self.shared_arena.len,
+            .alignment = 16,
+            .flags = abi.arena_flag_coherent,
         };
     }
 };

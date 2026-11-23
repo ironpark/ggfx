@@ -234,6 +234,39 @@ pub const ResourceRing = struct {
         return buf;
     }
 
+    /// Acquires a buffer with standalone ownership (not attached to FrameResources).
+    /// Reclaims completed frames first so recently retired arenas can be reused immediately.
+    pub fn acquireStandaloneBuffer(self: *ResourceRing, gpa: Allocator, length: usize) Error!mtl.Buffer {
+        self.gc(gpa);
+        const req = if (length == 0) 16 else length;
+        if (self.unused_buffers.get(req)) |b| {
+            return b;
+        }
+        const alloc_len = nextPowerOf2(req);
+        const b = self.device.newBufferWithLength(alloc_len, self.device.bufferResourceOptions());
+        if (b.isNull()) return error.OutOfMemory;
+        return b;
+    }
+
+    /// Retires a standalone shared upload buffer so it is only returned to the pool after
+    /// the most recently submitted command buffer finishes executing on the serial queue.
+    pub fn retireSharedBuffer(self: *ResourceRing, gpa: Allocator, buf: mtl.Buffer) void {
+        if (buf.isNull()) return;
+        var i: usize = self.in_flight.items.len;
+        while (i > 0) {
+            i -= 1;
+            const r = self.in_flight.items[i];
+            if (r.cbs.items.len > 0) {
+                r.buffers.append(gpa, buf) catch {
+                    self.waitAllInFlight();
+                    buf.release();
+                };
+                return;
+            }
+        }
+        self.unused_buffers.put(gpa, buf, self.frame);
+    }
+
     pub const UploadAlloc = struct {
         buf: mtl.Buffer,
         offset: usize,

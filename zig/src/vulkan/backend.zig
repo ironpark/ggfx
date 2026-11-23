@@ -253,6 +253,10 @@ pub const Backend = struct {
     readback: upload_mod.ReadbackBuffer = .{},
     drawn_surfaces: std.ArrayList(u32) = .empty,
 
+    // Active GPU-mapped shared upload arena (zero-copy writePixels).
+    shared_upload_chunk: ?upload_mod.Chunk = null,
+    shared_arena_id: u32 = 0,
+
     main_thread_mode: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     next_shader_gen: u64 = 1,
 
@@ -324,6 +328,7 @@ pub const Backend = struct {
             "vkResetCommandPool(init)",
         );
 
+        caps.flags |= abi.cap_shared_upload_arena;
         return self;
     }
 
@@ -375,6 +380,10 @@ pub const Backend = struct {
 
         self.drawn_surfaces.deinit(gpa);
         self.readback.deinit(&self.dev, &self.mem);
+        if (self.shared_upload_chunk) |chunk| {
+            upload_mod.destroyChunk(&self.dev, &self.mem, chunk);
+            self.shared_upload_chunk = null;
+        }
 
         for (0..self.frames_in_flight) |i| {
             self.frames[i].deinit(gpa, &self.dev, &self.mem);
@@ -685,6 +694,23 @@ pub const Backend = struct {
                     try self.submitActiveCommandBuffer(&.{}, diag);
                 }
                 const frame = self.currentFrame();
+                // If retired upload chunks (e.g. rotated shared arena) are queued in this slot,
+                // ensure any earlier in-flight frame slots have also completed before freeing them.
+                if (frame.upload.retired.items.len > 0) {
+                    for (0..self.frames_in_flight) |i| {
+                        if (i == self.frame_index) continue;
+                        for (self.frames[i].cmd_entries.items) |*entry| {
+                            if (entry.submitted) {
+                                try loader_mod.check(
+                                    self.dev.disp.vkWaitForFences(self.dev.handle, 1, @ptrCast(&entry.fence), vk.TRUE, std.math.maxInt(u64)),
+                                    diag,
+                                    "vkWaitForFences(retired)",
+                                );
+                                entry.submitted = false;
+                            }
+                        }
+                    }
+                }
                 try frame.waitAndReset(&self.dev, &self.mem, diag);
                 // Any swapchain image acquired during this frame was not presented: discard safely
                 // so acquire semaphores are never left signaled and swapchain slots never exhaust.
@@ -1168,9 +1194,57 @@ pub const Backend = struct {
         const copy_align = @max(@max(self.dev.props.limits.optimalBufferCopyOffsetAlignment, bpp), 4);
         const frame = self.currentFrame();
 
+        // Check if payload resides inside the active GPU-mapped shared upload arena for zero-copy transfer.
+        var shared_buf: vk.Buffer = .null_handle;
+        var shared_base_off: u64 = 0;
+        var shared_cap: u64 = 0;
+        if (self.shared_upload_chunk) |chunk| {
+            if (chunk.alloc.mapped) |chunk_base_ptr| {
+                if (payload.len > 0) {
+                    const p_addr: usize = @intFromPtr(payload.ptr);
+                    const c_addr: usize = @intFromPtr(chunk_base_ptr);
+                    const c_cap: usize = @intCast(chunk.capacity);
+                    if (p_addr >= c_addr and p_addr - c_addr <= c_cap and payload.len <= c_cap - (p_addr - c_addr)) {
+                        shared_buf = chunk.buffer;
+                        shared_base_off = @intCast(p_addr - c_addr);
+                        shared_cap = chunk.capacity;
+                    }
+                }
+            }
+        }
+
         for (regions) |r| {
             const bounds = validateRect(r.rect, img.internal_width, img.internal_height).?;
             if (bounds.dx == 0 or bounds.dy == 0 or r.payload_len == 0) continue;
+
+            if (shared_buf != .null_handle) {
+                const buf_off = shared_base_off + @as(u64, r.payload_offset);
+                if ((buf_off % bpp) == 0 and buf_off + r.payload_len <= shared_cap) {
+                    const copy_region = vk.BufferImageCopy{
+                        .bufferOffset = buf_off,
+                        .bufferRowLength = 0, // tightly packed
+                        .bufferImageHeight = 0,
+                        .imageSubresource = .{
+                            .aspectMask = vk.ImageAspect.color_bit,
+                            .mipLevel = 0,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                        .imageOffset = .{ .x = @intCast(bounds.x0), .y = @intCast(bounds.y0), .z = 0 },
+                        .imageExtent = .{ .width = bounds.dx, .height = bounds.dy, .depth = 1 },
+                    };
+                    self.dev.disp.vkCmdCopyBufferToImage(
+                        cb,
+                        shared_buf,
+                        img.vk_image,
+                        .transfer_dst_optimal,
+                        1,
+                        @ptrCast(&copy_region),
+                    );
+                    self.uploaded_bytes += r.payload_len;
+                    continue;
+                }
+            }
 
             const slice = try frame.upload.alloc(self.gpa, &self.dev, &self.mem, r.payload_len, copy_align, diag);
             @memcpy(
@@ -1751,6 +1825,50 @@ pub const Backend = struct {
     pub fn isOccluded(self: *Backend) bool {
         _ = self;
         return false;
+    }
+
+    pub fn acquireUploadArena(
+        self: *Backend,
+        min_bytes: u64,
+        out_arena: *abi.UploadArena,
+        diag: *Diag,
+    ) Error!void {
+        if (min_bytes > upload_mod.max_shared_arena_size) {
+            diag.print("vulkan: requested shared upload arena size ({d} B) exceeds maximum ({d} B)", .{
+                min_bytes,
+                upload_mod.max_shared_arena_size,
+            });
+            return error.OutOfMemory;
+        }
+
+        const raw_align: u32 = @intCast(@min(self.dev.props.limits.optimalBufferCopyOffsetAlignment, @as(u64, 4096)));
+        const alignment: u32 = std.math.ceilPowerOfTwoAssert(u32, @max(@as(u32, 16), raw_align));
+        const capacity: u64 = memory_mod.alignUp(@max(min_bytes, upload_mod.default_shared_arena_size), 16);
+
+        const new_chunk = try upload_mod.createSharedChunk(&self.dev, &self.mem, capacity, diag);
+        errdefer upload_mod.destroyChunk(&self.dev, &self.mem, new_chunk);
+
+        const mapped_ptr = new_chunk.alloc.mapped orelse {
+            diag.set("vulkan: shared upload arena memory is not mapped");
+            return error.Internal;
+        };
+
+        if (self.shared_upload_chunk) |old_chunk| {
+            try self.currentFrame().upload.retireChunk(self.gpa, old_chunk);
+        }
+
+        self.shared_upload_chunk = new_chunk;
+        self.shared_arena_id +%= 1;
+        if (self.shared_arena_id == 0) self.shared_arena_id = 1;
+
+        out_arena.* = .{
+            .struct_size = @sizeOf(abi.UploadArena),
+            .arena_id = self.shared_arena_id,
+            .ptr = mapped_ptr,
+            .capacity = new_chunk.capacity,
+            .alignment = alignment,
+            .flags = abi.arena_flag_gpu_mapped | abi.arena_flag_coherent,
+        };
     }
 
     pub fn stats(self: *Backend, out: *abi.DebugStats) void {

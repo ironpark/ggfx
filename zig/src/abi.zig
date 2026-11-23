@@ -126,6 +126,11 @@ pub const cap_direct_composition: u32 = 1 << 3;
 pub const cap_unified_memory: u32 = 1 << 4;
 pub const cap_kept_surfaces: u32 = 1 << 5;
 pub const cap_damage_surfaces: u32 = 1 << 6;
+pub const cap_shared_upload_arena: u32 = 1 << 7;
+
+// UploadArena.flags
+pub const arena_flag_gpu_mapped: u32 = 1 << 0;
+pub const arena_flag_coherent: u32 = 1 << 1;
 
 // SubmitResult.flags
 pub const result_occluded: u32 = 1 << 0;
@@ -285,6 +290,15 @@ pub const DebugStats = extern struct {
     draws: u64,
     binds_skipped: u64,
     uploaded_bytes: u64,
+};
+
+pub const UploadArena = extern struct {
+    struct_size: u32,
+    arena_id: u32,
+    ptr: ?[*]u8,
+    capacity: u64,
+    alignment: u32,
+    flags: u32,
 };
 
 pub const CmdSetVertices = extern struct {
@@ -497,6 +511,14 @@ comptime {
     checkOffset(DebugStats, "draws", 40);
     checkOffset(DebugStats, "binds_skipped", 48);
     checkOffset(DebugStats, "uploaded_bytes", 56);
+
+    checkSize(UploadArena, 32);
+    checkOffset(UploadArena, "struct_size", 0);
+    checkOffset(UploadArena, "arena_id", 4);
+    checkOffset(UploadArena, "ptr", 8);
+    checkOffset(UploadArena, "capacity", 16);
+    checkOffset(UploadArena, "alignment", 24);
+    checkOffset(UploadArena, "flags", 28);
 
     checkSize(CmdSetVertices, 32);
     checkOffset(CmdSetVertices, "hdr", 0);

@@ -116,6 +116,11 @@ enum {
 #define GGFX_CAP_UNIFIED_MEMORY        (1u << 4)
 #define GGFX_CAP_KEPT_SURFACES         (1u << 5)
 #define GGFX_CAP_DAMAGE_SURFACES       (1u << 6)
+#define GGFX_CAP_SHARED_UPLOAD_ARENA   (1u << 7)
+
+/* GgfxUploadArena.flags */
+#define GGFX_ARENA_FLAG_GPU_MAPPED (1u << 0)
+#define GGFX_ARENA_FLAG_COHERENT   (1u << 1)
 
 /* GgfxSubmitResult.flags */
 #define GGFX_RESULT_OCCLUDED                  (1u << 0)
@@ -268,6 +273,15 @@ typedef struct GgfxDebugStats {
     uint64_t uploaded_bytes;
 } GgfxDebugStats;
 
+typedef struct GgfxUploadArena {
+    uint32_t struct_size;
+    uint32_t arena_id;
+    uint8_t* ptr;
+    uint64_t capacity;
+    uint32_t alignment;
+    uint32_t flags;
+} GgfxUploadArena;
+
 /* Command records (8-byte aligned inside GgfxBatch.cmds) */
 typedef struct GgfxCmdSetVertices {
     GgfxCmdHeader   hdr;
@@ -357,7 +371,7 @@ typedef struct GgfxCmdSetDamage {
     /* Followed by GgfxRect[count] (0 if count == GGFX_DAMAGE_FULL) */
 } GgfxCmdSetDamage;
 
-/* Exported functions (14) */
+/* Exported functions (15) */
 uint32_t   ggfx_abi_version(void);
 GgfxStatus ggfx_device_create(const GgfxDeviceOptions* opts, GgfxDevice** out_dev, GgfxDriverCaps* out_caps, char* err, size_t cap);
 GgfxStatus ggfx_device_destroy(GgfxDevice* dev, char* err, size_t cap);
@@ -373,6 +387,7 @@ GgfxStatus ggfx_surface_create(GgfxDevice* dev, uint32_t surface_id, const GgfxS
 void       ggfx_surface_set_window_state(GgfxDevice* dev, uint32_t surface_id, uint32_t state_flags);
 uint32_t   ggfx_surface_kept(GgfxDevice* dev, uint32_t surface_id);
 GgfxStatus ggfx_debug_stats(GgfxDevice* dev, GgfxDebugStats* out);
+GgfxStatus ggfx_acquire_upload_arena(GgfxDevice* dev, uint64_t min_bytes, GgfxUploadArena* out_arena, char* err, size_t cap);
 
 #ifdef __cplusplus
 }

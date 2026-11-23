@@ -645,6 +645,14 @@ pub const BlitCommandEncoder = struct {
         return self.id == null;
     }
 
+    pub inline fn retain(self: BlitCommandEncoder) void {
+        _ = objc.retain(self.id);
+    }
+
+    pub inline fn release(self: BlitCommandEncoder) void {
+        objc.release(self.id);
+    }
+
     pub inline fn endEncoding(self: BlitCommandEncoder) void {
         const rt = objc.get();
         objc.send(*const fn (Id, Sel) callconv(.c) void)(self.id, rt.sels.endEncoding);
