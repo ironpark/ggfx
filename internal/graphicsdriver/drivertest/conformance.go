@@ -19,6 +19,7 @@ package drivertest
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"math"
 	"sync/atomic"
@@ -52,16 +53,25 @@ func DefaultRunner(g graphicsdriver.Graphics) func(func(graphicsdriver.Graphics)
 	}
 }
 
+// drivertestVersionBit places conformance-suite uniform versions in a high range
+// below remote.Replayer's 48-bit limit, disjoint from graphicscommand's counter
+// (which counts up from 1) and remote.Replayer's salted versions (bit 63 set).
+// This prevents false cache hits when RunSuite shares a live driver with
+// graphicscommand (e.g. after atlas initialization cleared a page with version 1).
+const drivertestVersionBit uint64 = 1 << 47
+
 var nextVersion atomic.Uint64
 
 func allocVersions() graphicsdriver.UniformVersions {
 	return graphicsdriver.UniformVersions{
-		Internal: nextVersion.Add(1),
-		User:     nextVersion.Add(1),
+		Internal: drivertestVersionBit | nextVersion.Add(1),
+		User:     drivertestVersionBit | nextVersion.Add(1),
 	}
 }
 
 // RunSuite verifies the core graphicsdriver.Graphics contract on g.
+// Callbacks passed to opts.Run may execute on a dedicated render thread, so
+// failures inside them are returned as errors rather than calling t.Fatal.
 func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 	run := opts.Run
 	if run == nil {
@@ -70,13 +80,14 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 
 	t.Run("Capabilities", func(t *testing.T) {
 		if err := run(func(g graphicsdriver.Graphics) error {
+			var errs []error
 			if !g.SupportsPixelFormat(graphicsdriver.PixelFormatRGBA8) {
-				t.Errorf("SupportsPixelFormat(RGBA8) = false, want true")
+				errs = append(errs, errors.New("SupportsPixelFormat(RGBA8) = false, want true"))
 			}
 			if maxSize := g.MaxImageSize(); maxSize < 256 {
-				t.Errorf("MaxImageSize() = %d, want >= 256", maxSize)
+				errs = append(errs, fmt.Errorf("MaxImageSize() = %d, want >= 256", maxSize))
 			}
-			return nil
+			return errors.Join(errs...)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -108,7 +119,7 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 				return err
 			}
 			if !bytes.Equal(got, src) {
-				t.Errorf("full RGBA8 round-trip mismatch")
+				return errors.New("full RGBA8 round-trip mismatch")
 			}
 
 			// Sub-region overwrite and readback.
@@ -129,7 +140,7 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 				return err
 			}
 			if !bytes.Equal(gotSub, patch) {
-				t.Errorf("sub-region RGBA8 round-trip mismatch")
+				return errors.New("sub-region RGBA8 round-trip mismatch")
 			}
 			return nil
 		}); err != nil {
@@ -165,7 +176,7 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 				return err
 			}
 			if !bytes.Equal(got, src) {
-				t.Errorf("A8 round-trip mismatch")
+				return errors.New("A8 round-trip mismatch")
 			}
 			return nil
 		}); err != nil {
@@ -247,7 +258,7 @@ func RunSuite(t *testing.T, g graphicsdriver.Graphics, opts Options) {
 					}
 					gotPx := [4]byte(got[off : off+4])
 					if gotPx != want {
-						t.Fatalf("pixel (%d,%d) inClip=%v: got %v, want %v", x, y, inClip, gotPx, want)
+						return fmt.Errorf("pixel (%d,%d) inClip=%v: got %v, want %v", x, y, inClip, gotPx, want)
 					}
 				}
 			}

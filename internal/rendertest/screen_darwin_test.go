@@ -61,12 +61,15 @@ func TestScreenAsSource(t *testing.T) {
 			t.Fatal(err)
 		}
 		screen := fr.Screen(viewSurface, 16, 16)
+		viewSurface.SetDamage(nil)
 		if !screen.CanBeSource() {
 			t.Fatal("a Metal screen cannot be a source")
 		}
 		keptFrame := viewSurface.Kept()
-		if keptFrame {
-			// A kept frame starts from the last, which ended blue: read before drawing anything.
+		// A kept frame from our own previous iteration (n > 0) starts blue; n == 0 may
+		// carry whatever an earlier test drew to the shared viewSurface under -shuffle=on.
+		checkKept := n > 0 && keptFrame
+		if checkKept {
 			kept.DrawImage(screen.SubImage(image.Rect(12, 12, 13, 13)).(*ggfx.Image), &ggfx.DrawImageOptions{Blend: ggfx.BlendCopy})
 		}
 		screen.Fill(red)
@@ -85,7 +88,7 @@ func TestScreenAsSource(t *testing.T) {
 			t.Errorf("frame %d is not kept", n)
 		}
 		frame(t, func() {
-			if keptFrame {
+			if checkKept {
 				if got := kept.At(0, 0).(color.RGBA); got != blue {
 					t.Errorf("frame %d: the kept screen read %v, want %v", n, got, blue)
 				}
@@ -128,6 +131,7 @@ func TestScreenFlushesPendingVectorAtFrameEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	screen := fr.Screen(viewSurface, 16, 16)
+	viewSurface.SetDamage(nil)
 	screen.Clear()
 	vector.FillRect(screen, 0, 0, 16, 16, red, true)
 	if err := fr.End(); err != nil {
