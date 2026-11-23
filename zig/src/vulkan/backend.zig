@@ -120,6 +120,7 @@ const FrameSlot = struct {
         self: *FrameSlot,
         dev: *const device_mod.Device,
         mem: *memory_mod.MemoryAllocator,
+        shared_pool: *upload_mod.SharedChunkPool,
         diag: *Diag,
     ) Error!void {
         // Wait for every submitted command buffer in this frame slot.
@@ -141,7 +142,7 @@ const FrameSlot = struct {
             );
             self.cmd_used = 0;
         }
-        self.upload.reset(dev, mem);
+        self.upload.reset(dev, mem, shared_pool);
         self.desc_pool.reset(dev);
         self.drainDeferred(dev, mem);
     }
@@ -163,10 +164,17 @@ const FrameSlot = struct {
         self.deferred_pipelines.clearRetainingCapacity();
     }
 
-    fn deinit(self: *FrameSlot, gpa: Allocator, dev: *const device_mod.Device, mem_opt: ?*memory_mod.MemoryAllocator) void {
-        if (mem_opt) |mem| {
-            self.drainDeferred(dev, mem);
-            self.upload.deinit(gpa, dev, mem);
+    /// What `deinit` releases a slot's GPU resources into.
+    const Owners = struct {
+        mem: *memory_mod.MemoryAllocator,
+        shared_pool: *upload_mod.SharedChunkPool,
+    };
+
+    /// `owners` is null only when tearing down a slot that never held GPU resources.
+    fn deinit(self: *FrameSlot, gpa: Allocator, dev: *const device_mod.Device, owners: ?Owners) void {
+        if (owners) |o| {
+            self.drainDeferred(dev, o.mem);
+            self.upload.deinit(gpa, dev, o.mem, o.shared_pool);
         }
         self.desc_pool.deinit(gpa, dev);
         for (self.cmd_entries.items) |entry| {
@@ -192,6 +200,55 @@ fn destroyImageResources(dev: *const device_mod.Device, mem: *memory_mod.MemoryA
     if (img.vk_image != .null_handle) dev.disp.vkDestroyImage(dev.handle, img.vk_image, null);
     mem.free(img.alloc);
 }
+
+/// Argument arrays for vkQueueSubmit, kept across frames so that submitting
+/// does not allocate. Stale entries past `items.len` are never read.
+const SubmitScratch = struct {
+    wait_sems: std.ArrayList(vk.Semaphore) = .empty,
+    wait_stages: std.ArrayList(vk.Flags) = .empty,
+    pending_surfs: std.ArrayList(*swapchain_mod.Surface) = .empty,
+
+    fn clear(self: *SubmitScratch) void {
+        self.wait_sems.clearRetainingCapacity();
+        self.wait_stages.clearRetainingCapacity();
+        self.pending_surfs.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *SubmitScratch, gpa: Allocator) void {
+        self.wait_sems.deinit(gpa);
+        self.wait_stages.deinit(gpa);
+        self.pending_surfs.deinit(gpa);
+    }
+};
+
+/// Argument arrays for vkQueuePresentKHR, kept across frames like `SubmitScratch`.
+/// Separate from it because presenting submits while these are still in use.
+const PresentScratch = struct {
+    signal_sems: std.ArrayList(vk.Semaphore) = .empty,
+    present_surfs: std.ArrayList(*swapchain_mod.Surface) = .empty,
+    discard_surfs: std.ArrayList(*swapchain_mod.Surface) = .empty,
+    swapchains: std.ArrayList(vk.SwapchainKHR) = .empty,
+    img_indices: std.ArrayList(u32) = .empty,
+    results: std.ArrayList(vk.Result) = .empty,
+
+    fn clear(self: *PresentScratch) void {
+        self.signal_sems.clearRetainingCapacity();
+        self.present_surfs.clearRetainingCapacity();
+        self.discard_surfs.clearRetainingCapacity();
+        self.swapchains.clearRetainingCapacity();
+        self.img_indices.clearRetainingCapacity();
+        self.results.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *PresentScratch, gpa: Allocator) void {
+        self.signal_sems.deinit(gpa);
+        self.present_surfs.deinit(gpa);
+        self.discard_surfs.deinit(gpa);
+        self.swapchains.deinit(gpa);
+        self.img_indices.deinit(gpa);
+        self.results.deinit(gpa);
+    }
+};
 
 pub const Backend = struct {
     gpa: Allocator,
@@ -251,9 +308,12 @@ pub const Backend = struct {
 
     readback: upload_mod.ReadbackBuffer = .{},
     drawn_surfaces: std.ArrayList(u32) = .empty,
+    submit_scratch: SubmitScratch = .{},
+    present_scratch: PresentScratch = .{},
 
     // Active GPU-mapped shared upload arena (zero-copy writePixels).
     shared_upload_chunk: ?upload_mod.Chunk = null,
+    shared_pool: upload_mod.SharedChunkPool = .{},
     shared_arena_id: u32 = 0,
 
     next_shader_gen: u64 = 1,
@@ -309,8 +369,9 @@ pub const Backend = struct {
         var inited_frames: usize = 0;
         errdefer {
             for (self.frames[0..inited_frames]) |*f| {
-                f.deinit(gpa, &self.dev, &self.mem);
+                f.deinit(gpa, &self.dev, .{ .mem = &self.mem, .shared_pool = &self.shared_pool });
             }
+            self.shared_pool.deinit(&self.dev, &self.mem);
         }
         for (0..frames_in_flight) |i| {
             self.frames[i] = try FrameSlot.init(gpa, &self.dev, diag);
@@ -376,6 +437,8 @@ pub const Backend = struct {
         self.surfaces_lock.deinit();
 
         self.drawn_surfaces.deinit(gpa);
+        self.submit_scratch.deinit(gpa);
+        self.present_scratch.deinit(gpa);
         self.readback.deinit(&self.dev, &self.mem);
         if (self.shared_upload_chunk) |chunk| {
             upload_mod.destroyChunk(&self.dev, &self.mem, chunk);
@@ -383,8 +446,9 @@ pub const Backend = struct {
         }
 
         for (0..self.frames_in_flight) |i| {
-            self.frames[i].deinit(gpa, &self.dev, &self.mem);
+            self.frames[i].deinit(gpa, &self.dev, .{ .mem = &self.mem, .shared_pool = &self.shared_pool });
         }
+        self.shared_pool.deinit(&self.dev, &self.mem);
 
         self.pipelines.deinit(gpa, &self.dev);
         self.rp_cache.deinit(gpa, &self.dev);
@@ -477,21 +541,18 @@ pub const Backend = struct {
         );
 
         // Wait on any pending swapchain acquire semaphores before the GPU executes draws to them.
-        var wait_sems: std.ArrayList(vk.Semaphore) = .empty;
-        defer wait_sems.deinit(self.gpa);
-        var wait_stages: std.ArrayList(vk.Flags) = .empty;
-        defer wait_stages.deinit(self.gpa);
-        var pending_surfs: std.ArrayList(*swapchain_mod.Surface) = .empty;
-        defer pending_surfs.deinit(self.gpa);
-
+        const scratch = &self.submit_scratch;
+        scratch.clear();
         for (self.drawn_surfaces.items) |sid| {
             const surf = self.lookupSurface(sid) orelse continue;
             if (surf.acquire_wait_pending) {
-                wait_sems.append(self.gpa, surf.currentAcquireSemaphore()) catch return error.OutOfMemory;
-                wait_stages.append(self.gpa, vk.PipelineStage.color_attachment_output_bit) catch return error.OutOfMemory;
-                pending_surfs.append(self.gpa, surf) catch return error.OutOfMemory;
+                scratch.wait_sems.append(self.gpa, surf.currentAcquireSemaphore()) catch return error.OutOfMemory;
+                scratch.wait_stages.append(self.gpa, vk.PipelineStage.color_attachment_output_bit) catch return error.OutOfMemory;
+                scratch.pending_surfs.append(self.gpa, surf) catch return error.OutOfMemory;
             }
         }
+        const wait_sems = scratch.wait_sems.items;
+        const wait_stages = scratch.wait_stages.items;
 
         const frame = self.currentFrame();
         const entry = &frame.cmd_entries.items[self.active_entry_idx];
@@ -502,9 +563,9 @@ pub const Backend = struct {
         );
 
         const submit_info = vk.SubmitInfo{
-            .waitSemaphoreCount = @intCast(wait_sems.items.len),
-            .pWaitSemaphores = if (wait_sems.items.len > 0) wait_sems.items.ptr else null,
-            .pWaitDstStageMask = if (wait_stages.items.len > 0) wait_stages.items.ptr else null,
+            .waitSemaphoreCount = @intCast(wait_sems.len),
+            .pWaitSemaphores = if (wait_sems.len > 0) wait_sems.ptr else null,
+            .pWaitDstStageMask = if (wait_stages.len > 0) wait_stages.ptr else null,
             .commandBufferCount = 1,
             .pCommandBuffers = @ptrCast(&cb),
             .signalSemaphoreCount = @intCast(signal_sems.len),
@@ -516,7 +577,7 @@ pub const Backend = struct {
             "vkQueueSubmit",
         );
 
-        for (pending_surfs.items) |surf| {
+        for (scratch.pending_surfs.items) |surf| {
             surf.acquire_wait_pending = false;
         }
 
@@ -691,7 +752,7 @@ pub const Backend = struct {
                 const frame = self.currentFrame();
                 // If retired upload chunks (e.g. rotated shared arena) are queued in this slot,
                 // ensure any earlier in-flight frame slots have also completed before freeing them.
-                if (frame.upload.retired.items.len > 0) {
+                if (frame.upload.hasRetired()) {
                     for (0..self.frames_in_flight) |i| {
                         if (i == self.frame_index) continue;
                         for (self.frames[i].cmd_entries.items) |*entry| {
@@ -706,7 +767,7 @@ pub const Backend = struct {
                         }
                     }
                 }
-                try frame.waitAndReset(&self.dev, &self.mem, diag);
+                try frame.waitAndReset(&self.dev, &self.mem, &self.shared_pool, diag);
                 // Any swapchain image acquired during this frame was not presented: discard safely
                 // so acquire semaphores are never left signaled and swapchain slots never exhaust.
                 for (self.drawn_surfaces.items) |sid| {
@@ -724,16 +785,13 @@ pub const Backend = struct {
             .present => {
                 self.endRenderPass();
 
-                var signal_sems: std.ArrayList(vk.Semaphore) = .empty;
-                defer signal_sems.deinit(self.gpa);
-                var present_surfs: std.ArrayList(*swapchain_mod.Surface) = .empty;
-                defer present_surfs.deinit(self.gpa);
-                var discard_surfs: std.ArrayList(*swapchain_mod.Surface) = .empty;
-                defer discard_surfs.deinit(self.gpa);
-                var swapchains: std.ArrayList(vk.SwapchainKHR) = .empty;
-                defer swapchains.deinit(self.gpa);
-                var img_indices: std.ArrayList(u32) = .empty;
-                defer img_indices.deinit(self.gpa);
+                const scratch = &self.present_scratch;
+                scratch.clear();
+                const signal_sems = &scratch.signal_sems;
+                const present_surfs = &scratch.present_surfs;
+                const discard_surfs = &scratch.discard_surfs;
+                const swapchains = &scratch.swapchains;
+                const img_indices = &scratch.img_indices;
 
                 for (self.drawn_surfaces.items) |sid| {
                     const surf = self.lookupSurface(sid) orelse continue;
@@ -764,8 +822,8 @@ pub const Backend = struct {
                 var presented: u32 = 0;
                 if (swapchains.items.len > 0) {
                     const present_fn = self.dev.disp.vkQueuePresentKHR orelse return error.Unsupported;
-                    const results = self.gpa.alloc(vk.Result, swapchains.items.len) catch return error.OutOfMemory;
-                    defer self.gpa.free(results);
+                    scratch.results.resize(self.gpa, swapchains.items.len) catch return error.OutOfMemory;
+                    const results = scratch.results.items;
 
                     const pi = vk.PresentInfoKHR{
                         .waitSemaphoreCount = @intCast(signal_sems.items.len),
@@ -802,7 +860,7 @@ pub const Backend = struct {
 
                 // Advance to next frame slot and wait on its fence before reuse.
                 self.frame_index = (self.frame_index + 1) % self.frames_in_flight;
-                try self.currentFrame().waitAndReset(&self.dev, &self.mem, diag);
+                try self.currentFrame().waitAndReset(&self.dev, &self.mem, &self.shared_pool, diag);
                 self.resetFrameUploadCache();
                 self.current_vb = .null_handle;
                 self.current_ib = .null_handle;
@@ -1832,7 +1890,8 @@ pub const Backend = struct {
         const alignment: u32 = std.math.ceilPowerOfTwoAssert(u32, @max(@as(u32, 16), raw_align));
         const capacity: u64 = memory_mod.alignUp(@max(min_bytes, upload_arena.default_size), 16);
 
-        const new_chunk = try upload_mod.createSharedChunk(&self.dev, &self.mem, capacity, diag);
+        const new_chunk = self.shared_pool.take(capacity) orelse
+            try upload_mod.createSharedChunk(&self.dev, &self.mem, capacity, diag);
         errdefer upload_mod.destroyChunk(&self.dev, &self.mem, new_chunk);
 
         const mapped_ptr = new_chunk.alloc.mapped orelse {
@@ -1841,7 +1900,7 @@ pub const Backend = struct {
         };
 
         if (self.shared_upload_chunk) |old_chunk| {
-            try self.currentFrame().upload.retireChunk(self.gpa, old_chunk);
+            try self.currentFrame().upload.retireSharedChunk(self.gpa, old_chunk);
         }
 
         self.shared_upload_chunk = new_chunk;

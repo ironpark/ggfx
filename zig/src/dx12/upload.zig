@@ -85,6 +85,57 @@ pub fn createMappedUploadBuffer(
     };
 }
 
+pub fn destroyMappedUploadBuffer(buf: MappedUploadBuffer) void {
+    buf.resource.unmap(0, null);
+    _ = buf.resource.release();
+}
+
+/// Idle shared upload arenas, still mapped, kept for reuse so that rotating
+/// the arena does not create and map a new committed resource every time.
+/// Bounded by count and by total bytes; a buffer that does not fit is released.
+pub const SharedArenaPool = struct {
+    pub const max_idle = 4;
+    pub const max_idle_bytes: u64 = 64 << 20;
+
+    idle: [max_idle]MappedUploadBuffer = undefined,
+    len: usize = 0,
+    bytes: u64 = 0,
+
+    /// Removes and returns the smallest idle buffer of at least `size` bytes.
+    pub fn take(self: *SharedArenaPool, size: u64) ?MappedUploadBuffer {
+        var best: ?usize = null;
+        for (self.idle[0..self.len], 0..) |buf, i| {
+            if (buf.size < size) continue;
+            if (best == null or buf.size < self.idle[best.?].size) best = i;
+        }
+        const i = best orelse return null;
+        const buf = self.idle[i];
+        self.len -= 1;
+        self.idle[i] = self.idle[self.len];
+        self.bytes -= buf.size;
+        return buf;
+    }
+
+    /// Keeps `buf` for reuse. The GPU must no longer be reading it.
+    pub fn put(self: *SharedArenaPool, buf: MappedUploadBuffer) void {
+        if (self.len == max_idle or buf.size > max_idle_bytes - self.bytes) {
+            destroyMappedUploadBuffer(buf);
+            return;
+        }
+        self.idle[self.len] = buf;
+        self.len += 1;
+        self.bytes += buf.size;
+    }
+
+    pub fn deinit(self: *SharedArenaPool) void {
+        for (self.idle[0..self.len]) |buf| {
+            destroyMappedUploadBuffer(buf);
+        }
+        self.len = 0;
+        self.bytes = 0;
+    }
+};
+
 pub const Allocation = struct {
     resource: *d3d12.ID3D12Resource,
     offset: u64,
@@ -103,6 +154,9 @@ pub const UploadRing = struct {
     size: usize = 0,
     offset: usize = 0,
     retired: std.ArrayList(*d3d12.ID3D12Resource) = .empty,
+    /// Rotated-out shared upload arenas. Unlike `retired`, these go back to a
+    /// `SharedArenaPool` for reuse once the GPU has finished with them.
+    retired_shared: std.ArrayList(MappedUploadBuffer) = .empty,
 
     // Frame-local uniform version dedupe cache (safe across growth because retired buffers stay alive).
     last_internal_version: u64 = 0,
@@ -164,13 +218,27 @@ pub const UploadRing = struct {
         };
     }
 
-    /// Reclaims retired buffers and resets write offset after GPU completes this frame.
-    pub fn reset(self: *UploadRing) void {
+    pub fn retiredCount(self: *const UploadRing) usize {
+        return self.retired.items.len + self.retired_shared.items.len;
+    }
+
+    /// Releases retired ring buffers and returns retired shared arenas to `pool`.
+    /// The GPU must have finished every command that reads them.
+    pub fn releaseRetired(self: *UploadRing, pool: *SharedArenaPool) void {
         for (self.retired.items) |buf| {
             buf.unmap(0, null);
             _ = buf.release();
         }
         self.retired.clearRetainingCapacity();
+        for (self.retired_shared.items) |buf| {
+            pool.put(buf);
+        }
+        self.retired_shared.clearRetainingCapacity();
+    }
+
+    /// Reclaims retired buffers and resets write offset after GPU completes this frame.
+    pub fn reset(self: *UploadRing, pool: *SharedArenaPool) void {
+        self.releaseRetired(pool);
         self.offset = 0;
         self.last_internal_version = 0;
         self.last_internal_gpu = 0;
@@ -179,9 +247,10 @@ pub const UploadRing = struct {
         self.last_user_size = 0;
     }
 
-    pub fn deinit(self: *UploadRing, gpa: Allocator) void {
-        self.reset();
+    pub fn deinit(self: *UploadRing, gpa: Allocator, pool: *SharedArenaPool) void {
+        self.reset(pool);
         self.retired.deinit(gpa);
+        self.retired_shared.deinit(gpa);
         if (self.buffer) |buf| {
             buf.unmap(0, null);
             _ = buf.release();

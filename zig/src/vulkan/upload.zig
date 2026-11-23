@@ -29,6 +29,9 @@ pub const Chunk = struct {
 pub const UploadRing = struct {
     active: ?Chunk = null,
     retired: std.ArrayList(Chunk) = .empty,
+    /// Rotated-out shared upload arenas. Unlike `retired`, these go back to a
+    /// `SharedChunkPool` for reuse once the frame's fence completes.
+    retired_shared: std.ArrayList(Chunk) = .empty,
 
     pub fn alloc(
         self: *UploadRing,
@@ -89,30 +92,104 @@ pub const UploadRing = struct {
         };
     }
 
-    /// Moves an external chunk (e.g. a rotated shared upload arena) into this frame's
-    /// retired list so it is destroyed only after this frame's GPU fence completes.
-    pub fn retireChunk(self: *UploadRing, gpa: Allocator, chunk: Chunk) Error!void {
-        self.retired.append(gpa, chunk) catch return error.OutOfMemory;
+    /// Holds a rotated-out shared upload arena until this frame's GPU fence
+    /// completes, when `reset` hands it to the pool.
+    pub fn retireSharedChunk(self: *UploadRing, gpa: Allocator, chunk: Chunk) Error!void {
+        self.retired_shared.append(gpa, chunk) catch return error.OutOfMemory;
     }
 
-    /// Resets active offset and frees retired chunks (must only be called after frame fence signals).
-    pub fn reset(self: *UploadRing, dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator) void {
+    /// Whether `reset` has chunks to release. Their contents may still be read
+    /// by command buffers of other frame slots.
+    pub fn hasRetired(self: *const UploadRing) bool {
+        return self.retired.items.len > 0 or self.retired_shared.items.len > 0;
+    }
+
+    /// Resets active offset, frees retired chunks, and returns retired shared arenas to `pool`
+    /// (must only be called after frame fence signals).
+    pub fn reset(
+        self: *UploadRing,
+        dev: *const device_mod.Device,
+        mem: *memory_mod.MemoryAllocator,
+        pool: *SharedChunkPool,
+    ) void {
         for (self.retired.items) |chunk| {
             destroyChunk(dev, mem, chunk);
         }
         self.retired.clearRetainingCapacity();
+        for (self.retired_shared.items) |chunk| {
+            pool.put(dev, mem, chunk);
+        }
+        self.retired_shared.clearRetainingCapacity();
         if (self.active) |*chunk| {
             chunk.offset = 0;
         }
     }
 
-    pub fn deinit(self: *UploadRing, gpa: Allocator, dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator) void {
-        self.reset(dev, mem);
+    pub fn deinit(
+        self: *UploadRing,
+        gpa: Allocator,
+        dev: *const device_mod.Device,
+        mem: *memory_mod.MemoryAllocator,
+        pool: *SharedChunkPool,
+    ) void {
+        self.reset(dev, mem, pool);
         if (self.active) |chunk| {
             destroyChunk(dev, mem, chunk);
             self.active = null;
         }
         self.retired.deinit(gpa);
+        self.retired_shared.deinit(gpa);
+    }
+};
+
+/// Idle shared upload arenas kept for reuse, so that rotating the arena does
+/// not create, bind, and map a new buffer every time. Bounded by count and by
+/// total bytes; a chunk that does not fit is destroyed instead.
+pub const SharedChunkPool = struct {
+    pub const max_idle = 4;
+    pub const max_idle_bytes: u64 = 64 << 20;
+
+    idle: [max_idle]Chunk = undefined,
+    len: usize = 0,
+    bytes: u64 = 0,
+
+    /// Removes and returns the smallest idle chunk holding at least `capacity` bytes.
+    pub fn take(self: *SharedChunkPool, capacity: u64) ?Chunk {
+        var best: ?usize = null;
+        for (self.idle[0..self.len], 0..) |chunk, i| {
+            if (chunk.capacity < capacity) continue;
+            if (best == null or chunk.capacity < self.idle[best.?].capacity) best = i;
+        }
+        const i = best orelse return null;
+        const chunk = self.idle[i];
+        self.len -= 1;
+        self.idle[i] = self.idle[self.len];
+        self.bytes -= chunk.capacity;
+        return chunk;
+    }
+
+    /// Keeps `chunk` for reuse. The GPU must no longer be reading it.
+    pub fn put(
+        self: *SharedChunkPool,
+        dev: *const device_mod.Device,
+        mem: *memory_mod.MemoryAllocator,
+        chunk: Chunk,
+    ) void {
+        if (self.len == max_idle or chunk.capacity > max_idle_bytes - self.bytes) {
+            destroyChunk(dev, mem, chunk);
+            return;
+        }
+        self.idle[self.len] = chunk;
+        self.len += 1;
+        self.bytes += chunk.capacity;
+    }
+
+    pub fn deinit(self: *SharedChunkPool, dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator) void {
+        for (self.idle[0..self.len]) |chunk| {
+            destroyChunk(dev, mem, chunk);
+        }
+        self.len = 0;
+        self.bytes = 0;
     }
 };
 

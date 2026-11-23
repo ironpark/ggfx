@@ -121,9 +121,8 @@ pub const Backend = struct {
     dummy_cbv_gpu: d3d12.D3D12_GPU_VIRTUAL_ADDRESS,
 
     // Active GPU-mapped shared upload arena (zero-copy writePixels)
-    shared_upload_buf: ?*d3d12.ID3D12Resource = null,
-    shared_upload_ptr: ?[*]u8 = null,
-    shared_upload_size: u64 = 0,
+    shared_upload: ?upload.MappedUploadBuffer = null,
+    shared_pool: upload.SharedArenaPool = .{},
     shared_arena_id: u32 = 0,
 
     // Resource handle tables
@@ -472,16 +471,14 @@ pub const Backend = struct {
         self.surfaces_lock.deinit();
 
         // Release shared upload arena, upload rings, dummy CBV, pipelines, descriptors.
-        if (self.shared_upload_buf) |buf| {
-            buf.unmap(0, null);
-            _ = buf.release();
-            self.shared_upload_buf = null;
-            self.shared_upload_ptr = null;
-            self.shared_upload_size = 0;
+        if (self.shared_upload) |arena| {
+            upload.destroyMappedUploadBuffer(arena);
+            self.shared_upload = null;
         }
         for (&self.upload_rings) |*ring| {
-            ring.deinit(gpa);
+            ring.deinit(gpa, &self.shared_pool);
         }
+        self.shared_pool.deinit();
         _ = self.dummy_cbv_buf.release();
         self.pipelines.deinit(gpa);
         self.descriptors.deinit(gpa);
@@ -538,15 +535,11 @@ pub const Backend = struct {
                     try self.closeAndExecuteCmdList(diag);
                 }
                 // Guard against unbounded retired upload buffer growth during long intermediate-only sequences.
-                if (self.upload_rings[self.frame_index].retired.items.len >= 16) {
+                if (self.upload_rings[self.frame_index].retiredCount() >= 16) {
                     try self.waitForQueueIdle(diag);
                     self.releaseDeferredForFrame(self.frame_index);
                     // Only safe to clear retired buffers (the active buffer may still back active_vbv/ibv).
-                    for (self.upload_rings[self.frame_index].retired.items) |buf| {
-                        buf.unmap(0, null);
-                        _ = buf.release();
-                    }
-                    self.upload_rings[self.frame_index].retired.clearRetainingCapacity();
+                    self.upload_rings[self.frame_index].releaseRetired(&self.shared_pool);
                 }
             },
             .end_frame => {
@@ -994,11 +987,13 @@ pub const Backend = struct {
         // Check if payload resides inside the active GPU-mapped shared upload arena.
         var shared_res: ?*d3d12.ID3D12Resource = null;
         var shared_base_off: u64 = 0;
-        if (self.shared_upload_buf) |buf| {
+        var shared_size: u64 = 0;
+        if (self.shared_upload) |arena| {
             if (payload.len > 0) {
-                if (upload_arena.offsetWithin(self.shared_upload_ptr, @intCast(self.shared_upload_size), payload)) |off| {
-                    shared_res = buf;
+                if (upload_arena.offsetWithin(arena.cpu_ptr, @intCast(arena.size), payload)) |off| {
+                    shared_res = arena.resource;
                     shared_base_off = off;
+                    shared_size = arena.size;
                 }
             }
         }
@@ -1022,7 +1017,7 @@ pub const Backend = struct {
                 const placed_off = shared_base_off + @as(u64, r.payload_offset);
                 if ((bpr % upload.texture_pitch_alignment) == 0 and
                     (placed_off % upload.texture_placement_alignment) == 0 and
-                    placed_off + r.payload_len <= self.shared_upload_size)
+                    placed_off + r.payload_len <= shared_size)
                 {
                     // Zero-copy directly from the persistently-mapped shared upload arena.
                     const src_loc = d3d12.D3D12_TEXTURE_COPY_LOCATION.placedFootprint(sbuf, .{
@@ -1562,19 +1557,17 @@ pub const Backend = struct {
         const alignment: u32 = @intCast(upload.texture_placement_alignment); // 512
         const target_size: u64 = std.mem.alignForward(u64, @max(min_bytes, upload_arena.default_size), alignment);
 
-        const mapped = try upload.createMappedUploadBuffer(self.device, target_size, diag);
-        errdefer {
-            mapped.resource.unmap(0, null);
-            _ = mapped.resource.release();
+        const mapped = self.shared_pool.take(target_size) orelse
+            try upload.createMappedUploadBuffer(self.device, target_size, diag);
+        errdefer upload.destroyMappedUploadBuffer(mapped);
+
+        // The old arena may still be read by commands of this frame: it returns
+        // to the pool only when the frame is reclaimed.
+        if (self.shared_upload) |old| {
+            self.upload_rings[self.frame_index].retired_shared.append(self.gpa, old) catch return error.OutOfMemory;
         }
 
-        if (self.shared_upload_buf) |old_buf| {
-            self.upload_rings[self.frame_index].retired.append(self.gpa, old_buf) catch return error.OutOfMemory;
-        }
-
-        self.shared_upload_buf = mapped.resource;
-        self.shared_upload_ptr = mapped.cpu_ptr;
-        self.shared_upload_size = mapped.size;
+        self.shared_upload = mapped;
 
         out_arena.* = .{
             .struct_size = @sizeOf(abi.UploadArena),
@@ -1701,7 +1694,7 @@ pub const Backend = struct {
 
     fn reclaimFrame(self: *Backend, frame_idx: usize) void {
         self.releaseDeferredForFrame(frame_idx);
-        self.upload_rings[frame_idx].reset();
+        self.upload_rings[frame_idx].reset(&self.shared_pool);
         self.descriptors.resetFrame(frame_idx);
         self.allocator_needs_reset[frame_idx] = true;
         self.active_buffers_valid = false;
