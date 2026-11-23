@@ -190,11 +190,43 @@ Development and CI test builds should also run `-Doptimize=Debug` / `-Doptimize=
 
 ### Library Discovery Order in Go (`internal/graphicsdriver/zigdriver`)
 
-1. Explicit override path via `GGFX_DRIVER_LIB` environment variable (useful for `go test` and local dev).
-2. Next to the running executable / macOS `.app/Contents/Frameworks/libggfx_driver.dylib` (recommended for production desktop apps such as `ggui`).
-3. Standard dynamic linker search path (`dlopen("libggfx_driver.dylib")` / `LoadLibrary("ggfx_driver.dll")`).
+1. An exact path: the `GGFX_DRIVER_LIB` environment variable (useful for `go test` and local dev), else the path linked into `zigdriver.LibraryPath`. A failure here is terminal.
+2. The library embedded by the `ggfxzig` build tag, written to the user's cache directory.
+3. Next to the running executable / macOS `.app/Contents/Frameworks/libggfx_driver.dylib` (recommended for production desktop apps such as `ggui`).
+4. Standard dynamic linker search path (`dlopen("libggfx_driver.dylib")` / `LoadLibrary("ggfx_driver.dll")`).
 
-> **Packaging note**: Avoid relying on `//go:embed` + extracting shared libraries to `%TEMP%`/`/tmp` in signed production builds — it triggers macOS Notarization / Hardened Runtime restrictions and Windows Defender false positives. Keep embedded extraction optional (e.g. dev-only build tag) if ever needed.
+### Build Tags and the Embedded Library
+
+| Build | Default driver | Where the library comes from |
+|---|---|---|
+| no tag | Go | Not used, unless the environment selects the Zig driver; then steps 1, 3 and 4 above. |
+| `-tags ggfxzig` | Zig | Embedded in the program (step 2), unless step 1 names another. |
+| `-tags ggfxzig,ggfxnoembed` | Zig | Steps 1, 3 and 4: the program ships the library itself. |
+
+`GGFX_DRIVER=go` chooses the Go driver whatever the tags, and a Zig driver that fails to start still falls back to the Go driver unless `GGFX_DRIVER_STRICT=1`.
+
+The embedded library is the ReleaseFast, stripped build, gzip-compressed: 50–85 KB per platform. It is embedded for the platform being built only. On first use it is written to `<user cache dir>/ggfx/driver-<hash of the library>/` and loaded from there; a file already there with the same bytes is reused, and a temporary directory stands in when the cache directory cannot be written.
+
+A release has the libraries for all six platforms. They are not committed on `main`: in a checkout, build them with Zig 0.17.1, or `-tags ggfxzig` fails to compile for want of the file.
+
+```sh
+./scripts/build-zig-prebuilt.sh                 # the host platform
+./scripts/build-zig-prebuilt.sh --all           # every platform
+go generate ./internal/graphicsdriver/zigdriver # the same as the first
+```
+
+With `ggfxnoembed`, the path can be fixed when the program is linked instead of left to the search. A relative path is taken from the directory of the executable:
+
+```sh
+go build -tags ggfxzig,ggfxnoembed \
+  -ldflags "-X github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver.LibraryPath=lib/libggfx_driver.so"
+```
+
+> **Packaging note**: Embedding suits development and unsigned tools. A signed production build should use `ggfxnoembed` and ship the library in its bundle: loading a library written to the cache directory is refused under macOS's Hardened Runtime library validation and can draw Windows Defender false positives.
+
+### Releasing
+
+The `Release` workflow (`.github/workflows/release.yml`) is started by hand with a version. It builds the libraries for every platform from the commit it runs on, commits them on top of that commit, tags the result and publishes a GitHub release with the libraries attached. The commit with the libraries is reachable from the tag only, so `main` carries no binaries while `go get github.com/ironpark/ggfx@<version>` has them.
 
 Verify `ggfx_abi_version() == GGFX_DRIVER_ABI_VERSION` immediately after loading; fail cleanly with a clear error (or fall back to a Go driver when configured) on mismatch.
 
@@ -216,7 +248,7 @@ Verify `ggfx_abi_version() == GGFX_DRIVER_ABI_VERSION` immediately after loading
 
 | Environment Variable | Effect |
 |---|---|
-| `GGFX_DRIVER=zig` | Opt in to the Zig driver (falls back to Go driver on failure unless `GGFX_DRIVER_STRICT=1`). Set `GGFX_DRIVER=go` to force Go even if `GGFX_DRIVER_LIB` is set. |
+| `GGFX_DRIVER=zig` | Opt in to the Zig driver (falls back to Go driver on failure unless `GGFX_DRIVER_STRICT=1`). Set `GGFX_DRIVER=go` to force Go even if `GGFX_DRIVER_LIB` is set or the program is built with `-tags ggfxzig`. |
 | `GGFX_DRIVER_LIB=/path/to/lib` | Explicit shared-library path override; enables the Zig driver automatically unless `GGFX_DRIVER=go`. |
 | `GGFX_DRIVER_STRICT=1` | Fail with an error instead of falling back to the Go driver when Zig initialization fails. |
 | `GGFX_GRAPHICS_LIBRARY=zig\|vulkan` | Select the Zig driver (or specifically the Linux Vulkan backend via Zig). |

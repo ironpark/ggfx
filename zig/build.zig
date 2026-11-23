@@ -20,6 +20,7 @@ fn addDriverLibrary(
     optimize: std.builtin.OptimizeMode,
     null_backend: bool,
     alloc_trace_frames: usize,
+    strip: ?bool,
 ) *std.Build.Step.Compile {
     const os = target.result.os.tag;
     const opts = b.addOptions();
@@ -32,6 +33,7 @@ fn addDriverLibrary(
         .optimize = optimize,
         .link_libc = (os == .macos or os == .linux),
         .pic = true,
+        .strip = strip,
     });
     mod.addOptions("build_options", opts);
 
@@ -56,8 +58,13 @@ pub fn build(b: *std.Build) void {
         "alloc-trace-frames",
         "Stack frames the debug allocator records per allocation in Debug and ReleaseSafe builds; 0 records none (default: 8)",
     ) orelse 8;
+    const strip = b.option(
+        bool,
+        "strip",
+        "Omit debug information from the driver library (default: the optimize mode's)",
+    );
 
-    const lib = addDriverLibrary(b, target, optimize, backend_opt == .null, alloc_trace_frames);
+    const lib = addDriverLibrary(b, target, optimize, backend_opt == .null, alloc_trace_frames, strip);
     b.installArtifact(lib);
 
     // Test step: always uses null backend + runs C ABI static assertions.
@@ -126,7 +133,7 @@ pub fn build(b: *std.Build) void {
     const cross_step = b.step("cross", "Build dynamic library for all 6 desktop targets");
     for (cross_targets) |query| {
         const resolved = b.resolveTargetQuery(query);
-        const cross_lib = addDriverLibrary(b, resolved, optimize, backend_opt == .null, alloc_trace_frames);
+        const cross_lib = addDriverLibrary(b, resolved, optimize, backend_opt == .null, alloc_trace_frames, strip);
         const triple = query.zigTriple(b.allocator) catch @panic("OOM");
         const install = b.addInstallArtifact(cross_lib, .{
             .dest_dir = .{

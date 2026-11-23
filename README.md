@@ -27,6 +27,22 @@ ggfx requires Go 1.27 or later, and so macOS 13 Ventura or later.
 - Linux, FreeBSD, NetBSD, OpenBSD: OpenGL (ggwd requires cgo for glfw)
 - Browser: WebGL via `GOOS=js GOARCH=wasm`
 
+## Native driver
+
+A second driver, written in Zig, draws with Metal on macOS, DirectX 12 on
+Windows and Vulkan on Linux (amd64 and arm64). ggfx loads it as a shared
+library without cgo. Build with the `ggfxzig` tag to make it the default; the
+library is then embedded in the program:
+
+```sh
+go build -tags ggfxzig ./...
+```
+
+Add `ggfxnoembed` to leave the library out and ship it yourself, next to the
+executable or at a path fixed at link time. The libraries are attached to each
+[release](https://github.com/ironpark/ggfx/releases). See
+[docs/zig-driver-design.md](docs/zig-driver-design.md#build-tags-and-the-embedded-library).
+
 ## License
 
 Apache-2.0, the same as Ebitengine. See [LICENSE](LICENSE) and

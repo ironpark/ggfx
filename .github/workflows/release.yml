@@ -1,0 +1,129 @@
+name: Release
+
+# Builds the Zig driver for every platform, commits the libraries on top of the commit the
+# workflow runs on, tags that commit and publishes a GitHub release with the libraries attached.
+#
+# The commit with the libraries is reachable from the tag only, so the branch carries no
+# binaries while `go get github.com/ironpark/ggfx@<version>` has what -tags ggfxzig embeds.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, as its tag (for example v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check the version
+        run: |
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: '$VERSION' is not a version like v0.1.0 or v0.1.0-rc.1"
+            exit 1
+          fi
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$VERSION")" ]; then
+            echo "error: the tag $VERSION exists already"
+            exit 1
+          fi
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Build the driver libraries
+        run: |
+          scripts/build-zig-prebuilt.sh --all --dist dist
+
+      - name: Build with the embedded libraries
+        run: |
+          for platform in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            env GOOS="${platform%/*}" GOARCH="${platform#*/}" go build -tags=ggfxzig ./...
+          done
+
+      # lavapipe is Mesa's software Vulkan, which lets this runner draw with the library it just built.
+      - name: Install Mesa
+        run: sudo apt-get update && sudo apt-get install -y libvulkan1 mesa-vulkan-drivers
+
+      - name: Test the embedded library
+        run: |
+          env GGFX_DRIVER_STRICT=1 go test -tags ggfxzig -shuffle=on ./internal/graphicsdriver/zigdriver
+
+      - name: Commit the libraries and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --force internal/graphicsdriver/zigdriver/prebuilt
+          git commit -m "Add the prebuilt Zig driver libraries for $VERSION"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin "refs/tags/$VERSION"
+
+      - name: Package the libraries
+        run: |
+          mkdir assets
+          for dir in dist/*/; do
+            platform="$(basename "$dir")"
+            name="ggfx-driver-$VERSION-${platform/_/-}"
+            cp LICENSE NOTICE.md "$dir"
+            case "$platform" in
+              windows_*) (cd "$dir" && zip -q -9 "$GITHUB_WORKSPACE/assets/$name.zip" *) ;;
+              *)         tar -C "$dir" -czf "assets/$name.tar.gz" . ;;
+            esac
+          done
+          (cd assets && sha256sum * > SHA256SUMS)
+          ls -l assets
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          ## Native driver
+
+          Build with \`-tags ggfxzig\` to draw with the Zig driver (Metal, DirectX 12, Vulkan). The driver
+          library is embedded in the program, so nothing else needs to be installed:
+
+          \`\`\`sh
+          go get github.com/ironpark/ggfx@$VERSION
+          go build -tags ggfxzig ./...
+          \`\`\`
+
+          To ship the library yourself, build with \`-tags ggfxzig,ggfxnoembed\` and put the library from
+          the archive for your platform below next to the executable. See
+          [docs/zig-driver-design.md](https://github.com/$GITHUB_REPOSITORY/blob/$VERSION/docs/zig-driver-design.md#build-tags-and-the-embedded-library).
+          EOF
+
+          flags=()
+          if [[ "$VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$VERSION" assets/* \
+            --verify-tag \
+            --title "$VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            "${flags[@]}"

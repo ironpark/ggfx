@@ -18,12 +18,26 @@
 // GPU commands into an aligned linear arena ring and submitting them to the
 // native Zig driver shared library over a flat C ABI via purego (without cgo).
 //
+// # Build Tags
+//
+//   - ggfxzig: Makes this driver the default implementation and embeds the
+//     driver library, gzip-compressed, in the program. The library is written
+//     to the user's cache directory on first use and loaded from there, so a
+//     program built this way needs no other file. A release of the module has
+//     the libraries; in a checkout of the repository,
+//     scripts/build-zig-prebuilt.sh (or go generate) builds them with Zig.
+//
+//   - ggfxnoembed: With ggfxzig, leaves the library out of the program. The
+//     program then loads it from the search order below, which suits a signed
+//     application that ships the library itself. Its path can be fixed when
+//     the program is linked: see [LibraryPath].
+//
 // # Environment Variables
 //
 //   - GGFX_DRIVER: Selects the driver implementation ("zig" or "go"). When
-//     unset, the Go driver is used unless GGFX_DRIVER_LIB or
-//     GGFX_GRAPHICS_LIBRARY=zig|vulkan is set. Setting GGFX_DRIVER=go forces
-//     the Go driver even if GGFX_DRIVER_LIB is set.
+//     unset, the Go driver is used unless the program is built with the
+//     ggfxzig tag, or GGFX_DRIVER_LIB or GGFX_GRAPHICS_LIBRARY=zig|vulkan is
+//     set. Setting GGFX_DRIVER=go forces the Go driver in every case.
 //   - GGFX_DRIVER_LIB: Explicit path to the native driver shared library. If
 //     loading this path fails, search stops immediately with that error (and
 //     internal/render falls back to the Go driver unless GGFX_DRIVER_STRICT=1).
@@ -43,10 +57,12 @@
 //
 // # Shared Library Search Order
 //
-//  1. GGFX_DRIVER_LIB (exact path; failure is terminal and does not fall through).
-//  2. Next to the executable: filepath.Dir(os.Executable())/<name>, plus
+//  1. GGFX_DRIVER_LIB, else the path linked into [LibraryPath] (exact path;
+//     failure is terminal and does not fall through).
+//  2. The library embedded by the ggfxzig build tag.
+//  3. Next to the executable: filepath.Dir(os.Executable())/<name>, plus
 //     ../Frameworks/libggfx_driver.dylib on macOS (.app bundles).
-//  3. System library search path (libggfx_driver.dylib on macOS,
+//  4. System library search path (libggfx_driver.dylib on macOS,
 //     libggfx_driver.so on Linux, ggfx_driver.dll on Windows).
 //
 // Immediately after loading, ggfx_abi_version() is checked against

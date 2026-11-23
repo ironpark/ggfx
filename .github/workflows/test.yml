@@ -141,6 +141,38 @@ jobs:
             echo "lavapipe Vulkan ICD not available; skipping Linux Zig Vulkan test"
           fi
 
+      # A build with -tags ggfxzig embeds the driver library and loads it with no path given.
+      # The Go drivers above are not used here: the tag makes the Zig driver the default.
+      - name: Build the prebuilt Zig driver
+        run: |
+          scripts/build-zig-prebuilt.sh
+
+      - name: go test (macOS embedded Zig driver)
+        if: runner.os == 'macOS'
+        run: |
+          env GGFX_DRIVER_STRICT=1 \
+            go test -tags ggfxzig -shuffle=on -v ./internal/graphicsdriver/zigdriver ./internal/render ./internal/rendertest
+
+      - name: go test (Windows embedded Zig driver)
+        if: runner.os == 'Windows'
+        run: |
+          env GGFX_DIRECTX=warp GGFX_DRIVER_STRICT=1 \
+            go test -tags ggfxzig -shuffle=on -v ./internal/graphicsdriver/zigdriver
+
+      - name: go test (Linux embedded Zig driver)
+        if: runner.os == 'Linux'
+        run: |
+          go test -tags ggfxzig -shuffle=on -v ./internal/graphicsdriver/zigdriver
+
+      # With ggfxnoembed the program has no library in it and takes the path linked into it.
+      - name: go test (macOS linked Zig driver path)
+        if: runner.os == 'macOS'
+        run: |
+          env GGFX_DRIVER_STRICT=1 \
+            go test -tags ggfxzig,ggfxnoembed -shuffle=on -v \
+              -ldflags "-X github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver.LibraryPath=$PWD/zig/zig-out/lib/libggfx_driver.dylib" \
+              ./internal/rendertest
+
   zig-test-and-cross:
     name: Zig test & cross-compile
     runs-on: ubuntu-latest
@@ -226,3 +258,7 @@ jobs:
           env GOOS=windows GOARCH=386 go build -v ./...
           env GOOS=windows GOARCH=amd64 go build -v ./...
           env GOOS=windows GOARCH=arm64 go build -v ./...
+          env GOOS=darwin GOARCH=arm64 go build -tags=ggfxzig,ggfxnoembed -v ./...
+          env GOOS=linux GOARCH=amd64 go build -tags=ggfxzig,ggfxnoembed -v ./...
+          env GOOS=windows GOARCH=amd64 go build -tags=ggfxzig,ggfxnoembed -v ./...
+          env GOOS=js GOARCH=wasm go build -tags=ggfxzig -v ./...

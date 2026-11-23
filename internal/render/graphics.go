@@ -71,7 +71,7 @@ func newGraphicsDriver(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics
 	useZig := false
 	switch driverEnv {
 	case "":
-		useZig = os.Getenv("GGFX_DRIVER_LIB") != "" || envWantsZig || lib == GraphicsLibraryVulkan
+		useZig = zigDefault || os.Getenv("GGFX_DRIVER_LIB") != "" || envWantsZig || lib == GraphicsLibraryVulkan
 	case "zig":
 		useZig = true
 	case "go":

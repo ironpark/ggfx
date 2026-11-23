@@ -14,3 +14,7 @@ go.work.sum
 !dummy.metallib
 .zig-cache/
 zig-out/
+
+# The prebuilt Zig driver libraries a build with -tags ggfxzig embeds. scripts/build-zig-prebuilt.sh
+# makes them, and only the commit a release tag points at has them.
+/internal/graphicsdriver/zigdriver/prebuilt/

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver"
 )
 
 func getDriverFallbackErr() error {
@@ -59,6 +60,9 @@ func resetDriverSelectionForTest(t *testing.T) {
 
 func TestZigDriverSelectionAndFallback(t *testing.T) {
 	t.Run("DefaultUsesGoDriver", func(t *testing.T) {
+		if zigDefault {
+			t.Skip("the ggfxzig build tag makes the Zig driver the default")
+		}
 		resetDriverSelectionForTest(t)
 
 		g, _, err := newGraphicsDriver(GraphicsLibraryAuto, &Options{})
@@ -160,6 +164,29 @@ func TestZigDriverSelectionAndFallback(t *testing.T) {
 		}
 		if getDriverFallbackErr() == nil {
 			t.Fatalf("driverFallbackErr = nil, want non-nil error recorded on vulkan fallback")
+		}
+	})
+
+	t.Run("BuildTagSelectsZigDriver", func(t *testing.T) {
+		if !zigDefault || !zigdriver.HasEmbeddedLibrary() {
+			t.Skip("not built with -tags ggfxzig and an embedded driver library")
+		}
+		resetDriverSelectionForTest(t)
+		t.Setenv("GGFX_DRIVER_STRICT", "1")
+
+		g, _, err := newGraphicsDriver(GraphicsLibraryAuto, &Options{})
+		if err != nil {
+			t.Fatalf("newGraphicsDriver(Auto): %v", err)
+		}
+		if c, ok := g.(graphicsdriver.Closer); ok {
+			defer func() {
+				if err := c.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			}()
+		}
+		if got := DriverImplementation(); got != "zig" {
+			t.Fatalf("DriverImplementation() = %q, want %q", got, "zig")
 		}
 	})
 

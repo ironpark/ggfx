@@ -17,6 +17,7 @@
 package zigdriver
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -278,24 +279,48 @@ func libFileName() string {
 	}
 }
 
+// LibraryPath is a driver library path fixed when the program is linked:
+//
+//	go build -tags ggfxzig,ggfxnoembed \
+//	  -ldflags "-X github.com/ironpark/ggfx/internal/graphicsdriver/zigdriver.LibraryPath=lib/libggfx_driver.so"
+//
+// A relative path is taken from the directory of the executable, so a program can ship the
+// library beside itself wherever it is installed. GGFX_DRIVER_LIB overrides it.
+var LibraryPath string
+
+// linkedLibraryPath returns LibraryPath as a path to open, or "" if none was linked in.
+func linkedLibraryPath() string {
+	if LibraryPath == "" || filepath.IsAbs(LibraryPath) {
+		return LibraryPath
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return LibraryPath
+	}
+	return filepath.Join(filepath.Dir(exe), LibraryPath)
+}
+
+// HasEmbeddedLibrary reports whether the driver library is embedded in this build, which
+// the ggfxzig build tag does unless ggfxnoembed is set too.
+func HasEmbeddedLibrary() bool {
+	return len(embeddedLib) > 0
+}
+
 var (
 	libCacheMu sync.Mutex
 	libCache   = map[string]*library{}
 )
 
 // loadLibrary loads and validates the Zig driver shared library following the search order:
-//  1. pathOverride (or GGFX_DRIVER_LIB if pathOverride is empty) — failure returns immediately.
-//  2. Adjacent to the executable (plus ../Frameworks/libggfx_driver.dylib on macOS).
-//  3. System library search path by filename.
+//  1. pathOverride, else GGFX_DRIVER_LIB, else LibraryPath — failure returns immediately.
+//  2. The library embedded in the build, written to the user's cache directory.
+//  3. Adjacent to the executable (plus ../Frameworks/libggfx_driver.dylib on macOS).
+//  4. System library search path by filename.
 //
 // Successful loads are cached by resolved key; failed lookups are not cached so tests can
 // switch GGFX_DRIVER_LIB or test fallback paths cleanly.
 func loadLibrary(pathOverride string) (*library, error) {
-	explicit := pathOverride
-	if explicit == "" {
-		explicit = os.Getenv("GGFX_DRIVER_LIB")
-	}
-
+	explicit := cmp.Or(pathOverride, os.Getenv("GGFX_DRIVER_LIB"), linkedLibraryPath())
 	if explicit != "" {
 		return loadExplicitLibrary(explicit)
 	}
@@ -330,7 +355,18 @@ func loadDefaultLibrary() (*library, error) {
 	}
 
 	name := libFileName()
-	candidates := make([]string, 0, 3)
+	candidates := make([]string, 0, 4)
+	// The dynamic loader's errors are long, so only the last candidate's is reported, after
+	// the embedded library's if that could not even be written out.
+	var embedErr, lastErr error
+	if HasEmbeddedLibrary() {
+		path, err := extractEmbeddedLibrary()
+		if err != nil {
+			embedErr = err
+		} else {
+			candidates = append(candidates, path)
+		}
+	}
 	if exe, err := os.Executable(); err == nil {
 		dir := filepath.Dir(exe)
 		candidates = append(candidates, filepath.Join(dir, name))
@@ -340,7 +376,6 @@ func loadDefaultLibrary() (*library, error) {
 	}
 	candidates = append(candidates, name)
 
-	var lastErr error
 	for _, cand := range candidates {
 		lib, err := openAndVerifyLibrary(cand)
 		if err == nil {
@@ -351,6 +386,9 @@ func loadDefaultLibrary() (*library, error) {
 			return nil, err
 		}
 		lastErr = err
+	}
+	if embedErr != nil {
+		return nil, fmt.Errorf("%w: could not load %s (%v; %v)", ErrBackendUnavailable, name, embedErr, lastErr)
 	}
 	return nil, fmt.Errorf("%w: could not load %s (%v)", ErrBackendUnavailable, name, lastErr)
 }

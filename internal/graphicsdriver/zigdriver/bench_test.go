@@ -32,7 +32,7 @@ func runBenchDrivers(b *testing.B, fn func(b *testing.B, g graphicsdriver.Graphi
 	b.Run("zig", func(b *testing.B) {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		if resolvedTestLibPath == "" {
+		if resolvedTestLibPath == "" && !HasEmbeddedLibrary() {
 			b.Skip("zig driver library not found (set GGFX_DRIVER_LIB)")
 		}
 		g, err := NewGraphics(Options{LibPath: resolvedTestLibPath})

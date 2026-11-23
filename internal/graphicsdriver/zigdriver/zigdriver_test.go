@@ -41,9 +41,14 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// findTestDriverLib returns the library the tests load: GGFX_DRIVER_LIB, else the one embedded
+// in the test binary (for which the path is empty), else the one in zig/zig-out.
 func findTestDriverLib() string {
 	if env := os.Getenv("GGFX_DRIVER_LIB"); env != "" {
 		return env
+	}
+	if HasEmbeddedLibrary() {
+		return ""
 	}
 	sub := "lib"
 	if runtime.GOOS == "windows" {
@@ -61,7 +66,7 @@ func findTestDriverLib() string {
 func newTestGraphics(t *testing.T, opts Options) *Graphics {
 	t.Helper()
 	if opts.LibPath == "" {
-		if resolvedTestLibPath == "" {
+		if resolvedTestLibPath == "" && !HasEmbeddedLibrary() {
 			if os.Getenv("GGFX_DRIVER_STRICT") == "1" {
 				t.Fatalf("zig driver shared library not found (GGFX_DRIVER_STRICT=1)")
 			}
