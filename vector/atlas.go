@@ -115,7 +115,7 @@ func setRenderingBounds(rbs []image.Rectangle, contained []bool, dstBounds image
 
 // layout lays out the paths whose rendering bounds are rbs, but the ones whose slot is not
 // transient, which get no region. slots may be nil, for all paths on the atlas.
-func (a *atlas) layout(now int64, dstBounds image.Rectangle, rbs []image.Rectangle, antialias bool, slots []stencilSlot) {
+func (a *atlas) layout(now int64, dstBounds image.Rectangle, rbs []image.Rectangle, antialias []bool, slots []stencilSlot) {
 	// Reset the members.
 	a.atlasRegions = slices.Delete(a.atlasRegions, 0, len(a.atlasRegions))
 	a.pathIndexToAtlasRegionIndex = a.pathIndexToAtlasRegionIndex[:0]
@@ -126,21 +126,30 @@ func (a *atlas) layout(now int64, dstBounds image.Rectangle, rbs []image.Rectang
 		if slots != nil && !slots[i].transient {
 			return image.Point{}
 		}
-		return rbs[i].Size()
+		s := rbs[i].Size()
+		// An additional image for antialiasing must be on the same atlas,
+		// so extend the width and use it as a sub image.
+		if antialias != nil && antialias[i] {
+			s.X *= 2
+		}
+		return s
 	}
-	var found bool
+	var found, hasAA bool
 	for i := range n {
 		a.atlasRegions = append(a.atlasRegions, atlasRegion{
 			pathIndex: i,
 		})
 		if s := size(i); s.X > 0 && s.Y > 0 {
 			found = true
+			if antialias != nil && antialias[i] {
+				hasAA = true
+			}
 		}
 	}
 
 	w, h := roundUp16(dstBounds.Dx()), roundUp16(dstBounds.Dy())
 	// For antialiasing, doubled regions in the X direction are used.
-	if antialias {
+	if hasAA {
 		w *= 2
 	}
 	// Use 2^n - 1, as a region in internal/atlas has 1px padding.
@@ -181,11 +190,6 @@ func (a *atlas) layout(now int64, dstBounds image.Rectangle, rbs []image.Rectang
 		for i := range a.atlasRegions {
 			// TODO: What if s already exceeds maxImageSize (#3357)?
 			s := size(a.atlasRegions[i].pathIndex)
-			// An additional image for antialiasing must be on the same atlas,
-			// so extend the width and use it as a sub image.
-			if antialias {
-				s.X *= 2
-			}
 			if i == 0 {
 				currentRowHeight = s.Y
 			} else if currentPosition.X+s.X > maxImageSize {

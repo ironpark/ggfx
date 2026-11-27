@@ -18,11 +18,16 @@ import (
 	"fmt"
 	"image"
 	"strings"
+	"testing"
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/render"
 )
+
+func testingAllocsPerRun(runs int, f func()) float64 {
+	return testing.AllocsPerRun(runs, f)
+}
 
 type Point struct {
 	X, Y float32
@@ -104,7 +109,14 @@ type AtlasRegion struct {
 // in its rendering bounds, and the bounds.
 func (a *atlas) setPaths(now int64, dstBounds image.Rectangle, paths []*Path, bounds []image.Rectangle, antialias bool) (rbs []image.Rectangle, contained []bool) {
 	rbs, contained = setRenderingBounds(nil, nil, dstBounds, paths, bounds)
-	a.layout(now, dstBounds, rbs, antialias, nil)
+	var aa []bool
+	if antialias {
+		aa = make([]bool, len(paths))
+		for i := range aa {
+			aa[i] = true
+		}
+	}
+	a.layout(now, dstBounds, rbs, aa, nil)
 	return rbs, contained
 }
 
@@ -252,4 +264,41 @@ func SetStencilCacheRedrawn(redrawn bool) {
 	theFillPathM.Lock()
 	defer theFillPathM.Unlock()
 	redrawStencilCacheForTesting = redrawn
+}
+
+// StencilCacheKeyCap returns the current capacity of the stencil cache's scratch key buffer.
+func StencilCacheKeyCap() int {
+	theFillPathM.Lock()
+	defer theFillPathM.Unlock()
+	return cap(theStencilCache.key)
+}
+
+// StencilCacheKeyRetainedLimit is the capacity above which the scratch key buffer is dropped when idle.
+const StencilCacheKeyRetainedLimit = maxRetainedStencilKeyCap
+
+// StencilCacheKeyAllocs measures allocations of stencilCache.place across runs of transient
+// (never-admitted) paths at consecutive frames, reusing a scratch slot slice so only cache-side
+// allocations are counted.
+func StencilCacheKeyAllocs(runs int, build func(i int, p *Path) image.Rectangle) float64 {
+	var p Path
+	paths := []*Path{&p}
+	rbs := make([]image.Rectangle, 1)
+	aa := []bool{true}
+	slots := make([]stencilSlot, 1)
+	var i int
+	// Warm up once so the key buffer reaches steady-state capacity.
+	rbs[0] = build(0, &p)
+	theFillPathM.Lock()
+	now := render.Tick()
+	theStencilCache.place(now, paths, rbs, aa, slots)
+	theFillPathM.Unlock()
+	i = 1
+	return testingAllocsPerRun(runs, func() {
+		rbs[0] = build(i, &p)
+		clear(slots)
+		theFillPathM.Lock()
+		theStencilCache.place(now+int64(i), paths, rbs, aa, slots)
+		theFillPathM.Unlock()
+		i++
+	})
 }

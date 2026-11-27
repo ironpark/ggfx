@@ -210,6 +210,46 @@ var gridScenes = []batchScene{
 		fillPath(dst, &q, color.White, aa, rule, ggfx.BlendSourceOver)
 		fillPath(dst, &vector.Path{}, color.White, aa, rule, ggfx.BlendSourceOver)
 	}},
+	// Self-intersecting stars with alternating fill rules and antialiasing in the same batch.
+	{"mixed rules and aa", 240, 200, func(dst *ggfx.Image, r *rand.Rand, aa bool, rule vector.FillRule) {
+		sub := dst.SubImage(image.Rect(20, 20, 220, 180)).(*ggfx.Image)
+		for k := range 24 {
+			var p vector.Path
+			cx, cy := snap(30+r.Float32()*180), snap(30+r.Float32()*140)
+			if k%2 == 0 {
+				const n = 5
+				for i := range n {
+					a := float64(i*(n/2)) / float64(n) * 2 * math.Pi
+					x, y := snap(cx+24*float32(math.Cos(a))), snap(cy+24*float32(math.Sin(a)))
+					if i == 0 {
+						p.MoveTo(x, y)
+					} else {
+						p.LineTo(x, y)
+					}
+				}
+				p.Close()
+			} else {
+				p = *gridCurves(r, cx, cy, 24, true)
+			}
+			d := dst
+			if k%3 == 0 {
+				d = sub
+			}
+			rRule := rule
+			if k%2 == 1 {
+				if rule == vector.FillRuleNonZero {
+					rRule = vector.FillRuleEvenOdd
+				} else {
+					rRule = vector.FillRuleNonZero
+				}
+			}
+			rAA := aa
+			if (k/2)%2 == 1 {
+				rAA = !aa
+			}
+			fillPath(d, &p, randomColor(r), rAA, rRule, ggfx.BlendSourceOver)
+		}
+	}},
 	// Enough large paths to need several atlas images; see TestFillPathBatchingSceneUsesAtlasImages.
 	{"many", 300, 300, func(dst *ggfx.Image, r *rand.Rand, aa bool, rule vector.FillRule) {
 		for range manyPathCount {
@@ -454,6 +494,30 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 			want:  3,
 			wantU: n*2 + n,
 		},
+		{
+			name: "alternating fill rules",
+			draw: func(dst *ggfx.Image) {
+				for i := range n {
+					rule := vector.FillRuleNonZero
+					if i%2 == 1 {
+						rule = vector.FillRuleEvenOdd
+					}
+					fillPath(dst, curve(float32(i*3%180), float32(i*7%180)), color.White, true, rule, ggfx.BlendSourceOver)
+				}
+			},
+			want:  3,
+			wantU: n*buffers*2 + n,
+		},
+		{
+			name: "alternating antialiasing",
+			draw: func(dst *ggfx.Image) {
+				for i := range n {
+					fillPath(dst, curve(float32(i*3%180), float32(i*7%180)), color.White, i%2 == 0, vector.FillRuleNonZero, ggfx.BlendSourceOver)
+				}
+			},
+			want:  3,
+			wantU: (n/2)*buffers*2 + (n/2)*2 + n,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -479,6 +543,112 @@ func TestFillPathBatchingDrawCalls(t *testing.T) {
 				if got != want {
 					t.Errorf("batching disabled=%t: got %v draw calls, filling three times, want %v", disabled, got, want)
 				}
+			}
+		})
+	}
+}
+
+// TestFillPathBatchingAlternatingRulesAndAA checks that alternating fill rules and antialiasing
+// across cached paths stay in a single cover draw call with zero render-target switches, and
+// render the exact same pixels as flushing after every path.
+func TestFillPathBatchingAlternatingRulesAndAA(t *testing.T) {
+	makeStar := func(cx, cy float32) *vector.Path {
+		var p vector.Path
+		const n = 5
+		for i := range n {
+			a := float64(i*(n/2)) / float64(n) * 2 * math.Pi
+			x, y := snap(cx+18*float32(math.Cos(a))), snap(cy+18*float32(math.Sin(a)))
+			if i == 0 {
+				p.MoveTo(x, y)
+			} else {
+				p.LineTo(x, y)
+			}
+		}
+		p.Close()
+		return &p
+	}
+
+	const w, h = 200, 200
+	star := makeStar(100, 100)
+
+	cases := []struct {
+		name string
+		draw func(dst *ggfx.Image, flushEach bool)
+	}{
+		{
+			name: "alternating fill rules",
+			draw: func(dst *ggfx.Image, flushEach bool) {
+				for i := range 40 {
+					rule := vector.FillRuleNonZero
+					if i%2 == 1 {
+						rule = vector.FillRuleEvenOdd
+					}
+					clr := color.NRGBA{R: uint8(i * 6), G: 0x80, B: 0xff - uint8(i*6), A: 0x80}
+					fillPath(dst, star, clr, true, rule, ggfx.BlendSourceOver)
+					if flushEach {
+						dst.At(0, 0)
+					}
+				}
+			},
+		},
+		{
+			name: "alternating antialiasing",
+			draw: func(dst *ggfx.Image, flushEach bool) {
+				for i := range 40 {
+					clr := color.NRGBA{R: uint8(i * 6), G: 0xc0, B: 0x40, A: 0x80}
+					fillPath(dst, star, clr, i%2 == 0, vector.FillRuleEvenOdd, ggfx.BlendSourceOver)
+					if flushEach {
+						dst.At(0, 0)
+					}
+				}
+			},
+		},
+		{
+			name: "alternating both",
+			draw: func(dst *ggfx.Image, flushEach bool) {
+				for i := range 40 {
+					rule := vector.FillRuleNonZero
+					if i%2 == 1 {
+						rule = vector.FillRuleEvenOdd
+					}
+					clr := color.NRGBA{R: 0x40, G: uint8(i * 6), B: 0xff - uint8(i*6), A: 0x80}
+					fillPath(dst, star, clr, (i/2)%2 == 0, rule, ggfx.BlendSourceOver)
+					if flushEach {
+						dst.At(0, 0)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vector.ResetStencilCache()
+			dstBatched := ggfx.NewImage(w, h)
+			defer dstBatched.Deallocate()
+			// Warm the stencil cache once, then measure the steady-state flush.
+			tc.draw(dstBatched, false)
+			dstBatched.At(0, 0)
+			dstBatched.Clear()
+
+			d0, s0 := vector.DrawCallCount(), vector.RenderTargetSwitchCount()
+			tc.draw(dstBatched, false)
+			pixBatched := make([]byte, 4*w*h)
+			dstBatched.ReadPixels(pixBatched)
+			draws := vector.DrawCallCount() - d0
+			switches := vector.RenderTargetSwitchCount() - s0
+			if draws != 1 || switches != 0 {
+				t.Errorf("steady state: got %d draw calls and %d switches, want 1 and 0", draws, switches)
+			}
+
+			vector.ResetStencilCache()
+			dstRef := ggfx.NewImage(w, h)
+			defer dstRef.Deallocate()
+			tc.draw(dstRef, true)
+			pixRef := make([]byte, 4*w*h)
+			dstRef.ReadPixels(pixRef)
+			if diffs := diffPixels(pixBatched, pixRef, w, 5); len(diffs) > 0 {
+				t.Errorf("batched and per-path-flushed pixels differ: %v", diffs)
 			}
 		})
 	}

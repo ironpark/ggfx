@@ -125,7 +125,11 @@ type stencilCache struct {
 	flush uint64
 	bytes atomic.Int64
 	// key is the key of the path being placed, reused so that a lookup allocates nothing.
-	key []uint32
+	key     []uint32
+	keyPeak recent.Peak
+	// oversizedKey reports whether cap(key) exceeds maxRetainedStencilKeyCap, readable without
+	// theFillPathM so sweepStencils can release key after idle frames even with no cached pages.
+	oversizedKey atomic.Bool
 }
 
 // stencilSlot is where the stencil buffers of a path are for a flush.
@@ -164,16 +168,18 @@ func stencilBuffer(region image.Rectangle, antialias bool, k int) image.Rectangl
 // place places the paths of a flush at time now, in frames, whose rendering bounds are rbs. A path
 // already cached gets its buffers, a new one a region to draw them in, and a path the cache cannot
 // hold is marked transient.
-func (c *stencilCache) place(now int64, paths []*Path, rbs []image.Rectangle, antialias bool, slots []stencilSlot) {
+func (c *stencilCache) place(now int64, paths []*Path, rbs []image.Rectangle, antialias []bool, slots []stencilSlot) {
 	c.flush++
 	c.expire(now)
+	var maxKeyLen int
 	for i, p := range paths {
 		rb := rbs[i]
 		if rb.Empty() {
 			continue
 		}
+		aa := antialias[i]
 		s := rb.Size()
-		if antialias {
+		if aa {
 			s.X *= 2
 		}
 		slot := &slots[i]
@@ -182,7 +188,10 @@ func (c *stencilCache) place(now int64, paths []*Path, rbs []image.Rectangle, an
 			continue
 		}
 		var h uint64
-		c.key, h = appendStencilKey(c.key[:0], p, rb, antialias)
+		c.key, h = appendStencilKey(c.key[:0], p, rb, aa)
+		if len(c.key) > maxKeyLen {
+			maxKeyLen = len(c.key)
+		}
 		e := c.lookup(h, c.key)
 		if e == nil {
 			if !c.admit(h, now) {
@@ -214,6 +223,10 @@ func (c *stencilCache) place(now int64, paths []*Path, rbs []image.Rectangle, an
 		e.page.flush, e.page.frame = c.flush, now
 		slot.img, slot.region = e.page.img, e.region
 	}
+	if maxKeyLen > 0 {
+		c.keyPeak.Observe(maxKeyLen)
+	}
+	c.oversizedKey.Store(cap(c.key) > maxRetainedStencilKeyCap)
 }
 
 // admit reports whether a key missed with hash h at time now was missed in this frame or the last.
@@ -390,7 +403,8 @@ func (c *stencilCache) remove(pg *stencilPage) {
 }
 
 // expire removes the pages no fill used in the last 2*recent.Window frames, so the cache gives its
-// memory back when the paths are gone, as theAtlas does.
+// memory back when the paths are gone, as theAtlas does. It also releases the scratch key buffer
+// once its recent peak has aged out, rather than on every flush while no pages are cached.
 func (c *stencilCache) expire(now int64) {
 	for i := len(c.pages) - 1; i >= 0; i-- {
 		if pg := c.pages[i]; now-pg.frame > 2*recent.Window {
@@ -400,9 +414,13 @@ func (c *stencilCache) expire(now int64) {
 	if len(c.pages) == 0 {
 		c.free = nil
 		c.entries = nil
-		if cap(c.key) > maxRetainedStencilKeyCap {
-			c.key = nil
-		}
+	}
+	c.keyPeak.AdvanceTo(now)
+	peak := c.keyPeak.Max()
+	if (peak == 0 && cap(c.key) > maxRetainedStencilKeyCap) ||
+		(peak > 0 && cap(c.key) > recent.ShrinkFactor*max(peak, maxRetainedStencilKeyCap)) {
+		c.key = nil
+		c.oversizedKey.Store(false)
 	}
 }
 
@@ -419,7 +437,7 @@ func init() {
 // enough for windows of recent.Window frames. A frame sweeper is never called under theFillPathM:
 // a fill holds it, and nothing a fill calls ends a frame.
 func sweepStencils(now int64) {
-	if now%stencilSweepInterval != 0 || StencilBytes() == 0 {
+	if now%stencilSweepInterval != 0 || (StencilBytes() == 0 && !theStencilCache.oversizedKey.Load()) {
 		return
 	}
 	theFillPathM.Lock()
@@ -437,6 +455,8 @@ func (c *stencilCache) dispose() {
 	c.free = nil
 	c.entries = nil
 	c.key = nil
+	c.keyPeak = recent.Peak{}
+	c.oversizedKey.Store(false)
 }
 
 // alloc allocates a region of size s on the page, on the lowest shelf not much taller than s, or

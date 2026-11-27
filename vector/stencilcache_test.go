@@ -327,3 +327,50 @@ func TestStencilsExpireWithoutFills(t *testing.T) {
 		t.Errorf("filling after the stencils expired renders different pixels: %v", diffs)
 	}
 }
+
+// TestStencilCacheKeyRetainedWhileChangingAndReleasedWhenIdle checks that the scratch key buffer
+// is not discarded on every flush while no pages are cached, and is still released after idle
+// frames once the recent window passes.
+func TestStencilCacheKeyRetainedWhileChangingAndReleasedWhenIdle(t *testing.T) {
+	vector.ResetStencilCache()
+
+	// A 120-vertex polygon has a key of > 360 uint32 words, exceeding StencilCacheKeyRetainedLimit.
+	const sides = 120
+	buildChanging := func(i int, p *vector.Path) image.Rectangle {
+		p.Reset()
+		dx := float32(i%997) / 1994
+		for k := range sides {
+			a := float64(k) / float64(sides) * 2 * math.Pi
+			x := 50 + dx + 30*float32(math.Cos(a))
+			y := 50 + dx + 30*float32(math.Sin(a))
+			if k == 0 {
+				p.MoveTo(x, y)
+			} else {
+				p.LineTo(x, y)
+			}
+		}
+		p.Close()
+		return image.Rect(16, 16, 96, 96)
+	}
+
+	// Repeated transient flushes with no cached pages must not reallocate the scratch key buffer.
+	if allocs := vector.StencilCacheKeyAllocs(50, buildChanging); allocs != 0 {
+		t.Errorf("transient stencil key placements: got %v allocs/run, want 0", allocs)
+	}
+	if n := len(vector.StencilCachePageSizes()); n != 0 {
+		t.Fatalf("got %d cache pages, want 0", n)
+	}
+	if got := vector.StencilCacheKeyCap(); got <= vector.StencilCacheKeyRetainedLimit {
+		t.Fatalf("after changing flushes: key cap is %d, want > %d", got, vector.StencilCacheKeyRetainedLimit)
+	}
+
+	// After idle frames, sweepStencils must release the oversized key buffer even with zero GPU bytes.
+	for range 3 * vector.AtlasRecentWindow {
+		if err := vector.NextFrame(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := vector.StencilCacheKeyCap(); got != 0 {
+		t.Errorf("after idle frames: key cap is %d, want 0", got)
+	}
+}

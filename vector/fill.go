@@ -103,7 +103,7 @@ func fillPath(dst *ggfx.Image, path *Path, stroke *AddStrokeOptions, fillOptions
 	if p := imageHooks.Pending(dst); p != nil {
 		s = p.(*fillPathsState)
 	}
-	if s != nil && (s.antialias != drawPathOptions.AntiAlias || s.blend != drawPathOptions.Blend || s.fillRule != fillOptions.FillRule) {
+	if s != nil && s.blend != drawPathOptions.Blend {
 		// Filling draws to dst, which would flush the slot, so it is emptied first. s is kept
 		// for the next batch.
 		imageHooks.ClearPending(dst)
@@ -115,10 +115,8 @@ func fillPath(dst *ggfx.Image, path *Path, stroke *AddStrokeOptions, fillOptions
 		s = theFillPathsStatesPool.Get()
 		imageHooks.SetPending(dst, s)
 	}
-	s.antialias = drawPathOptions.AntiAlias
 	s.blend = drawPathOptions.Blend
-	s.fillRule = fillOptions.FillRule
-	s.addPath(path, stroke, bounds, drawPathOptions.ColorScale)
+	s.addPath(path, stroke, bounds, drawPathOptions.ColorScale, drawPathOptions.AntiAlias, fillOptions.FillRule)
 }
 
 // FlushPending fills the paths pending for dst, before dst is used. A use of dst on another
@@ -250,18 +248,18 @@ var (
 var theAtlas atlas
 
 type fillPathsState struct {
-	paths  []*Path
-	colors []ggfx.ColorScale
-	bounds []image.Rectangle
+	paths     []*Path
+	colors    []ggfx.ColorScale
+	bounds    []image.Rectangle
+	antialias []bool
+	fillRules []FillRule
 
 	// slots are where the stencil buffers of the paths are, and hasQuads whether a path whose
 	// buffers are drawn has a curve, for fillPaths.
 	slots    []stencilSlot
 	hasQuads []bool
 
-	antialias bool
-	blend     ggfx.Blend
-	fillRule  FillRule
+	blend ggfx.Blend
 }
 
 func (f *fillPathsState) reset() {
@@ -271,11 +269,13 @@ func (f *fillPathsState) reset() {
 	f.paths = f.paths[:0]
 	f.bounds = f.bounds[:0]
 	f.colors = slices.Delete(f.colors, 0, len(f.colors))
+	f.antialias = f.antialias[:0]
+	f.fillRules = f.fillRules[:0]
 }
 
 // addPath adds a copy of path, or its stroke if stroke is not nil.
-func (f *fillPathsState) addPath(path *Path, stroke *AddStrokeOptions, bounds image.Rectangle, clr ggfx.ColorScale) {
-	if path == nil || (stroke != nil && stroke.Width <= 0) {
+func (f *fillPathsState) addPath(path *Path, stroke *AddStrokeOptions, bounds image.Rectangle, clr ggfx.ColorScale, antialias bool, fillRule FillRule) {
+	if path == nil || (stroke != nil && (!isRegularF32(stroke.Width) || stroke.Width <= 0)) {
 		return
 	}
 
@@ -286,6 +286,8 @@ func (f *fillPathsState) addPath(path *Path, stroke *AddStrokeOptions, bounds im
 	dst := f.paths[len(f.paths)-1]
 	f.bounds = append(f.bounds, bounds)
 	f.colors = append(f.colors, clr)
+	f.antialias = append(f.antialias, antialias)
+	f.fillRules = append(f.fillRules, fillRule)
 	if stroke != nil {
 		// dst is empty, as reset leaves it.
 		dst.AddStroke(path, stroke)
@@ -320,11 +322,6 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 	theRenderTarget = dst
 	f.placeStencilBuffers(dst.Bounds())
 
-	offsetAndColors := offsetAndColorsNonAA
-	if f.antialias {
-		offsetAndColors = offsetAndColorsAA
-	}
-
 	fillShader, err := ensureStencilBufferShaders()
 	if err != nil {
 		panic(fmt.Sprintf("vector: failed to create stencil buffer shader: %v", err))
@@ -346,10 +343,6 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 	// one by one.
 	stencilOp := &ggfx.DrawTrianglesShaderOptions{}
 	stencilOp.Blend = ggfx.BlendLighter
-	stencilBuffers := 1
-	if f.antialias {
-		stencilBuffers = 2
-	}
 	images := theStencilImages[:0]
 	f.hasQuads = slices.Grow(f.hasQuads[:0], len(f.paths))[:len(f.paths)]
 	for i, path := range f.paths {
@@ -377,8 +370,13 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 					continue
 				}
 				pp := theRenderingBounds[i].Min
-				for _, oac := range offsetAndColors {
-					vs, is = appendStencilTriangles(vs, is, path, oac, pp, s.buffer(f.antialias, oac.imageIndex).Min, bezier)
+				aa := f.antialias[i]
+				oacs := offsetAndColorsNonAA
+				if aa {
+					oacs = offsetAndColorsAA
+				}
+				for _, oac := range oacs {
+					vs, is = appendStencilTriangles(vs, is, path, oac, pp, s.buffer(aa, oac.imageIndex).Min, bezier)
 				}
 			}
 			if len(vs) > maxVs {
@@ -397,10 +395,17 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 				continue
 			}
 			pp := theRenderingBounds[i].Min
+			aa := f.antialias[i]
+			oacs := offsetAndColorsNonAA
+			stencilBuffers := 1
+			if aa {
+				oacs = offsetAndColorsAA
+				stencilBuffers = 2
+			}
 			for k := range stencilBuffers {
-				b := s.buffer(f.antialias, k)
+				b := s.buffer(aa, k)
 				vs, is = vs[:0], is[:0]
-				for _, oac := range offsetAndColors {
+				for _, oac := range oacs {
 					if oac.imageIndex == k {
 						vs, is = appendStencilTriangles(vs, is, path, oac, pp, b.Min, bezier)
 					}
@@ -422,24 +427,15 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 	}
 
 	// Render the stencil buffers with the specified colors.
-	var coverShader *ggfx.Shader
-	switch f.fillRule {
-	case FillRuleNonZero:
-		coverShader, err = ensureStencilBufferNonZeroShader(f.antialias)
-		if err != nil {
-			panic(fmt.Sprintf("vector: failed to create stencil buffer non-zero shader: %v", err))
-		}
-	case FillRuleEvenOdd:
-		coverShader, err = ensureStencilBufferEvenOddShader(f.antialias)
-		if err != nil {
-			panic(fmt.Sprintf("vector: failed to create stencil buffer even-odd shader: %v", err))
-		}
+	coverShader, err := ensureStencilBufferCoverShader()
+	if err != nil {
+		panic(fmt.Sprintf("vector: failed to create stencil buffer cover shader: %v", err))
 	}
 	coverOp := &ggfx.DrawTrianglesShaderOptions{}
 	coverOp.Blend = f.blend
 
 	// The paths are drawn in one call while their stencil images fit in the call's sources. The
-	// cover shaders read the stencil buffers at absolute positions on the source a vertex names, so
+	// cover shader reads the stencil buffers at absolute positions on the source a vertex names, so
 	// the whole images work as the sources: the cache's pages and the atlas's images are unmanaged,
 	// so a position on an image is the position on its texture. A path drawn to a sub-image of dst
 	// has its quad cut to the sub-image's bounds: the edges are on whole pixels, so the cut quad
@@ -453,10 +449,11 @@ func (f *fillPathsState) fillPaths(dst *ggfx.Image) {
 		if atlasImage == nil {
 			continue
 		}
-		srcRegion := s.buffer(f.antialias, 0)
+		aa := f.antialias[i]
+		srcRegion := s.buffer(aa, 0)
 		var offsetX, offsetY float32
-		if f.antialias {
-			srcRegion1 := s.buffer(f.antialias, 1)
+		if aa {
+			srcRegion1 := s.buffer(true, 1)
 			offsetX = float32(srcRegion1.Min.X - srcRegion.Min.X)
 			offsetY = float32(srcRegion1.Min.Y - srcRegion.Min.Y)
 		}
@@ -708,6 +705,13 @@ func (f *fillPathsState) appendCoverQuad(vs []ggfx.Vertex, is []uint32, dst *ggf
 	// The source moves with the cut edges, so that every pixel samples what it did.
 	s := image.Rectangle{Min: srcRegion.Min.Add(c.Min.Sub(d.Min)), Max: srcRegion.Max.Sub(d.Max.Sub(c.Max))}
 	clr := f.colors[i]
+	var mode float32
+	if f.fillRules[i] == FillRuleEvenOdd {
+		mode += 1
+	}
+	if f.antialias[i] {
+		mode += 2
+	}
 	vertex := func(dx, dy int, sx, sy int) ggfx.Vertex {
 		return ggfx.Vertex{
 			DstX:    float32(dx),
@@ -721,6 +725,7 @@ func (f *fillPathsState) appendCoverQuad(vs []ggfx.Vertex, is []uint32, dst *ggf
 			Custom0: offsetX,
 			Custom1: offsetY,
 			Custom2: float32(source),
+			Custom3: mode,
 		}
 	}
 	idx := uint32(len(vs))

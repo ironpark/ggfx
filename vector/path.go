@@ -74,16 +74,15 @@ func (v vec2) inv() vec2 {
 	return vec2{x: -v.x, y: -v.y}
 }
 
-func (v vec2) len() float32 {
-	return float32(math.Hypot(float64(v.x), float64(v.y)))
-}
-
 func (v vec2) norm() vec2 {
-	len := v.len()
-	if len == 0 {
+	l := math.Hypot(float64(v.x), float64(v.y))
+	if l == 0 {
 		return vec2{float32(math.NaN()), float32(math.NaN())}
 	}
-	return vec2{v.x / len, v.y / len}
+	if l32 := float32(l); isRegularF32(l32) && l32 >= 0x1p-126 {
+		return vec2{v.x / l32, v.y / l32}
+	}
+	return vec2{float32(float64(v.x) / l), float32(float64(v.y) / l)}
 }
 
 func (v vec2) mul(s float32) vec2 {
@@ -668,6 +667,22 @@ func collinearQuadFoldTip(p0, p1, p2 point) (point, bool) {
 	}, true
 }
 
+// isCollinear reports whether p0, p1, and p2 lie on the same line.
+// It matches float32 cross-product arithmetic whenever neither product overflows or underflows
+// to a subnormal, and falls back to float64 otherwise.
+func isCollinear(p0, p1, p2 point) bool {
+	dx1, dy1 := p1.x-p0.x, p1.y-p0.y
+	dx2, dy2 := p2.x-p0.x, p2.y-p0.y
+	a, b := dx1*dy2, dx2*dy1
+	aOK := isRegularF32(a) && (abs(a) >= 0x1p-126 || dx1 == 0 || dy2 == 0)
+	bOK := isRegularF32(b) && (abs(b) >= 0x1p-126 || dx2 == 0 || dy1 == 0)
+	if aOK && bOK {
+		return a == b
+	}
+	return (float64(p1.x)-float64(p0.x))*(float64(p2.y)-float64(p0.y)) ==
+		(float64(p2.x)-float64(p0.x))*(float64(p1.y)-float64(p0.y))
+}
+
 // countCusps counts the number of cusps and collinear fold-backs in subPath, which
 // normalizeSubPath splits into two lines.
 func countCusps(subPath *subPath) int {
@@ -680,8 +695,7 @@ func countCusps(subPath *subPath) int {
 		case opTypeQuadTo:
 			if cur == op.p2 && cur != op.p1 {
 				n++
-			} else if cur != op.p1 && op.p1 != op.p2 &&
-				(op.p1.x-cur.x)*(op.p2.y-cur.y)-(op.p2.x-cur.x)*(op.p1.y-cur.y) == 0 {
+			} else if cur != op.p1 && op.p1 != op.p2 && isCollinear(cur, op.p1, op.p2) {
 				if _, ok := collinearQuadFoldTip(cur, op.p1, op.p2); ok {
 					n++
 				}
@@ -736,7 +750,7 @@ func normalizeSubPath(dst *subPath, src *subPath) {
 				op.p1 = op.p2
 				op.p2 = point{}
 				cur = op.p1
-			case (op.p1.x-cur.x)*(op.p2.y-cur.y)-(op.p2.x-cur.x)*(op.p1.y-cur.y) == 0:
+			case isCollinear(cur, op.p1, op.p2):
 				if tip, ok := collinearQuadFoldTip(cur, op.p1, op.p2); ok && tip != cur && tip != op.p2 {
 					first := op
 					first.typ = opTypeLineTo
@@ -761,12 +775,22 @@ func normalizeSubPath(dst *subPath, src *subPath) {
 	dst.updateValidity()
 }
 
+func clampInt(f float64) int {
+	if f >= float64(math.MaxInt) {
+		return math.MaxInt
+	}
+	if f <= float64(math.MinInt) {
+		return math.MinInt
+	}
+	return int(f)
+}
+
 func floor(x float32) int {
-	return int(math.Floor(float64(x)))
+	return clampInt(math.Floor(float64(x)))
 }
 
 func ceil(x float32) int {
-	return int(math.Ceil(float64(x)))
+	return clampInt(math.Ceil(float64(x)))
 }
 
 // Bounds returns the minimum bounding rectangle of the path.

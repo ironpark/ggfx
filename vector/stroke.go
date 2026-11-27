@@ -84,7 +84,7 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 	if src == nil || options == nil {
 		return
 	}
-	if options.Width <= 0 {
+	if !isRegularF32(options.Width) || options.Width <= 0 {
 		return
 	}
 
@@ -96,6 +96,9 @@ func (p *Path) AddStroke(src *Path, options *AddStrokeOptions) {
 	// Normalize into a scratch sub-path so that src is not modified. p.opsBuf is reused as its operations.
 	normalized := subPath{ops: p.opsBuf[:0]}
 	for i := range src.subPaths[:srcN] {
+		if !src.subPaths[i].isValid() {
+			continue
+		}
 		normalizeSubPath(&normalized, &src.subPaths[i])
 		if len(normalized.ops) == 0 {
 			continue
@@ -265,10 +268,16 @@ func appendParalleledLineForQuadIfNeeded(path *Path, p0, p1, p2 point, dist floa
 		return true
 	}
 	// This curve is a line as p0, p1, and p2 are on the same line.
-	if (p1.x-p0.x)*(p2.y-p0.y)-(p2.x-p0.x)*(p1.y-p0.y) == 0 {
+	if isCollinear(p0, p1, p2) {
 		if tip, ok := collinearQuadFoldTip(p0, p1, p2); ok && tip != p0 && tip != p2 {
 			appendParalleledLine(path, p0, tip, dist)
-			appendParalleledLine(path, tip, p2, dist)
+			// Connect across the 180-degree reversal at tip so the reversed edge starts at tip's offset.
+			dir := vec2{x: p2.x - tip.x, y: p2.y - tip.y}
+			v := dir.perp().norm().mul(dist)
+			pt := tip.add(v)
+			path.LineTo(pt.x, pt.y)
+			pp2 := p2.add(v)
+			path.LineTo(pp2.x, pp2.y)
 			return true
 		}
 		appendParalleledLine(path, p0, p2, dist)
@@ -278,9 +287,6 @@ func appendParalleledLineForQuadIfNeeded(path *Path, p0, p1, p2 point, dist floa
 }
 
 func appendParalleledQuad(path *Path, p0, p1, p2 point, dist float32) {
-	if appendParalleledLineForQuadIfNeeded(path, p0, p1, p2, dist) {
-		return
-	}
 	doAppendParalleledQuad(path, p0, p1, p2, dist, 0)
 }
 
@@ -321,6 +327,12 @@ func doAppendParalleledQuad(path *Path, p0, p1, p2 point, dist float32, level in
 		x: 2*mid.x - 0.5*(pp0.x+pp2.x),
 		y: 2*mid.y - 0.5*(pp0.y+pp2.y),
 	}
+	if !isRegularF32(pp1.x) {
+		pp1.x = float32(2*float64(mid.x) - 0.5*(float64(pp0.x)+float64(pp2.x)))
+	}
+	if !isRegularF32(pp1.y) {
+		pp1.y = float32(2*float64(mid.y) - 0.5*(float64(pp0.y)+float64(pp2.y)))
+	}
 
 	if level > 5 {
 		path.QuadTo(pp1.x, pp1.y, pp2.x, pp2.y)
@@ -336,7 +348,7 @@ func doAppendParalleledQuad(path *Path, p0, p1, p2 point, dist float32, level in
 	allowance := dist / 64
 
 	var needSplit bool
-	for _, t := range []float32{0.25, 0.75} {
+	for _, t := range [2]float32{0.25, 0.75} {
 		gotP := point{
 			x: (1-t)*(1-t)*pp0.x + 2*(1-t)*t*pp1.x + t*t*pp2.x,
 			y: (1-t)*(1-t)*pp0.y + 2*(1-t)*t*pp1.y + t*t*pp2.y,
@@ -364,17 +376,18 @@ func doAppendParalleledQuad(path *Path, p0, p1, p2 point, dist float32, level in
 	}
 
 	// Split a quadratic curve into two quadratic curves by De Casteljau algorithm.
+	// Divide by 2 before adding so that midpoint computation cannot overflow.
 	p01 := point{
-		x: (p0.x + p1.x) / 2,
-		y: (p0.y + p1.y) / 2,
+		x: p0.x/2 + p1.x/2,
+		y: p0.y/2 + p1.y/2,
 	}
 	p12 := point{
-		x: (p1.x + p2.x) / 2,
-		y: (p1.y + p2.y) / 2,
+		x: p1.x/2 + p2.x/2,
+		y: p1.y/2 + p2.y/2,
 	}
 	p012 := point{
-		x: (p01.x + p12.x) / 2,
-		y: (p01.y + p12.y) / 2,
+		x: p01.x/2 + p12.x/2,
+		y: p01.y/2 + p12.y/2,
 	}
 	doAppendParalleledQuad(path, p0, p01, p012, dist, level+1)
 	doAppendParalleledQuad(path, p012, p12, p2, dist, level+1)
@@ -453,8 +466,7 @@ func addJoint(strokePath *Path, subPath *subPath, opIndex int, reverse bool, opt
 	switch options.LineJoin {
 	case LineJoinMiter:
 		sinHalfTheta := math.Sin(theta / 2)
-		exceed := float32(1/sinHalfTheta) > options.MiterLimit
-		if !exceed && sinHalfTheta > 0 && isRegularPoint(p) {
+		if sinHalfTheta > 0 && float32(1/sinHalfTheta) <= options.MiterLimit && isRegularPoint(p) {
 			r := float64(options.Width) / 2
 			t := r * math.Sin(da/2) / sinHalfTheta
 			// Miter vertex relative to p: p + r*perp(dir0) + t*dir0, computed in float64

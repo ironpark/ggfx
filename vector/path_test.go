@@ -19,6 +19,7 @@ import (
 	"image/color"
 	"math"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -591,6 +592,14 @@ func TestBounds(t *testing.T) {
 			},
 			want: image.Rectangle{},
 		},
+		{
+			name: "out-of-int-range coordinates clamped",
+			path: func(p *vector.Path) {
+				p.MoveTo(0, 0)
+				p.LineTo(2e20, -2e20)
+			},
+			want: image.Rect(0, math.MinInt, math.MaxInt, 0),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1097,4 +1106,222 @@ func TestStrokeCubicArcRenderedNoSpikes(t *testing.T) {
 	if litCount == 0 {
 		t.Fatalf("expected non-empty rendered ring")
 	}
+}
+
+func TestAddStrokeNumericEdgeCases(t *testing.T) {
+	nan := float32(math.NaN())
+	posInf := float32(math.Inf(1))
+	negInf := float32(math.Inf(-1))
+
+	t.Run("non-finite or non-positive width", func(t *testing.T) {
+		var src vector.Path
+		src.MoveTo(10, 10)
+		src.LineTo(30, 10)
+
+		for _, w := range []float32{0, -2, nan, posInf, negInf} {
+			var sp vector.Path
+			sp.AddStroke(&src, &vector.AddStrokeOptions{
+				StrokeOptions: vector.StrokeOptions{Width: w},
+			})
+			if got := vector.SubPathCount(&sp); got != 0 {
+				t.Errorf("Width=%v: SubPathCount = %d, want 0", w, got)
+			}
+		}
+
+		dst := ggfx.NewImage(32, 32)
+		defer dst.Deallocate()
+		for _, w := range []float32{nan, posInf} {
+			vector.StrokePath(dst, &src, &vector.StrokeOptions{Width: w}, nil)
+		}
+		if got, want := dst.At(20, 10).(color.RGBA), (color.RGBA{}); got != want {
+			t.Errorf("StrokePath non-finite width drew %v, want transparent", got)
+		}
+	})
+
+	t.Run("non-finite source sub-path skipped", func(t *testing.T) {
+		var src vector.Path
+		src.MoveTo(0, 0)
+		src.LineTo(nan, 10)
+		src.MoveTo(10, 10)
+		src.LineTo(20, 10)
+		src.MoveTo(0, 0)
+		src.QuadTo(posInf, 0, 10, 10)
+
+		var sp vector.Path
+		sp.AddStroke(&src, &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 4},
+		})
+		if got, want := vector.SubPathCount(&sp), 1; got != want {
+			t.Errorf("SubPathCount = %d, want %d (only valid sub-path stroked)", got, want)
+		}
+		if got, want := sp.Bounds(), image.Rect(10, 8, 20, 12); got != want {
+			t.Errorf("Bounds = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("miter limit NaN and Inf", func(t *testing.T) {
+		// Sharp V-bend where a miter would extend far past the corner.
+		var p vector.Path
+		p.MoveTo(10, 10)
+		p.LineTo(50, 10)
+		p.LineTo(10, 12)
+
+		var bevel, nanMiter vector.Path
+		bevel.AddStroke(&p, &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 4, LineJoin: vector.LineJoinBevel},
+		})
+		nanMiter.AddStroke(&p, &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 4, LineJoin: vector.LineJoinMiter, MiterLimit: nan},
+		})
+		if got, want := vector.PathOperationsString(&nanMiter), vector.PathOperationsString(&bevel); got != want {
+			t.Errorf("NaN MiterLimit should bevel:\ngot:\n%s\nwant:\n%s", got, want)
+		}
+
+		// 180-degree reversal with +Inf MiterLimit must bevel rather than divide by zero.
+		var rev vector.Path
+		rev.MoveTo(10, 10)
+		rev.LineTo(50, 10)
+		rev.LineTo(10, 10)
+		var infMiter vector.Path
+		infMiter.AddStroke(&rev, &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 4, LineJoin: vector.LineJoinMiter, MiterLimit: posInf},
+		})
+		if got, want := infMiter.Bounds(), image.Rect(10, 8, 50, 12); got != want {
+			t.Errorf("180-deg +Inf MiterLimit bounds = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("collinear large-coord fold-back quad", func(t *testing.T) {
+		var p vector.Path
+		p.MoveTo(0, 0)
+		p.QuadTo(2e20, 2e20, 1e20, 1e20)
+
+		op := &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 4},
+		}
+		var sp vector.Path
+		sp.AddStroke(&p, op)
+
+		// The fold-back is equivalent to this out-and-back two-line path peaking at t = 2/3.
+		tip := float32((4.0 / 3.0) * float64(float32(1e20)))
+		var l vector.Path
+		l.MoveTo(0, 0)
+		l.LineTo(tip, tip)
+		l.LineTo(1e20, 1e20)
+
+		var lp vector.Path
+		lp.AddStroke(&l, op)
+
+		if got, want := vector.PathOperationsString(&sp), vector.PathOperationsString(&lp); got != want {
+			t.Errorf("got:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("subnormal near-collinear fold-back quad", func(t *testing.T) {
+		// Along y = 0 the subnormal offset survives normalization and halves to 0 inside
+		// doAppendParalleledQuad, hitting the collinear fold-back bevel connector.
+		// Tip is at x = 62.5 (t = 0.625) while the first De Casteljau split is at x = 60.
+		var p vector.Path
+		p.MoveTo(0, 0)
+		p.QuadTo(100, math.Float32frombits(1), 40, 0)
+
+		op := &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 20},
+		}
+		op.GeoM.Translate(10, 32)
+		var sp vector.Path
+		sp.AddStroke(&p, op)
+
+		dst := ggfx.NewImage(80, 64)
+		defer dst.Deallocate()
+		vector.FillPath(dst, &sp, nil, nil)
+		// Without the bevel connector at the tip (x = 72.5 after translate), both forward and
+		// reverse passes cut diagonally from (72.5, 42) back toward (50, 22) and (70, 22),
+		// leaving the upper-right tip corner (71, 24) unfilled.
+		for _, pt := range []image.Point{{71, 24}, {71, 32}, {71, 40}, {50, 32}} {
+			if got, want := dst.At(pt.X, pt.Y).(color.RGBA), (color.RGBA{0xff, 0xff, 0xff, 0xff}); got != want {
+				t.Errorf("pixel %v = %v, want %v", pt, got, want)
+			}
+		}
+	})
+
+	t.Run("float32-collinear hairpin keeps round join", func(t *testing.T) {
+		// In float32 both cross-product terms round to 20000 so the hairpin splits at its tip
+		// (~(133.33, 133.33)) and receives a round join.
+		var p vector.Path
+		p.MoveTo(0, 0)
+		p.QuadTo(200, 200.0244140625, 99.98779296875, 100)
+
+		var sp vector.Path
+		sp.AddStroke(&p, &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 20, LineJoin: vector.LineJoinRound},
+		})
+		if got, want := sp.Bounds(), image.Rect(-8, -8, 144, 144); got != want {
+			t.Errorf("Bounds = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("float32-collinear monotonic quad normalized to line", func(t *testing.T) {
+		// Both cross-product terms round to 20000 in float32, so the monotonic quad normalizes to a LineTo.
+		var p vector.Path
+		p.MoveTo(0, 0)
+		p.QuadTo(100.01220703125, 100, 200, 199.9755859375)
+
+		op := &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 10},
+		}
+		var sp vector.Path
+		sp.AddStroke(&p, op)
+
+		var l vector.Path
+		l.MoveTo(0, 0)
+		l.LineTo(200, 199.9755859375)
+		var lp vector.Path
+		lp.AddStroke(&l, op)
+
+		got := vector.PathOperationsString(&sp)
+		if strings.Contains(got, "QuadTo") {
+			t.Errorf("expected quad to normalize to lines, got:\n%s", got)
+		}
+		if want := vector.PathOperationsString(&lp); got != want {
+			t.Errorf("got:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("huge quad control point does not overflow to NaN", func(t *testing.T) {
+		var p vector.Path
+		p.MoveTo(2e38, 0)
+		p.QuadTo(2e38, 2e38, 0, 2e38)
+
+		var sp vector.Path
+		sp.AddStroke(&p, &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 4},
+		})
+		if got := vector.SubPathCount(&sp); got != 1 {
+			t.Errorf("SubPathCount = %d, want 1", got)
+		}
+		ops := vector.PathOperationsString(&sp)
+		if ops == "" || strings.Contains(ops, "NaN") || strings.Contains(ops, "Inf") {
+			t.Errorf("expected finite stroke operations, got:\n%s", ops)
+		}
+	})
+
+	t.Run("huge diagonal vector norm does not overflow to zero", func(t *testing.T) {
+		var p vector.Path
+		p.MoveTo(3e38, 0)
+		p.LineTo(0, 3e38)
+
+		var sp vector.Path
+		sp.AddStroke(&p, &vector.AddStrokeOptions{
+			StrokeOptions: vector.StrokeOptions{Width: 1e37},
+		})
+		// With float32 Hypot overflow, norm() returned (0, 0) and collapsed the stroke onto the line.
+		if got := vector.PathOperationsString(&sp); got == "" {
+			t.Errorf("expected non-empty stroked path")
+		}
+		// Start offset should move away from (3e38, 0) in X/Y by ~3.5e36.
+		if pos, ok := vector.CurrentPosition(&sp); !ok || pos.X == 3e38 || pos.Y == 0 {
+			t.Errorf("expected non-zero normal offset from (3e38, 0), got %v (ok=%t)", pos, ok)
+		}
+	})
 }

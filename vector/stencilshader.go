@@ -52,12 +52,9 @@ func (l *lazyShader) get() (*ggfx.Shader, error) {
 }
 
 var (
-	stencilBufferFillShader      = lazyShader{src: stencilBufferFillShaderSrc}
-	stencilBufferBezierShader    = lazyShader{src: stencilBufferBezierShaderSrc}
-	stencilBufferNonZeroShader   = lazyShader{src: stencilBufferNonZeroShaderSrc}
-	stencilBufferNonZeroAAShader = lazyShader{src: stencilBufferNonZeroAAShaderSrc}
-	stencilBufferEvenOddShader   = lazyShader{src: stencilBufferEvenOddShaderSrc}
-	stencilBufferEvenOddAAShader = lazyShader{src: stencilBufferEvenOddAAShaderSrc}
+	stencilBufferFillShader   = lazyShader{src: stencilBufferFillShaderSrc}
+	stencilBufferBezierShader = lazyShader{src: stencilBufferBezierShaderSrc}
+	stencilBufferCoverShader  = lazyShader{src: stencilBufferCoverShaderSrc}
 )
 
 func ensureStencilBufferShaders() (*ggfx.Shader, error) {
@@ -68,18 +65,8 @@ func ensureStencilBufferBezierShader() (*ggfx.Shader, error) {
 	return stencilBufferBezierShader.get()
 }
 
-func ensureStencilBufferNonZeroShader(antialias bool) (*ggfx.Shader, error) {
-	if antialias {
-		return stencilBufferNonZeroAAShader.get()
-	}
-	return stencilBufferNonZeroShader.get()
-}
-
-func ensureStencilBufferEvenOddShader(antialias bool) (*ggfx.Shader, error) {
-	if antialias {
-		return stencilBufferEvenOddAAShader.get()
-	}
-	return stencilBufferEvenOddShader.get()
+func ensureStencilBufferCoverShader() (*ggfx.Shader, error) {
+	return stencilBufferCoverShader.get()
 }
 
 const stencilBufferFillShaderSrc = `
@@ -123,60 +110,39 @@ fn stencil_at(v: Vertex, pos: vec2f) -> vec4f {
 }
 `
 
-const stencilBufferNonZeroShaderSrc = stencilAtSrc + `
-fn fragment(v: Vertex) -> vec4f {
-	let c = stencil_at(v, v.src_pos);
-	let r = i32(floor(c.r * 255.0 + 0.5));
-	let w = abs((r >> 4u) - (r & 15));
-	let value = min(f32(w), 1.0);
-	return value * v.color;
-}
-`
-
-const stencilBufferNonZeroAAShaderSrc = stencilAtSrc + `
+// stencilBufferCoverShaderSrc renders a path's stencil buffer(s) with its color.
+// custom.w encodes the path's cover mode so paths with different fill rules or antialiasing can
+// share a cover draw: 0 is non-zero, 1 is even-odd, 2 is non-zero with antialiasing, and 3 is
+// even-odd with antialiasing.
+const stencilBufferCoverShaderSrc = stencilAtSrc + `
 fn round4(x: vec4f) -> vec4f {
 	return floor(x + 0.5);
 }
 
 fn fragment(v: Vertex) -> vec4f {
-	let c0 = stencil_at(v, v.src_pos);
-	// custom.xy is the offset to the second sample.
-	let c1 = stencil_at(v, v.src_pos + v.custom.xy);
-	let ci0 = vec4i(round4(c0 * 255.0));
-	let ci1 = vec4i(round4(c1 * 255.0));
-	let w0 = abs((ci0 >> vec4u(4u)) - (ci0 & vec4i(15)));
-	let w1 = abs((ci1 >> vec4u(4u)) - (ci1 & vec4i(15)));
-	let v0 = min(vec4f(w0), vec4f(1.0));
-	let v1 = min(vec4f(w1), vec4f(1.0));
-	return (dot(v0, vec4f(1.0 / 8.0)) + dot(v1, vec4f(1.0 / 8.0))) * v.color;
-}
-`
-
-const stencilBufferEvenOddShaderSrc = stencilAtSrc + `
-fn fragment(v: Vertex) -> vec4f {
+	if (v.custom.w > 1.5) {
+		let c0 = stencil_at(v, v.src_pos);
+		// custom.xy is the offset to the second sample.
+		let c1 = stencil_at(v, v.src_pos + v.custom.xy);
+		let ci0 = vec4i(round4(c0 * 255.0));
+		let ci1 = vec4i(round4(c1 * 255.0));
+		let w0 = abs((ci0 >> vec4u(4u)) - (ci0 & vec4i(15)));
+		let w1 = abs((ci1 >> vec4u(4u)) - (ci1 & vec4i(15)));
+		if (v.custom.w > 2.5) {
+			let v0 = vec4f(w0 % vec4i(2));
+			let v1 = vec4f(w1 % vec4i(2));
+			return (dot(v0, vec4f(1.0 / 8.0)) + dot(v1, vec4f(1.0 / 8.0))) * v.color;
+		}
+		let v0 = min(vec4f(w0), vec4f(1.0));
+		let v1 = min(vec4f(w1), vec4f(1.0));
+		return (dot(v0, vec4f(1.0 / 8.0)) + dot(v1, vec4f(1.0 / 8.0))) * v.color;
+	}
 	let c = stencil_at(v, v.src_pos);
 	let r = i32(floor(c.r * 255.0 + 0.5));
 	let w = abs((r >> 4u) - (r & 15));
-	let value = f32(w % 2);
-	return value * v.color;
-}
-`
-
-const stencilBufferEvenOddAAShaderSrc = stencilAtSrc + `
-fn round4(x: vec4f) -> vec4f {
-	return floor(x + 0.5);
-}
-
-fn fragment(v: Vertex) -> vec4f {
-	let c0 = stencil_at(v, v.src_pos);
-	// custom.xy is the offset to the second sample.
-	let c1 = stencil_at(v, v.src_pos + v.custom.xy);
-	let ci0 = vec4i(round4(c0 * 255.0));
-	let ci1 = vec4i(round4(c1 * 255.0));
-	let w0 = abs((ci0 >> vec4u(4u)) - (ci0 & vec4i(15)));
-	let w1 = abs((ci1 >> vec4u(4u)) - (ci1 & vec4i(15)));
-	let v0 = vec4f(w0 % vec4i(2));
-	let v1 = vec4f(w1 % vec4i(2));
-	return (dot(v0, vec4f(1.0 / 8.0)) + dot(v1, vec4f(1.0 / 8.0))) * v.color;
+	if (v.custom.w > 0.5) {
+		return f32(w % 2) * v.color;
+	}
+	return min(f32(w), 1.0) * v.color;
 }
 `
