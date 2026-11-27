@@ -83,8 +83,7 @@ func (i *Image) Dispose() {
 		return
 	}
 	i.disposed = true
-	i.g.ring.cur().encodeDisposeImage(i.id)
-	i.g.imageIDs.deferRelease(i.id)
+	i.g.queueDisposeImage(i.id)
 }
 
 func validatePixelRegion(r image.Rectangle, width, height, bpp, pixLen int, op string) error {
@@ -120,7 +119,7 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 		}
 	}
 
-	if i.g.ring.cur().encodeWritePixels(i.id, args) {
+	if i.g.ring.cur().encodeWritePixels(i.id, bpp, args) {
 		return nil
 	}
 
@@ -133,22 +132,22 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	}
 
 	cur := i.g.ring.cur()
-	if i.g.shared.enabled && !i.g.shared.canFitWritePixels(args) {
-		totalNeed, ok := i.g.shared.writePixelsNeed(args)
+	if i.g.shared.enabled && !i.g.shared.canFitWritePixels(args, bpp) {
+		totalNeed, ok := i.g.shared.writePixelsNeed(args, bpp)
 		if !ok || !i.g.acquireSharedArena(totalNeed) {
 			if len(args) == 1 {
 				cur.forceHeap = true
 			}
 		}
 	}
-	if cur.encodeWritePixels(i.id, args) {
+	if cur.encodeWritePixels(i.id, bpp, args) {
 		return nil
 	}
 
 	// If multiple regions combined exceed the arena or slot payload limit, stream them one by one.
 	for idx := range args {
 		single := args[idx : idx+1]
-		if i.g.ring.cur().encodeWritePixels(i.id, single) {
+		if i.g.ring.cur().encodeWritePixels(i.id, bpp, single) {
 			continue
 		}
 		if i.g.ring.cur().cmdCount > 0 {
@@ -157,15 +156,16 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 			}
 		}
 		cur = i.g.ring.cur()
-		if i.g.shared.enabled && !i.g.shared.canFitWritePixels(single) {
-			if !i.g.acquireSharedArena(uint64(len(args[idx].Pixels))) {
+		if i.g.shared.enabled && !i.g.shared.canFitWritePixels(single, bpp) {
+			need, ok := i.g.shared.writePixelsNeed(single, bpp)
+			if !ok || !i.g.acquireSharedArena(need) {
 				cur.forceHeap = true
 			}
 		}
-		if !cur.encodeWritePixels(i.id, single) {
+		if !cur.encodeWritePixels(i.id, bpp, single) {
 			if !cur.forceHeap && i.g.shared.enabled {
 				cur.forceHeap = true
-				if cur.encodeWritePixels(i.id, single) {
+				if cur.encodeWritePixels(i.id, bpp, single) {
 					continue
 				}
 			}
@@ -245,6 +245,9 @@ func (i *Image) ReadPixels(args []graphicsdriver.PixelsArgs) error {
 
 	if pendingPtr != nil {
 		i.g.retireBatch(cur, use, st)
+		if st != StatusOK && st != StatusErrDeviceLost && !i.g.closed.Load() {
+			i.g.requeuePendingDisposals()
+		}
 	}
 
 	return statusToError("read_pixels", st, i.g.errBuf[:])

@@ -103,11 +103,14 @@ pub const CpuDescriptorPool = struct {
     }
 };
 
+const SrvTableKey = [srv_table_size]usize;
+
 const FrameSrvRingState = struct {
     used_tables: u32 = 0,
-    last_srcs: [srv_table_size]usize = @splat(0),
+    last_srcs: SrvTableKey = @splat(0),
     last_gpu: d3d12.D3D12_GPU_DESCRIPTOR_HANDLE = .{ .ptr = 0 },
     last_valid: bool = false,
+    cache: std.AutoHashMapUnmanaged(SrvTableKey, d3d12.D3D12_GPU_DESCRIPTOR_HANDLE) = .empty,
 };
 
 pub const DescriptorManager = struct {
@@ -190,6 +193,9 @@ pub const DescriptorManager = struct {
     }
 
     pub fn deinit(self: *DescriptorManager, gpa: Allocator) void {
+        for (&self.frames) |*f| {
+            f.cache.deinit(gpa);
+        }
         _ = self.shader_visible_heap.release();
         self.cpu_srv_pool.deinit(gpa);
         self.cpu_rtv_pool.deinit(gpa);
@@ -247,12 +253,27 @@ pub const DescriptorManager = struct {
 
     pub fn invalidateSrcHandle(self: *DescriptorManager, cpu_ptr: usize) void {
         for (&self.frames) |*f| {
-            if (!f.last_valid) continue;
-            for (f.last_srcs) |s| {
-                if (s == cpu_ptr) {
-                    f.last_valid = false;
-                    break;
+            if (f.last_valid) {
+                for (f.last_srcs) |s| {
+                    if (s == cpu_ptr) {
+                        f.last_valid = false;
+                        break;
+                    }
                 }
+            }
+            var found = false;
+            var it = f.cache.keyIterator();
+            while (it.next()) |key_ptr| {
+                for (key_ptr.*) |s| {
+                    if (s == cpu_ptr) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) break;
+            }
+            if (found) {
+                f.cache.clearRetainingCapacity();
             }
         }
     }
@@ -261,26 +282,52 @@ pub const DescriptorManager = struct {
         return self.frames[frame_index].used_tables < tables_per_frame;
     }
 
-    pub fn resetFrame(self: *DescriptorManager, frame_index: usize) void {
-        self.frames[frame_index] = .{};
+    pub fn isCached(
+        self: *const DescriptorManager,
+        frame_index: usize,
+        src_handles: [srv_table_size]d3d12.D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) bool {
+        const f = &self.frames[frame_index];
+        var keys: SrvTableKey = undefined;
+        for (src_handles, 0..) |h, i| {
+            keys[i] = h.ptr;
+        }
+        if (f.last_valid and std.mem.eql(usize, &f.last_srcs, &keys)) return true;
+        return f.cache.contains(keys);
     }
 
-    /// Returns a GPU descriptor handle for the 4-SRV table (t0..t3), reusing the
-    /// previously allocated table if the source handle tuple matches.
-    /// Caller must ensure `hasRoom(frame_index)` (or that the tuple matches) beforehand.
+    pub fn resetFrame(self: *DescriptorManager, frame_index: usize) void {
+        const f = &self.frames[frame_index];
+        f.used_tables = 0;
+        f.last_valid = false;
+        f.last_srcs = @splat(0);
+        f.last_gpu = .{ .ptr = 0 };
+        f.cache.clearRetainingCapacity();
+    }
+
+    /// Returns a GPU descriptor handle for the 4-SRV table (t0..t3), reusing a
+    /// previously allocated table from this frame if the source handle tuple matches.
+    /// Caller must ensure `hasRoom(frame_index)` or `isCached(frame_index, src_handles)`.
     pub fn getOrAllocSrvTable(
         self: *DescriptorManager,
+        gpa: Allocator,
         device: *d3d12.ID3D12Device,
         frame_index: usize,
         src_handles: [srv_table_size]d3d12.D3D12_CPU_DESCRIPTOR_HANDLE,
     ) struct { gpu: d3d12.D3D12_GPU_DESCRIPTOR_HANDLE, reused: bool } {
         const f = &self.frames[frame_index];
-        var keys: [srv_table_size]usize = undefined;
+        var keys: SrvTableKey = undefined;
         for (src_handles, 0..) |h, i| {
             keys[i] = h.ptr;
         }
         if (f.last_valid and std.mem.eql(usize, &f.last_srcs, &keys)) {
             return .{ .gpu = f.last_gpu, .reused = true };
+        }
+        if (f.cache.get(keys)) |cached_gpu| {
+            f.last_srcs = keys;
+            f.last_gpu = cached_gpu;
+            f.last_valid = true;
+            return .{ .gpu = cached_gpu, .reused = true };
         }
 
         const table_idx = f.used_tables;
@@ -301,6 +348,7 @@ pub const DescriptorManager = struct {
         );
 
         const gpu = self.sv_gpu_start.offset(base_desc_idx, self.cbv_srv_uav_size);
+        f.cache.put(gpa, keys, gpu) catch {};
         f.last_srcs = keys;
         f.last_gpu = gpu;
         f.last_valid = true;

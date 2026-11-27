@@ -45,7 +45,7 @@ test "C ABI device create/destroy lifecycle has zero leaks" {
     var caps: abi.DriverCaps = undefined;
     var err_buf: [256]u8 = undefined;
 
-    try std.testing.expectEqual(@as(u32, 1), ggfx.ggfx_abi_version());
+    try std.testing.expectEqual(@as(u32, 2), ggfx.ggfx_abi_version());
     try std.testing.expectEqual(
         abi.Status.ok,
         ggfx.ggfx_device_create(&opts, &dev, &caps, &err_buf, err_buf.len),

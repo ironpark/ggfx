@@ -1187,6 +1187,18 @@ pub const SubmitInfo = extern struct {
     pSignalSemaphores: ?[*]const Semaphore = null,
 };
 
+pub const BufferMemoryBarrier = extern struct {
+    sType: StructureType = .buffer_memory_barrier,
+    pNext: ?*const anyopaque = null,
+    srcAccessMask: Flags = 0,
+    dstAccessMask: Flags = 0,
+    srcQueueFamilyIndex: u32 = QUEUE_FAMILY_IGNORED,
+    dstQueueFamilyIndex: u32 = QUEUE_FAMILY_IGNORED,
+    buffer: Buffer = .null_handle,
+    offset: DeviceSize = 0,
+    size: DeviceSize = WHOLE_SIZE,
+};
+
 pub const ImageMemoryBarrier = extern struct {
     sType: StructureType = .image_memory_barrier,
     pNext: ?*const anyopaque = null,

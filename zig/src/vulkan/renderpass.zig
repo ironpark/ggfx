@@ -43,13 +43,24 @@ pub const RenderPassCache = struct {
             .colorAttachmentCount = 1,
             .pColorAttachments = @ptrCast(&color_ref),
         };
+        // Synchronize consecutive render passes targeting an unchanged COLOR_ATTACHMENT_OPTIMAL
+        // attachment (loadOp=LOAD, blending, or subsequent overwrite).
+        const dependency = vk.SubpassDependency{
+            .srcSubpass = vk.SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = vk.PipelineStage.color_attachment_output_bit,
+            .dstStageMask = vk.PipelineStage.color_attachment_output_bit,
+            .srcAccessMask = vk.Access.color_attachment_write_bit,
+            .dstAccessMask = vk.Access.color_attachment_read_bit | vk.Access.color_attachment_write_bit,
+            .dependencyFlags = 0,
+        };
         const rp_ci = vk.RenderPassCreateInfo{
             .attachmentCount = 1,
             .pAttachments = @ptrCast(&attachment),
             .subpassCount = 1,
             .pSubpasses = @ptrCast(&subpass),
-            .dependencyCount = 0,
-            .pDependencies = null,
+            .dependencyCount = 1,
+            .pDependencies = @ptrCast(&dependency),
         };
 
         var rp: vk.RenderPass = .null_handle;

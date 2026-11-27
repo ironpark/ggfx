@@ -158,16 +158,18 @@ pub const DisplayLink = struct {
     }
 
     /// Called periodically by the backend's housekeeping thread.
-    pub fn tickIdle(self: *DisplayLink, now_ns: u64) void {
-        const f = ensureLoaded() orelse return;
+    /// Returns true while the display link is still running and waiting for its idle timeout.
+    pub fn tickIdle(self: *DisplayLink, now_ns: u64) bool {
+        const f = ensureLoaded() orelse return false;
         self.mu.lock();
         defer self.mu.unlock();
-        if (self.ref != null and !self.stopped) {
-            if (now_ns >= self.last_wait_ns and (now_ns - self.last_wait_ns) >= link_idle_ns) {
-                _ = f.stop(self.ref);
-                self.stopped = true;
-            }
+        if (self.ref == null or self.stopped) return false;
+        if (now_ns >= self.last_wait_ns and (now_ns - self.last_wait_ns) >= link_idle_ns) {
+            _ = f.stop(self.ref);
+            self.stopped = true;
+            return false;
         }
+        return true;
     }
 
     pub fn deinit(self: *DisplayLink) void {

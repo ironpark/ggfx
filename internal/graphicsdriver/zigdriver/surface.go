@@ -245,6 +245,6 @@ func (s *Surface) Dispose() {
 	s.g.surfacesMu.Unlock()
 
 	if !s.g.closed.Load() {
-		s.g.ring.cur().encodeDisposeSurface(s.id)
+		s.g.queueDisposeSurface(s.id)
 	}
 }

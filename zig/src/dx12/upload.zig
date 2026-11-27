@@ -1,5 +1,6 @@
 const std = @import("std");
 const errors = @import("../errors.zig");
+const upload_arena = @import("../upload_arena.zig");
 const win32 = @import("win32.zig");
 const d3d12 = @import("d3d12.zig");
 const dxgi = @import("dxgi.zig");
@@ -9,6 +10,7 @@ const Error = errors.Error;
 const Diag = errors.Diag;
 
 pub const min_ring_size: usize = 256 * 1024;
+pub const min_readback_size: u64 = 64 * 1024;
 pub const vb_ib_alignment: usize = 4;
 pub const cbv_alignment: usize = d3d12.D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT; // 256
 pub const texture_placement_alignment: usize = d3d12.D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512
@@ -59,6 +61,7 @@ pub fn createBuffer(
 
 pub const MappedUploadBuffer = struct {
     resource: *d3d12.ID3D12Resource,
+    gpu_base: d3d12.D3D12_GPU_VIRTUAL_ADDRESS,
     cpu_ptr: [*]u8,
     size: u64,
 };
@@ -80,6 +83,7 @@ pub fn createMappedUploadBuffer(
     }
     return .{
         .resource = buf,
+        .gpu_base = buf.getGpuVirtualAddress(),
         .cpu_ptr = @ptrCast(mapped_raw.?),
         .size = size_bytes,
     };
@@ -90,49 +94,62 @@ pub fn destroyMappedUploadBuffer(buf: MappedUploadBuffer) void {
     _ = buf.resource.release();
 }
 
-/// Idle shared upload arenas, still mapped, kept for reuse so that rotating
-/// the arena does not create and map a new committed resource every time.
-/// Bounded by count and by total bytes; a buffer that does not fit is released.
-pub const SharedArenaPool = struct {
-    pub const max_idle = 4;
-    pub const max_idle_bytes: u64 = 64 << 20;
+fn mappedBufSize(buf: MappedUploadBuffer) u64 {
+    return buf.size;
+}
 
-    idle: [max_idle]MappedUploadBuffer = undefined,
-    len: usize = 0,
-    bytes: u64 = 0,
+fn destroyMappedUploadBufferCtx(_: void, buf: MappedUploadBuffer) void {
+    destroyMappedUploadBuffer(buf);
+}
 
-    /// Removes and returns the smallest idle buffer of at least `size` bytes.
-    pub fn take(self: *SharedArenaPool, size: u64) ?MappedUploadBuffer {
-        var best: ?usize = null;
-        for (self.idle[0..self.len], 0..) |buf, i| {
-            if (buf.size < size) continue;
-            if (best == null or buf.size < self.idle[best.?].size) best = i;
+/// Idle shared upload arenas, still mapped, kept for reuse across rotations.
+pub const SharedArenaPool = upload_arena.Pool(
+    MappedUploadBuffer,
+    void,
+    mappedBufSize,
+    destroyMappedUploadBufferCtx,
+);
+
+/// Grow-only READBACK heap buffer reused across readPixels calls.
+pub const ReadbackBuffer = struct {
+    resource: ?*d3d12.ID3D12Resource = null,
+    capacity: u64 = 0,
+
+    pub fn ensure(
+        self: *ReadbackBuffer,
+        device: *d3d12.ID3D12Device,
+        needed: u64,
+        diag: *Diag,
+    ) Error!*d3d12.ID3D12Resource {
+        if (self.resource) |res| {
+            if (self.capacity >= needed) return res;
         }
-        const i = best orelse return null;
-        const buf = self.idle[i];
-        self.len -= 1;
-        self.idle[i] = self.idle[self.len];
-        self.bytes -= buf.size;
-        return buf;
+        const cap = @max(needed, min_readback_size);
+        const new_res = try createBuffer(device, cap, d3d12.D3D12_HEAP_TYPE_READBACK, diag);
+        if (self.resource) |old| {
+            _ = old.release();
+        }
+        self.resource = new_res;
+        self.capacity = cap;
+        return new_res;
     }
 
-    /// Keeps `buf` for reuse. The GPU must no longer be reading it.
-    pub fn put(self: *SharedArenaPool, buf: MappedUploadBuffer) void {
-        if (self.len == max_idle or buf.size > max_idle_bytes - self.bytes) {
-            destroyMappedUploadBuffer(buf);
-            return;
+    pub fn deinit(self: *ReadbackBuffer) void {
+        if (self.resource) |res| {
+            _ = res.release();
+            self.resource = null;
         }
-        self.idle[self.len] = buf;
-        self.len += 1;
-        self.bytes += buf.size;
+        self.capacity = 0;
     }
+};
 
-    pub fn deinit(self: *SharedArenaPool) void {
-        for (self.idle[0..self.len]) |buf| {
-            destroyMappedUploadBuffer(buf);
-        }
-        self.len = 0;
-        self.bytes = 0;
+pub const RetiredBuffer = struct {
+    resource: *d3d12.ID3D12Resource,
+    gpu_base: d3d12.D3D12_GPU_VIRTUAL_ADDRESS,
+    size: usize,
+
+    pub fn containsAny(self: RetiredBuffer, addrs: []const d3d12.D3D12_GPU_VIRTUAL_ADDRESS) bool {
+        return upload_arena.rangeContainsAny(self.gpu_base, @as(u64, self.size), addrs);
     }
 };
 
@@ -153,7 +170,7 @@ pub const UploadRing = struct {
     cpu_base: ?[*]u8 = null,
     size: usize = 0,
     offset: usize = 0,
-    retired: std.ArrayList(*d3d12.ID3D12Resource) = .empty,
+    retired: std.ArrayList(RetiredBuffer) = .empty,
     /// Rotated-out shared upload arenas. Unlike `retired`, these go back to a
     /// `SharedArenaPool` for reuse once the GPU has finished with them.
     retired_shared: std.ArrayList(MappedUploadBuffer) = .empty,
@@ -178,7 +195,11 @@ pub const UploadRing = struct {
 
         if (self.buffer == null or aligned_off + req_size > self.size) {
             if (self.buffer) |old_buf| {
-                self.retired.append(gpa, old_buf) catch return error.OutOfMemory;
+                self.retired.append(gpa, .{
+                    .resource = old_buf,
+                    .gpu_base = self.gpu_base,
+                    .size = self.size,
+                }) catch return error.OutOfMemory;
                 self.buffer = null;
                 self.cpu_base = null;
                 self.gpu_base = 0;
@@ -222,29 +243,51 @@ pub const UploadRing = struct {
         return self.retired.items.len + self.retired_shared.items.len;
     }
 
-    /// Releases retired ring buffers and returns retired shared arenas to `pool`.
-    /// The GPU must have finished every command that reads them.
-    pub fn releaseRetired(self: *UploadRing, pool: *SharedArenaPool) void {
-        for (self.retired.items) |buf| {
-            buf.unmap(0, null);
-            _ = buf.release();
+    pub fn clearUniformCache(self: *UploadRing) void {
+        self.last_internal_version = 0;
+        self.last_internal_gpu = 0;
+        self.last_user_version = 0;
+        self.last_user_gpu = 0;
+        self.last_user_size = 0;
+    }
+
+    /// Releases retired ring buffers whose GPU address ranges do not contain any
+    /// address in `keep_addrs` (such as live `active_vbv`/`active_ibv`), clears
+    /// cached uniform GPU addresses, and returns retired shared arenas to `pool`.
+    /// The GPU must have finished every command that reads the released buffers.
+    pub fn releaseRetiredExcept(
+        self: *UploadRing,
+        pool: *SharedArenaPool,
+        keep_addrs: []const d3d12.D3D12_GPU_VIRTUAL_ADDRESS,
+    ) void {
+        self.clearUniformCache();
+        var keep_len: usize = 0;
+        for (self.retired.items) |rb| {
+            if (rb.containsAny(keep_addrs)) {
+                self.retired.items[keep_len] = rb;
+                keep_len += 1;
+            } else {
+                rb.resource.unmap(0, null);
+                _ = rb.resource.release();
+            }
         }
-        self.retired.clearRetainingCapacity();
+        self.retired.items.len = keep_len;
         for (self.retired_shared.items) |buf| {
-            pool.put(buf);
+            pool.put({}, buf);
         }
         self.retired_shared.clearRetainingCapacity();
+    }
+
+    /// Releases all retired ring buffers and returns retired shared arenas to `pool`.
+    /// The GPU must have finished every command that reads them.
+    pub fn releaseRetired(self: *UploadRing, pool: *SharedArenaPool) void {
+        self.releaseRetiredExcept(pool, &.{});
     }
 
     /// Reclaims retired buffers and resets write offset after GPU completes this frame.
     pub fn reset(self: *UploadRing, pool: *SharedArenaPool) void {
         self.releaseRetired(pool);
         self.offset = 0;
-        self.last_internal_version = 0;
-        self.last_internal_gpu = 0;
-        self.last_user_version = 0;
-        self.last_user_gpu = 0;
-        self.last_user_size = 0;
     }
 
     pub fn deinit(self: *UploadRing, gpa: Allocator, pool: *SharedArenaPool) void {
@@ -281,26 +324,27 @@ pub fn computeTextureFootprint(width: u32, height: u32, bpp: u32) TextureFootpri
     };
 }
 
-/// Repacks tightly-packed pixel rows into a 256-byte RowPitch-aligned upload staging buffer.
+/// Repacks pixel rows (with source stride `src_row_pitch`) into a 256-byte RowPitch-aligned upload staging buffer.
 pub fn packRowsToFootprint(
     dst: [*]u8,
-    row_pitch: usize,
+    dst_row_pitch: usize,
     src: []const u8,
+    src_row_pitch: usize,
     width: u32,
     height: u32,
     bpp: u32,
 ) void {
     const row_bytes: usize = @as(usize, width) * @as(usize, bpp);
     if (row_bytes == 0 or height == 0) return;
-    if (row_pitch == row_bytes) {
-        const total = row_bytes * @as(usize, height);
+    if (dst_row_pitch == src_row_pitch) {
+        const total = dst_row_pitch * @as(usize, height - 1) + row_bytes;
         @memcpy(dst[0..total], src[0..total]);
         return;
     }
     var row: usize = 0;
     while (row < height) : (row += 1) {
-        const dst_off = row * row_pitch;
-        const src_off = row * row_bytes;
+        const dst_off = row * dst_row_pitch;
+        const src_off = row * src_row_pitch;
         @memcpy(dst[dst_off .. dst_off + row_bytes], src[src_off .. src_off + row_bytes]);
     }
 }

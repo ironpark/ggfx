@@ -6,6 +6,7 @@ const state_cache = @import("../state_cache.zig");
 const sync = @import("../sync.zig");
 const replayer = @import("../replayer.zig");
 const upload_arena = @import("../upload_arena.zig");
+const pixel_regions = @import("../pixel_regions.zig");
 const vk = @import("vk.zig");
 const loader_mod = @import("loader.zig");
 const instance_mod = @import("instance.zig");
@@ -47,11 +48,18 @@ const DestroyedImage = struct {
     framebuffer: vk.Framebuffer,
 };
 
+const ImgLayoutUndo = struct {
+    id: u32,
+    old_layout: vk.ImageLayout,
+};
+
 const CmdEntry = struct {
     cb: vk.CommandBuffer,
     fence: vk.Fence,
     submitted: bool = false,
 };
+
+const max_cached_descriptor_sets: usize = 2048;
 
 const FrameSlot = struct {
     cmd_pool: vk.CommandPool = .null_handle,
@@ -59,6 +67,7 @@ const FrameSlot = struct {
     cmd_used: usize = 0,
     upload: upload_mod.UploadRing = .{},
     desc_pool: descriptors_mod.DescriptorPoolRing = .{},
+    desc_dirty: bool = false,
     deferred_images: std.ArrayList(DestroyedImage) = .empty,
     deferred_shaders: std.ArrayList(vk.ShaderModule) = .empty,
     deferred_pipelines: std.ArrayList(vk.Pipeline) = .empty,
@@ -142,8 +151,13 @@ const FrameSlot = struct {
             );
             self.cmd_used = 0;
         }
+        // Reset descriptor pool before destroying retired upload chunks or deferred images,
+        // keeping cached sets alive across steady-state frames when no referenced handles changed.
+        if (self.desc_dirty or self.upload.hasRetired() or self.desc_pool.cache.count() > max_cached_descriptor_sets) {
+            self.desc_pool.reset(dev);
+            self.desc_dirty = false;
+        }
         self.upload.reset(dev, mem, shared_pool);
-        self.desc_pool.reset(dev);
         self.drainDeferred(dev, mem);
     }
 
@@ -266,6 +280,7 @@ pub const Backend = struct {
 
     // Active command recording & render pass state.
     active_cb: vk.CommandBuffer = null,
+    cb_phase: state_cache.CmdBufferPhase = .idle,
     active_entry_idx: usize = 0,
     in_render_pass: bool = false,
     current_dst_id: u32 = 0,
@@ -307,7 +322,12 @@ pub const Backend = struct {
     surfaces_lock: sync.Mutex = .{},
 
     readback: upload_mod.ReadbackBuffer = .{},
+    readback_in_flight: bool = false,
+    readback_offsets: std.ArrayList(u64) = .empty,
     drawn_surfaces: std.ArrayList(u32) = .empty,
+    acquired_in_batch: bool = false,
+    device_lost: std.atomic.Value(bool) = .init(false),
+    img_layout_undo: std.ArrayList(ImgLayoutUndo) = .empty,
     submit_scratch: SubmitScratch = .{},
     present_scratch: PresentScratch = .{},
 
@@ -371,7 +391,7 @@ pub const Backend = struct {
             for (self.frames[0..inited_frames]) |*f| {
                 f.deinit(gpa, &self.dev, .{ .mem = &self.mem, .shared_pool = &self.shared_pool });
             }
-            self.shared_pool.deinit(&self.dev, &self.mem);
+            self.shared_pool.deinit(.{ .dev = &self.dev, .mem = &self.mem });
         }
         for (0..frames_in_flight) |i| {
             self.frames[i] = try FrameSlot.init(gpa, &self.dev, diag);
@@ -392,7 +412,18 @@ pub const Backend = struct {
 
     pub fn deinit(self: *Backend) void {
         const gpa = self.gpa;
-        self.dev.waitIdle();
+        var dummy_diag = Diag.none();
+        const wait_err: ?Error = if (self.dev.waitIdleChecked(&dummy_diag)) |_| null else |err| err;
+        if (wait_err) |err| {
+            if (err != error.DeviceLost and (self.readback_in_flight or self.isDeviceLost())) {
+                // GPU work may still be reading or writing device resources and the driver
+                // failed to confirm idle without reporting VK_ERROR_DEVICE_LOST. Abandon
+                // GPU-side teardown entirely (deliberately leaking the VkDevice and its
+                // children rather than freeing a partial dependency set); the process is
+                // expected to be exiting or the driver unusable.
+                return;
+            }
+        }
 
         // Destroy all remaining live offscreen images.
         for (self.images.items.items) |*slot| {
@@ -437,6 +468,8 @@ pub const Backend = struct {
         self.surfaces_lock.deinit();
 
         self.drawn_surfaces.deinit(gpa);
+        self.img_layout_undo.deinit(gpa);
+        self.readback_offsets.deinit(gpa);
         self.submit_scratch.deinit(gpa);
         self.present_scratch.deinit(gpa);
         self.readback.deinit(&self.dev, &self.mem);
@@ -448,7 +481,7 @@ pub const Backend = struct {
         for (0..self.frames_in_flight) |i| {
             self.frames[i].deinit(gpa, &self.dev, .{ .mem = &self.mem, .shared_pool = &self.shared_pool });
         }
-        self.shared_pool.deinit(&self.dev, &self.mem);
+        self.shared_pool.deinit(.{ .dev = &self.dev, .mem = &self.mem });
 
         self.pipelines.deinit(gpa, &self.dev);
         self.rp_cache.deinit(gpa, &self.dev);
@@ -460,8 +493,33 @@ pub const Backend = struct {
         gpa.destroy(self);
     }
 
+    inline fn markDeviceLost(self: *Backend) void {
+        self.device_lost.store(true, .release);
+    }
+
     inline fn currentFrame(self: *Backend) *FrameSlot {
         return &self.frames[self.frame_index];
+    }
+
+    fn markAllDescsDirty(self: *Backend) void {
+        for (0..self.frames_in_flight) |i| {
+            self.frames[i].desc_dirty = true;
+        }
+    }
+
+    fn recordImgLayoutUndo(self: *Backend, id: u32, old_layout: vk.ImageLayout) Error!void {
+        self.img_layout_undo.append(self.gpa, .{ .id = id, .old_layout = old_layout }) catch return error.OutOfMemory;
+    }
+
+    fn sharedUniformOffset(self: *const Backend, slice: []const u8, ubo_align: u64) ?struct {
+        buf: vk.Buffer,
+        off: u32,
+    } {
+        const chunk = self.shared_upload_chunk orelse return null;
+        const off = upload_arena.offsetWithin(chunk.alloc.mapped, @intCast(chunk.capacity), slice) orelse return null;
+        if ((off % ubo_align) != 0) return null;
+        const off_u32 = std.math.cast(u32, off) orelse return null;
+        return .{ .buf = chunk.buffer, .off = off_u32 };
     }
 
     fn resetBindState(self: *Backend) void {
@@ -503,6 +561,7 @@ pub const Backend = struct {
         );
 
         self.active_cb = entry.cb;
+        self.cb_phase.onBegin();
         self.active_entry_idx = entry_idx;
         self.in_render_pass = false;
         self.current_dst_id = 0;
@@ -534,21 +593,26 @@ pub const Backend = struct {
         self.endRenderPass();
         const cb = self.active_cb orelse return;
 
-        try loader_mod.check(
-            self.dev.disp.vkEndCommandBuffer(cb),
-            diag,
-            "vkEndCommandBuffer",
-        );
-
-        // Wait on any pending swapchain acquire semaphores before the GPU executes draws to them.
+        // Preallocate submit scratch before ending the command buffer so no fallible allocation
+        // occurs between ending the CB and submitting it to the queue.
         const scratch = &self.submit_scratch;
         scratch.clear();
+        const max_waits = self.drawn_surfaces.items.len;
+        scratch.wait_sems.ensureTotalCapacity(self.gpa, max_waits) catch return error.OutOfMemory;
+        scratch.wait_stages.ensureTotalCapacity(self.gpa, max_waits) catch return error.OutOfMemory;
+        scratch.pending_surfs.ensureTotalCapacity(self.gpa, max_waits) catch return error.OutOfMemory;
+
+        const end_res = self.dev.disp.vkEndCommandBuffer(cb);
+        self.cb_phase.onEndResult(end_res == .success);
+        try loader_mod.check(end_res, diag, "vkEndCommandBuffer");
+
+        // Wait on any pending swapchain acquire semaphores before the GPU executes draws to them.
         for (self.drawn_surfaces.items) |sid| {
             const surf = self.lookupSurface(sid) orelse continue;
             if (surf.acquire_wait_pending) {
-                scratch.wait_sems.append(self.gpa, surf.currentAcquireSemaphore()) catch return error.OutOfMemory;
-                scratch.wait_stages.append(self.gpa, vk.PipelineStage.color_attachment_output_bit) catch return error.OutOfMemory;
-                scratch.pending_surfs.append(self.gpa, surf) catch return error.OutOfMemory;
+                scratch.wait_sems.appendAssumeCapacity(surf.currentAcquireSemaphore());
+                scratch.wait_stages.appendAssumeCapacity(vk.PipelineStage.color_attachment_output_bit);
+                scratch.pending_surfs.appendAssumeCapacity(surf);
             }
         }
         const wait_sems = scratch.wait_sems.items;
@@ -571,11 +635,13 @@ pub const Backend = struct {
             .signalSemaphoreCount = @intCast(signal_sems.len),
             .pSignalSemaphores = if (signal_sems.len > 0) signal_sems.ptr else null,
         };
-        try loader_mod.check(
-            self.dev.disp.vkQueueSubmit(self.dev.graphics_queue, 1, @ptrCast(&submit_info), entry.fence),
-            diag,
-            "vkQueueSubmit",
-        );
+        self.cb_phase.onSubmitAttempt();
+        const submit_res = self.dev.disp.vkQueueSubmit(self.dev.graphics_queue, 1, @ptrCast(&submit_info), entry.fence);
+        if (submit_res != .success) {
+            self.markDeviceLost();
+            try loader_mod.check(submit_res, diag, "vkQueueSubmit");
+        }
+        self.cb_phase.onSubmitted();
 
         for (scratch.pending_surfs.items) |surf| {
             surf.acquire_wait_pending = false;
@@ -584,6 +650,8 @@ pub const Backend = struct {
         entry.submitted = true;
         frame.cmd_used = @max(frame.cmd_used, self.active_entry_idx + 1);
         self.active_cb = null;
+        self.acquired_in_batch = false;
+        self.img_layout_undo.clearRetainingCapacity();
         self.resetBindState();
     }
 
@@ -686,7 +754,37 @@ pub const Backend = struct {
         );
     }
 
-    fn cmdClearUndefinedImage(self: *Backend, cb: vk.CommandBuffer, img: *Image) void {
+    fn cmdTransferWriteBarrier(self: *Backend, cb: vk.CommandBuffer, vk_img: vk.Image) void {
+        const barrier = vk.ImageMemoryBarrier{
+            .srcAccessMask = vk.Access.transfer_write_bit,
+            .dstAccessMask = vk.Access.transfer_write_bit,
+            .oldLayout = .transfer_dst_optimal,
+            .newLayout = .transfer_dst_optimal,
+            .image = vk_img,
+            .subresourceRange = .{
+                .aspectMask = vk.ImageAspect.color_bit,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+        self.dev.disp.vkCmdPipelineBarrier(
+            cb,
+            vk.PipelineStage.transfer_bit,
+            vk.PipelineStage.transfer_bit,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            @ptrCast(&barrier),
+        );
+    }
+
+    fn cmdClearUndefinedImage(self: *Backend, cb: vk.CommandBuffer, img_id: u32, img: *Image) Error!void {
+        try self.recordImgLayoutUndo(img_id, img.layout);
         self.cmdTransitionImage(cb, img.vk_image, .undefined, .transfer_dst_optimal, false);
         const zero = vk.ClearColorValue{ .float32 = .{ 0, 0, 0, 0 } };
         const range = vk.ImageSubresourceRange{
@@ -720,17 +818,65 @@ pub const Backend = struct {
 
     pub fn beginBatch(self: *Backend, diag: *Diag) Error!void {
         _ = diag;
+        self.acquired_in_batch = false;
         self.resetBindState();
     }
 
-    pub fn abortBatch(self: *Backend) void {
-        self.endRenderPass();
-        if (self.active_cb) |cb| {
-            _ = self.dev.disp.vkEndCommandBuffer(cb);
-            _ = self.dev.disp.vkResetCommandBuffer(cb, 0);
-            self.active_cb = null;
+    pub fn abortBatch(self: *Backend) bool {
+        // Clear render-pass tracking without recording vkCmdEndRenderPass; vkResetCommandBuffer
+        // directly resets any recording, ended, or invalid CB without risking a duplicate End.
+        self.in_render_pass = false;
+        self.current_dst_id = 0;
+        self.current_dst_is_screen = false;
+        self.current_dst_surface_id = 0;
+
+        switch (self.cb_phase.onAbort()) {
+            .none => {},
+            .reset_only => {
+                if (self.active_cb) |cb| {
+                    if (self.dev.disp.vkResetCommandBuffer(cb, 0) != .success) {
+                        self.markDeviceLost();
+                    }
+                    self.active_cb = null;
+                }
+            },
+            .leave_pending_and_lose_device => {
+                self.markDeviceLost();
+                self.active_cb = null;
+            },
         }
+
+        // Invalidate active vertex/index geometry so geometry from a rejected batch cannot
+        // survive into a later draw; callers must issue OP_SET_VERTICES again.
+        self.current_vb = .null_handle;
+        self.current_vb_offset = 0;
+        self.current_ib = .null_handle;
+        self.current_ib_offset = 0;
+
+        // Roll back tracked offscreen image layouts whose uncommitted commands were discarded.
+        var i: usize = self.img_layout_undo.items.len;
+        while (i > 0) {
+            i -= 1;
+            const u = self.img_layout_undo.items[i];
+            if (self.images.getOpt(u.id)) |img| {
+                img.layout = u.old_layout;
+            }
+        }
+        self.img_layout_undo.clearRetainingCapacity();
+
+        // An unconsumed swapchain acquire leaves WSI semaphore state uncertain; offscreen-only
+        // aborts recover cleanly via CB reset and undo-log rollback.
+        if (self.acquired_in_batch) {
+            self.markDeviceLost();
+            self.acquired_in_batch = false;
+        }
+
         self.resetBindState();
+        return self.isDeviceLost();
+    }
+
+    pub fn isDeviceLost(self: *const Backend) bool {
+        return self.device_lost.load(.acquire);
     }
 
     pub fn endBatch(self: *Backend, mode: abi.FlushMode, res: *abi.SubmitResult, diag: *Diag) Error!void {
@@ -745,48 +891,78 @@ pub const Backend = struct {
                 }
             },
             .end_frame => {
-                // Submit any recorded CB and wait for all fences in this frame slot.
                 if (self.active_cb != null) {
                     try self.submitActiveCommandBuffer(&.{}, diag);
                 }
-                const frame = self.currentFrame();
-                // If retired upload chunks (e.g. rotated shared arena) are queued in this slot,
-                // ensure any earlier in-flight frame slots have also completed before freeing them.
-                if (frame.upload.hasRetired()) {
-                    for (0..self.frames_in_flight) |i| {
-                        if (i == self.frame_index) continue;
-                        for (self.frames[i].cmd_entries.items) |*entry| {
-                            if (entry.submitted) {
-                                try loader_mod.check(
-                                    self.dev.disp.vkWaitForFences(self.dev.handle, 1, @ptrCast(&entry.fence), vk.TRUE, std.math.maxInt(u64)),
-                                    diag,
-                                    "vkWaitForFences(retired)",
-                                );
-                                entry.submitted = false;
+                if (self.drawn_surfaces.items.len == 0) {
+                    // Offscreen-only frame: rotate frame slot and wait only on the slot about to
+                    // be reused, matching `.present` without touching WSI state.
+                    self.frame_index = (self.frame_index + 1) % self.frames_in_flight;
+                    self.currentFrame().waitAndReset(&self.dev, &self.mem, &self.shared_pool, diag) catch |err| {
+                        self.markDeviceLost();
+                        return err;
+                    };
+                } else {
+                    // Preserve HEAD's wait + discard semantics when swapchain images were drawn
+                    // without presenting.
+                    const frame = self.currentFrame();
+                    if (frame.upload.hasRetired()) {
+                        for (0..self.frames_in_flight) |i| {
+                            if (i == self.frame_index) continue;
+                            for (self.frames[i].cmd_entries.items) |*entry| {
+                                if (entry.submitted) {
+                                    loader_mod.check(
+                                        self.dev.disp.vkWaitForFences(self.dev.handle, 1, @ptrCast(&entry.fence), vk.TRUE, std.math.maxInt(u64)),
+                                        diag,
+                                        "vkWaitForFences(retired)",
+                                    ) catch |err| {
+                                        self.markDeviceLost();
+                                        return err;
+                                    };
+                                    entry.submitted = false;
+                                }
                             }
                         }
                     }
-                }
-                try frame.waitAndReset(&self.dev, &self.mem, &self.shared_pool, diag);
-                // Any swapchain image acquired during this frame was not presented: discard safely
-                // so acquire semaphores are never left signaled and swapchain slots never exhaust.
-                for (self.drawn_surfaces.items) |sid| {
-                    const surf = self.lookupSurface(sid) orelse continue;
-                    if (surf.acquired_index != null) {
-                        try surf.discardAcquired(&self.dev, diag);
+                    frame.waitAndReset(&self.dev, &self.mem, &self.shared_pool, diag) catch |err| {
+                        self.markDeviceLost();
+                        return err;
+                    };
+                    for (self.drawn_surfaces.items) |sid| {
+                        const surf = self.lookupSurface(sid) orelse continue;
+                        if (surf.acquired_index != null) {
+                            surf.discardAcquired(&self.dev, diag) catch |err| {
+                                self.markDeviceLost();
+                                return err;
+                            };
+                        }
                     }
+                    self.drawn_surfaces.clearRetainingCapacity();
                 }
                 self.resetFrameUploadCache();
                 self.current_vb = .null_handle;
                 self.current_ib = .null_handle;
-                self.drawn_surfaces.clearRetainingCapacity();
                 self.completed_frames += 1;
             },
             .present => {
                 self.endRenderPass();
 
+                // Preallocate all present and submit scratch buffers before recording any
+                // PRESENT layout transitions or signalling render semaphores so no allocation
+                // can fail between recording state changes and presenting.
                 const scratch = &self.present_scratch;
                 scratch.clear();
+                const max_surfs = self.drawn_surfaces.items.len;
+                scratch.signal_sems.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                scratch.present_surfs.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                scratch.discard_surfs.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                scratch.swapchains.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                scratch.img_indices.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                scratch.results.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                self.submit_scratch.wait_sems.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                self.submit_scratch.wait_stages.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+                self.submit_scratch.pending_surfs.ensureTotalCapacity(self.gpa, max_surfs) catch return error.OutOfMemory;
+
                 const signal_sems = &scratch.signal_sems;
                 const present_surfs = &scratch.present_surfs;
                 const discard_surfs = &scratch.discard_surfs;
@@ -797,7 +973,7 @@ pub const Backend = struct {
                     const surf = self.lookupSurface(sid) orelse continue;
                     const idx = surf.acquired_index orelse continue;
                     if (surf.isHidden() or surf.swapchain == .null_handle) {
-                        discard_surfs.append(self.gpa, surf) catch return error.OutOfMemory;
+                        discard_surfs.appendAssumeCapacity(surf);
                         continue;
                     }
                     const sc_img = surf.currentSwapchainImage() orelse continue;
@@ -805,10 +981,10 @@ pub const Backend = struct {
                     self.cmdTransitionImage(cb, sc_img.image, sc_img.layout, .present_src_khr, false);
                     sc_img.layout = .present_src_khr;
 
-                    signal_sems.append(self.gpa, surf.currentRenderSemaphore()) catch return error.OutOfMemory;
-                    present_surfs.append(self.gpa, surf) catch return error.OutOfMemory;
-                    swapchains.append(self.gpa, surf.swapchain) catch return error.OutOfMemory;
-                    img_indices.append(self.gpa, idx) catch return error.OutOfMemory;
+                    signal_sems.appendAssumeCapacity(surf.currentRenderSemaphore());
+                    present_surfs.appendAssumeCapacity(surf);
+                    swapchains.appendAssumeCapacity(surf.swapchain);
+                    img_indices.appendAssumeCapacity(idx);
                 }
 
                 if (self.active_cb != null) {
@@ -816,13 +992,16 @@ pub const Backend = struct {
                 }
 
                 for (discard_surfs.items) |surf| {
-                    try surf.discardAcquired(&self.dev, diag);
+                    surf.discardAcquired(&self.dev, diag) catch |err| {
+                        self.markDeviceLost();
+                        return err;
+                    };
                 }
 
                 var presented: u32 = 0;
                 if (swapchains.items.len > 0) {
                     const present_fn = self.dev.disp.vkQueuePresentKHR orelse return error.Unsupported;
-                    scratch.results.resize(self.gpa, swapchains.items.len) catch return error.OutOfMemory;
+                    scratch.results.items.len = swapchains.items.len;
                     const results = scratch.results.items;
 
                     const pi = vk.PresentInfoKHR{
@@ -860,7 +1039,10 @@ pub const Backend = struct {
 
                 // Advance to next frame slot and wait on its fence before reuse.
                 self.frame_index = (self.frame_index + 1) % self.frames_in_flight;
-                try self.currentFrame().waitAndReset(&self.dev, &self.mem, &self.shared_pool, diag);
+                self.currentFrame().waitAndReset(&self.dev, &self.mem, &self.shared_pool, diag) catch |err| {
+                    self.markDeviceLost();
+                    return err;
+                };
                 self.resetFrameUploadCache();
                 self.current_vb = .null_handle;
                 self.current_ib = .null_handle;
@@ -874,7 +1056,7 @@ pub const Backend = struct {
     }
 
     pub fn setVertices(self: *Backend, vertices: []const f32, indices: []const u32, diag: *Diag) Error!void {
-        if (vertices.len == 0 and indices.len == 0) return;
+        if (vertices.len == 0 or indices.len == 0) return;
 
         const frame = self.currentFrame();
 
@@ -1094,6 +1276,12 @@ pub const Backend = struct {
     }
 
     pub fn disposeImage(self: *Backend, id: u32) Error!void {
+        const img_ptr = try self.images.get(id);
+        if (!img_ptr.is_screen) {
+            // Reserve the deferred-destroy slot before removing ownership so an OOM leaves
+            // the image handle intact and never resets descriptor pools used by an open CB.
+            self.currentFrame().deferred_images.ensureUnusedCapacity(self.gpa, 1) catch return error.OutOfMemory;
+        }
         if (self.in_render_pass and self.current_dst_id == id) {
             self.endRenderPass();
         }
@@ -1106,41 +1294,53 @@ pub const Backend = struct {
                     break;
                 }
             }
-            const destroyed = DestroyedImage{
+            self.markAllDescsDirty();
+            self.currentFrame().deferred_images.appendAssumeCapacity(.{
                 .vk_image = img.vk_image,
                 .alloc = img.alloc,
                 .sample_view = img.sample_view,
                 .rt_view = img.rt_view,
                 .framebuffer = img.framebuffer,
-            };
-            self.currentFrame().deferred_images.append(self.gpa, destroyed) catch {
-                // OOM deferring: wait idle and destroy immediately to prevent leak.
-                self.dev.waitIdle();
-                destroyImageResources(&self.dev, &self.mem, destroyed);
-            };
+            });
         }
     }
 
     pub fn disposeShader(self: *Backend, id: u32) Error!void {
+        const sh_ptr = try self.shaders.get(id);
+        const frame = self.currentFrame();
+        if (sh_ptr.frag_module != .null_handle) {
+            // Reserve the deferred-destroy slot before removing ownership so an OOM leaves
+            // the shader handle intact and avoids an unchecked waitIdle fallback.
+            frame.deferred_shaders.ensureUnusedCapacity(self.gpa, 1) catch return error.OutOfMemory;
+        }
         const sh = try self.shaders.remove(id);
         self.cache.pipeline = 0;
 
-        const frame = self.currentFrame();
         self.pipelines.purgeShaderPipelines(self.gpa, id, sh.gen, &frame.deferred_pipelines);
         if (sh.frag_module != .null_handle) {
-            frame.deferred_shaders.append(self.gpa, sh.frag_module) catch {
-                self.dev.waitIdle();
-                self.dev.disp.vkDestroyShaderModule(self.dev.handle, sh.frag_module, null);
-            };
+            frame.deferred_shaders.appendAssumeCapacity(sh.frag_module);
         }
         self.gpa.free(sh.vert_entry);
         self.gpa.free(sh.frag_entry);
     }
 
     pub fn disposeSurface(self: *Backend, id: u32) Error!void {
+        if (self.lookupSurface(id) == null) return error.UnknownHandle;
+
         if (self.in_render_pass and self.current_dst_is_screen and self.current_dst_surface_id == id) {
             self.endRenderPass();
         }
+        // Flush any recorded command buffer and wait for the device to become idle while `id`
+        // is still registered; if either fails, keep ownership registered and mark device lost.
+        var none_diag = Diag.none();
+        if (self.active_cb != null) {
+            try self.submitActiveCommandBuffer(&.{}, &none_diag);
+        }
+        self.dev.waitIdleChecked(&none_diag) catch |err| {
+            self.markDeviceLost();
+            return err;
+        };
+
         self.surfaces_lock.lock();
         const surf = self.surfaces.remove(id) catch |err| {
             self.surfaces_lock.unlock();
@@ -1158,12 +1358,6 @@ pub const Backend = struct {
             }
         }
 
-        // Flush any recorded command buffer and wait for device idle before destroying swapchain & VkSurfaceKHR.
-        if (self.active_cb != null) {
-            var none_diag = Diag.none();
-            self.submitActiveCommandBuffer(&.{}, &none_diag) catch {};
-        }
-        self.dev.waitIdle();
         surf.deinit(self.gpa, &self.inst, &self.dev);
     }
 
@@ -1172,6 +1366,7 @@ pub const Backend = struct {
         id: u32,
         regions: []align(4) const abi.PixelsRegion,
         payload: []const u8,
+        row_pitch_align: u32,
         diag: *Diag,
     ) Error!void {
         const img = try self.images.get(id);
@@ -1182,65 +1377,37 @@ pub const Backend = struct {
         const bpp: u32 = img.format.bytesPerPixel();
 
         // Validate all regions up front.
-        var covers_full_internal = false;
-        for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("vulkan: writePixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const expected_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.payload_len != expected_len) {
-                diag.print("vulkan: writePixels payload_len {d} != expected {d}", .{ r.payload_len, expected_len });
-                return error.InvalidArgument;
-            }
-            if (bounds.x0 == 0 and bounds.y0 == 0 and bounds.dx == img.internal_width and bounds.dy == img.internal_height) {
-                covers_full_internal = true;
-            }
-        }
-        if (regions.len == 0) return;
+        const summary = try pixel_regions.validateWriteRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            row_pitch_align,
+            "vulkan",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
 
         self.endRenderPass();
         const cb = try self.ensureRecording(diag);
 
         if (img.layout == .undefined) {
-            if (covers_full_internal) {
+            if (summary.covers_full_internal) {
+                try self.recordImgLayoutUndo(id, img.layout);
                 self.cmdTransitionImage(cb, img.vk_image, .undefined, .transfer_dst_optimal, false);
                 img.layout = .transfer_dst_optimal;
             } else {
-                self.cmdClearUndefinedImage(cb, img);
-                // Ensure clear completes before copy writes to TRANSFER_DST_OPTIMAL.
-                const barrier = vk.ImageMemoryBarrier{
-                    .srcAccessMask = vk.Access.transfer_write_bit,
-                    .dstAccessMask = vk.Access.transfer_write_bit,
-                    .oldLayout = .transfer_dst_optimal,
-                    .newLayout = .transfer_dst_optimal,
-                    .image = img.vk_image,
-                    .subresourceRange = .{
-                        .aspectMask = vk.ImageAspect.color_bit,
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 1,
-                    },
-                };
-                self.dev.disp.vkCmdPipelineBarrier(
-                    cb,
-                    vk.PipelineStage.transfer_bit,
-                    vk.PipelineStage.transfer_bit,
-                    0,
-                    0,
-                    null,
-                    0,
-                    null,
-                    1,
-                    @ptrCast(&barrier),
-                );
+                try self.cmdClearUndefinedImage(cb, id, img);
+                self.cmdTransferWriteBarrier(cb, img.vk_image);
             }
         } else if (img.layout != .transfer_dst_optimal) {
+            try self.recordImgLayoutUndo(id, img.layout);
             self.cmdTransitionImage(cb, img.vk_image, img.layout, .transfer_dst_optimal, false);
             img.layout = .transfer_dst_optimal;
+        } else {
+            // Image is already in TRANSFER_DST_OPTIMAL from an earlier upload: order subsequent
+            // transfer writes after the prior write to avoid WRITE_AFTER_WRITE hazards.
+            self.cmdTransferWriteBarrier(cb, img.vk_image);
         }
 
         const copy_align = @max(@max(self.dev.props.limits.optimalBufferCopyOffsetAlignment, bpp), 4);
@@ -1260,16 +1427,31 @@ pub const Backend = struct {
             }
         }
 
+        var emitted_copy = false;
         for (regions) |r| {
             const bounds = r.rect.validate(img.internal_width, img.internal_height).?;
             if (bounds.dx == 0 or bounds.dy == 0 or r.payload_len == 0) continue;
 
-            if (shared_buf != .null_handle) {
+            if (emitted_copy) {
+                self.cmdTransferWriteBarrier(cb, img.vk_image);
+            }
+
+            const src_row_pitch = pixel_regions.rowPitch(bounds.dx, bpp, row_pitch_align);
+            const row_bytes: u64 = @as(u64, bounds.dx) * bpp;
+            const buf_row_length: u32 = if (src_row_pitch == row_bytes)
+                0
+            else if ((src_row_pitch % bpp) == 0)
+                @intCast(src_row_pitch / bpp)
+            else
+                0;
+            const can_copy_pitched = (src_row_pitch == row_bytes) or ((src_row_pitch % bpp) == 0);
+
+            if (shared_buf != .null_handle and can_copy_pitched) {
                 const buf_off = shared_base_off + @as(u64, r.payload_offset);
                 if ((buf_off % bpp) == 0 and buf_off + r.payload_len <= shared_cap) {
                     const copy_region = vk.BufferImageCopy{
                         .bufferOffset = buf_off,
-                        .bufferRowLength = 0, // tightly packed
+                        .bufferRowLength = buf_row_length,
                         .bufferImageHeight = 0,
                         .imageSubresource = .{
                             .aspectMask = vk.ImageAspect.color_bit,
@@ -1288,16 +1470,28 @@ pub const Backend = struct {
                         1,
                         @ptrCast(&copy_region),
                     );
+                    emitted_copy = true;
                     self.uploaded_bytes += r.payload_len;
                     continue;
                 }
             }
 
-            const slice = try frame.upload.alloc(self.gpa, &self.dev, &self.mem, r.payload_len, copy_align, diag);
-            @memcpy(
-                slice.ptr[0..r.payload_len],
-                payload[r.payload_offset .. r.payload_offset + r.payload_len],
-            );
+            const tight_len = row_bytes * bounds.dy;
+            const slice = try frame.upload.alloc(self.gpa, &self.dev, &self.mem, tight_len, copy_align, diag);
+            const src_slice = payload[r.payload_offset .. r.payload_offset + r.payload_len];
+            if (src_row_pitch == row_bytes) {
+                @memcpy(slice.ptr[0..@intCast(tight_len)], src_slice);
+            } else {
+                const stride: usize = @intCast(src_row_pitch);
+                const rb: usize = @intCast(row_bytes);
+                var row: usize = 0;
+                while (row < bounds.dy) : (row += 1) {
+                    @memcpy(
+                        slice.ptr[row * rb .. row * rb + rb],
+                        src_slice[row * stride .. row * stride + rb],
+                    );
+                }
+            }
 
             const copy_region = vk.BufferImageCopy{
                 .bufferOffset = slice.offset,
@@ -1320,6 +1514,7 @@ pub const Backend = struct {
                 1,
                 @ptrCast(&copy_region),
             );
+            emitted_copy = true;
             self.uploaded_bytes += r.payload_len;
         }
     }
@@ -1340,6 +1535,10 @@ pub const Backend = struct {
 
         for (dc.srcs, 0..) |src_id, i| {
             if (src_id == 0) continue;
+            if (src_id == dc.dst) {
+                diag.set("vulkan: destination and source images must be different");
+                return error.InvalidArgument;
+            }
             const s = self.images.get(src_id) catch {
                 diag.print("vulkan: drawTriangles unknown src image {d}", .{src_id});
                 return error.UnknownHandle;
@@ -1394,6 +1593,7 @@ pub const Backend = struct {
                 // Hidden or minimized window: skip draw cleanly.
                 return;
             }
+            self.acquired_in_batch = true;
             target_surf = surf;
             dst.vk_format = surf.format;
         }
@@ -1403,16 +1603,21 @@ pub const Backend = struct {
             self.endRenderPass();
         }
 
+        // Reserve undo-log slots up front before transitioning any source or destination layouts.
+        self.img_layout_undo.ensureUnusedCapacity(self.gpa, 2 * abi.max_src_images + 1) catch return error.OutOfMemory;
+
         const cb = try self.ensureRecording(diag);
 
         // Transition any source images to SHADER_READ_ONLY_OPTIMAL (includes COLOR_ATTACHMENT_WRITE -> SHADER_READ).
         if (need_src_barrier) {
-            for (src_imgs) |src_opt| {
+            for (src_imgs, 0..) |src_opt, i| {
                 const s = src_opt orelse continue;
+                const src_id = dc.srcs[i];
                 if (s.layout == .undefined) {
-                    self.cmdClearUndefinedImage(cb, s);
+                    try self.cmdClearUndefinedImage(cb, src_id, s);
                 }
                 if (s.layout != .shader_read_only_optimal) {
+                    try self.recordImgLayoutUndo(src_id, s.layout);
                     self.cmdTransitionImage(cb, s.vk_image, s.layout, .shader_read_only_optimal, false);
                     s.layout = .shader_read_only_optimal;
                 }
@@ -1444,10 +1649,12 @@ pub const Backend = struct {
                 try self.addDrawnSurface(dst.surface_id);
             } else {
                 if (dst.layout == .undefined) {
+                    try self.recordImgLayoutUndo(dc.dst, dst.layout);
                     self.cmdTransitionImage(cb, dst.vk_image, .undefined, .color_attachment_optimal, false);
                     dst.layout = .color_attachment_optimal;
                     load_op = .clear;
                 } else if (dst.layout != .color_attachment_optimal) {
+                    try self.recordImgLayoutUndo(dc.dst, dst.layout);
                     self.cmdTransitionImage(cb, dst.vk_image, dst.layout, .color_attachment_optimal, false);
                     dst.layout = .color_attachment_optimal;
                 }
@@ -1523,7 +1730,8 @@ pub const Backend = struct {
             self.vb_bound = true;
         }
 
-        // Upload internal & user uniforms only when their versions change.
+        // Upload internal & user uniforms only when their versions change; bind straight
+        // from the GPU-mapped shared upload arena when the payload already resides there.
         const ubo_align = @max(self.dev.props.limits.minUniformBufferOffsetAlignment, 16);
         const frame = self.currentFrame();
 
@@ -1532,6 +1740,13 @@ pub const Backend = struct {
         if (self.last_uploaded_internal_ver == dc.internal_version and self.last_uploaded_internal_buf != .null_handle) {
             internal_buf = self.last_uploaded_internal_buf;
             internal_off = self.last_uploaded_internal_off;
+        } else if (self.sharedUniformOffset(std.mem.sliceAsBytes(dc.internal), ubo_align)) |su| {
+            internal_buf = su.buf;
+            internal_off = su.off;
+            self.last_uploaded_internal_ver = dc.internal_version;
+            self.last_uploaded_internal_buf = internal_buf;
+            self.last_uploaded_internal_off = internal_off;
+            self.uploaded_bytes += abi.internal_uniform_bytes;
         } else {
             const slice = try frame.upload.alloc(
                 self.gpa,
@@ -1562,6 +1777,15 @@ pub const Backend = struct {
                 user_buf = self.last_uploaded_user_buf;
                 user_off = self.last_uploaded_user_off;
                 user_range = user_bytes;
+            } else if (self.sharedUniformOffset(std.mem.sliceAsBytes(dc.user), ubo_align)) |su| {
+                user_buf = su.buf;
+                user_off = su.off;
+                user_range = user_bytes;
+                self.last_uploaded_user_ver = dc.user_version;
+                self.last_uploaded_user_buf = user_buf;
+                self.last_uploaded_user_off = user_off;
+                self.last_uploaded_user_range = user_range;
+                self.uploaded_bytes += user_bytes;
             } else {
                 const slice = try frame.upload.alloc(
                     self.gpa,
@@ -1702,45 +1926,38 @@ pub const Backend = struct {
         const bpp: u32 = img.format.bytesPerPixel();
         const copy_align = @max(@max(self.dev.props.limits.optimalBufferCopyOffsetAlignment, bpp), 4);
 
+        const summary = try pixel_regions.validateReadRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            "vulkan",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
+
         var total_bytes: u64 = 0;
-        var has_non_empty = false;
         for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("vulkan: readPixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const expected_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.dst_len != expected_len) {
-                diag.print("vulkan: readPixels dst_len {d} != expected {d}", .{ r.dst_len, expected_len });
-                return error.InvalidArgument;
-            }
-            if (expected_len > 0) {
-                if (r.dst == null) {
-                    diag.set("vulkan: readPixels dst pointer is null");
-                    return error.InvalidArgument;
-                }
-                total_bytes = memory_mod.alignUp(total_bytes, copy_align) + expected_len;
-                has_non_empty = true;
+            if (r.dst_len > 0) {
+                total_bytes = memory_mod.alignUp(total_bytes, copy_align) + r.dst_len;
             }
         }
-        if (!has_non_empty) return;
 
         self.endRenderPass();
         try self.readback.ensure(&self.dev, &self.mem, total_bytes, diag);
 
         const cb = try self.ensureRecording(diag);
         if (img.layout == .undefined) {
-            self.cmdClearUndefinedImage(cb, img);
+            try self.cmdClearUndefinedImage(cb, id, img);
         }
         if (img.layout != .transfer_src_optimal) {
+            try self.recordImgLayoutUndo(id, img.layout);
             self.cmdTransitionImage(cb, img.vk_image, img.layout, .transfer_src_optimal, false);
             img.layout = .transfer_src_optimal;
         }
 
-        const offsets = self.gpa.alloc(u64, regions.len) catch return error.OutOfMemory;
-        defer self.gpa.free(offsets);
+        self.readback_offsets.resize(self.gpa, regions.len) catch return error.OutOfMemory;
+        const offsets = self.readback_offsets.items;
 
         var cur_off: u64 = 0;
         for (regions, 0..) |r, i| {
@@ -1776,22 +1993,50 @@ pub const Backend = struct {
             cur_off += r.dst_len;
         }
 
+        // Make transfer writes to the readback buffer visible to host reads on discrete GPUs.
+        const readback_barrier = vk.BufferMemoryBarrier{
+            .srcAccessMask = vk.Access.transfer_write_bit,
+            .dstAccessMask = vk.Access.host_read_bit,
+            .buffer = self.readback.buffer,
+            .offset = 0,
+            .size = vk.WHOLE_SIZE,
+        };
+        self.dev.disp.vkCmdPipelineBarrier(
+            cb,
+            vk.PipelineStage.transfer_bit,
+            vk.PipelineStage.host_bit,
+            0,
+            0,
+            null,
+            1,
+            @ptrCast(&readback_barrier),
+            0,
+            null,
+        );
+
         try self.submitActiveCommandBuffer(&.{}, diag);
+        self.readback_in_flight = true;
 
         // Wait for all submitted work in the current frame slot to finish before reading back.
+        // A failed post-submit wait leaves the readback buffer potentially in flight on the GPU,
+        // so latch device-lost and keep `readback_in_flight` set for safe teardown.
         const frame = self.currentFrame();
         for (frame.cmd_entries.items) |*entry| {
             if (entry.submitted) {
-                try loader_mod.check(
+                loader_mod.check(
                     self.dev.disp.vkWaitForFences(self.dev.handle, 1, @ptrCast(&entry.fence), vk.TRUE, std.math.maxInt(u64)),
                     diag,
                     "vkWaitForFences(readPixels)",
-                );
+                ) catch |err| {
+                    self.markDeviceLost();
+                    return err;
+                };
                 entry.submitted = false;
             }
         }
+        self.readback_in_flight = false;
 
-        self.readback.invalidate(&self.dev, total_bytes);
+        try self.readback.invalidate(&self.dev, total_bytes, diag);
         const mapped = self.readback.alloc.mapped orelse return error.Internal;
 
         for (regions, 0..) |r, i| {
@@ -1807,11 +2052,14 @@ pub const Backend = struct {
         if (self.active_cb != null) {
             try self.submitActiveCommandBuffer(&.{}, diag);
         }
-        try loader_mod.check(
+        loader_mod.check(
             self.dev.disp.vkQueueWaitIdle(self.dev.graphics_queue),
             diag,
             "vkQueueWaitIdle(finishForcedFrame)",
-        );
+        ) catch |err| {
+            self.markDeviceLost();
+            return err;
+        };
     }
 
     pub fn presentOnMainThread(self: *Backend, diag: *Diag) Error!void {
@@ -1886,7 +2134,11 @@ pub const Backend = struct {
             return error.OutOfMemory;
         }
 
-        const raw_align: u32 = @intCast(@min(self.dev.props.limits.optimalBufferCopyOffsetAlignment, @as(u64, 4096)));
+        const min_align = @max(
+            self.dev.props.limits.optimalBufferCopyOffsetAlignment,
+            self.dev.props.limits.minUniformBufferOffsetAlignment,
+        );
+        const raw_align: u32 = @intCast(@min(min_align, @as(u64, 4096)));
         const alignment: u32 = std.math.ceilPowerOfTwoAssert(u32, @max(@as(u32, 16), raw_align));
         const capacity: u64 = memory_mod.alignUp(@max(min_bytes, upload_arena.default_size), 16);
 
@@ -1901,6 +2153,7 @@ pub const Backend = struct {
 
         if (self.shared_upload_chunk) |old_chunk| {
             try self.currentFrame().upload.retireSharedChunk(self.gpa, old_chunk);
+            self.markAllDescsDirty();
         }
 
         self.shared_upload_chunk = new_chunk;
@@ -1912,6 +2165,8 @@ pub const Backend = struct {
             .capacity = new_chunk.capacity,
             .alignment = alignment,
             .flags = abi.arena_flag_gpu_mapped | abi.arena_flag_coherent,
+            .row_pitch_alignment = 0,
+            .reserved = 0,
         };
     }
 

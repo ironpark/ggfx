@@ -316,6 +316,7 @@ pub const Surface = struct {
         if (self.swap_chain) |*sc| {
             if (!self.chained) {
                 self.display_link.waitForRefresh();
+                backend_ctx.armHousekeeping();
                 const acq = sc.acquire(self.drawable_width, self.drawable_height);
                 if (acq.tex.isNull()) return .{};
                 self.chained = true;
@@ -329,6 +330,7 @@ pub const Surface = struct {
             if (self.drawable.isNull()) {
                 ls.applyDrawableSizeIfNeeded(self.live_resizing.load(.acquire), main_thread_mode);
                 self.display_link.waitForRefresh();
+                backend_ctx.armHousekeeping();
                 const d = ls.nextDrawable();
                 if (d.isNull()) return .{};
                 // Retain across intermediate flushes that drain the autorelease pool (#3704).
@@ -343,10 +345,13 @@ pub const Surface = struct {
         return .{};
     }
 
-    pub fn tickHousekeeping(self: *Surface, now_ns: u64) void {
+    /// Returns true if this surface still has an active display link or non-volatile swap buffer.
+    pub fn tickHousekeeping(self: *Surface, now_ns: u64) bool {
+        var pending = false;
         if (self.swap_chain) |*sc| {
-            sc.tickIdle(now_ns);
+            if (sc.tickIdle(now_ns)) pending = true;
         }
-        self.display_link.tickIdle(now_ns);
+        if (self.display_link.tickIdle(now_ns)) pending = true;
+        return pending;
     }
 };

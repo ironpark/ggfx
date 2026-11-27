@@ -2,34 +2,28 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const abi = @import("../abi.zig");
 const errors = @import("../errors.zig");
+const vertex_cache = @import("../vertex_cache.zig");
 const mtl = @import("mtl.zig");
 
 const Diag = errors.Diag;
 const Error = errors.Error;
-
-pub const VertexCacheKey = struct {
-    code_hash: u64,
-    code_len: usize,
-    entry_hash: u64,
-    entry_len: usize,
-};
 
 pub const VertexStage = struct {
     lib: mtl.Library,
     func: mtl.Function,
 };
 
-/// Caches compiled MSL vertex libraries/functions keyed by Wyhash(code)+len (+entry).
+fn releaseVertexStage(_: void, vs: *VertexStage) void {
+    vs.func.release();
+    vs.lib.release();
+}
+
+/// Caches compiled MSL vertex libraries/functions keyed by exact (code, entry) bytes.
 pub const VertexStageCache = struct {
-    map: std.AutoHashMapUnmanaged(VertexCacheKey, VertexStage) = .{},
+    cache: vertex_cache.VertexStageCache(VertexStage) = .{},
 
     pub fn deinit(self: *VertexStageCache, gpa: Allocator) void {
-        var it = self.map.valueIterator();
-        while (it.next()) |vs| {
-            vs.func.release();
-            vs.lib.release();
-        }
-        self.map.deinit(gpa);
+        self.cache.deinit(gpa, {}, releaseVertexStage);
     }
 
     pub fn getOrCompile(
@@ -40,13 +34,7 @@ pub const VertexStageCache = struct {
         entry: []const u8,
         diag: *Diag,
     ) Error!mtl.Function {
-        const key = VertexCacheKey{
-            .code_hash = std.hash.Wyhash.hash(0, code),
-            .code_len = code.len,
-            .entry_hash = std.hash.Wyhash.hash(0, entry),
-            .entry_len = entry.len,
-        };
-        if (self.map.get(key)) |cached| {
+        if (self.cache.get(code, entry, 0)) |cached| {
             return cached.func;
         }
 
@@ -55,7 +43,7 @@ pub const VertexStageCache = struct {
         const func = try lib.newFunctionWithName(entry, diag);
         errdefer func.release();
 
-        self.map.put(gpa, key, .{ .lib = lib, .func = func }) catch return error.OutOfMemory;
+        try self.cache.put(gpa, code, entry, 0, .{ .lib = lib, .func = func });
         return func;
     }
 };

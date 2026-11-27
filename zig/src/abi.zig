@@ -7,7 +7,7 @@ comptime {
     }
 }
 
-pub const driver_abi_version: u32 = 1;
+pub const driver_abi_version: u32 = 2;
 
 pub const Status = enum(i32) {
     ok = 0,
@@ -324,6 +324,8 @@ pub const UploadArena = extern struct {
     capacity: u64,
     alignment: u32,
     flags: u32,
+    row_pitch_alignment: u32,
+    reserved: u32,
 };
 
 pub const CmdSetVertices = extern struct {
@@ -537,13 +539,15 @@ comptime {
     checkOffset(DebugStats, "binds_skipped", 48);
     checkOffset(DebugStats, "uploaded_bytes", 56);
 
-    checkSize(UploadArena, 32);
+    checkSize(UploadArena, 40);
     checkOffset(UploadArena, "struct_size", 0);
     checkOffset(UploadArena, "arena_id", 4);
     checkOffset(UploadArena, "ptr", 8);
     checkOffset(UploadArena, "capacity", 16);
     checkOffset(UploadArena, "alignment", 24);
     checkOffset(UploadArena, "flags", 28);
+    checkOffset(UploadArena, "row_pitch_alignment", 32);
+    checkOffset(UploadArena, "reserved", 36);
 
     checkSize(CmdSetVertices, 32);
     checkOffset(CmdSetVertices, "hdr", 0);
@@ -621,7 +625,7 @@ comptime {
 }
 
 test "abi version and status constants" {
-    try std.testing.expectEqual(@as(u32, 1), driver_abi_version);
+    try std.testing.expectEqual(@as(u32, 2), driver_abi_version);
     try std.testing.expectEqual(@as(i32, 0), @intFromEnum(Status.ok));
     try std.testing.expectEqual(@as(i32, 13), @intFromEnum(Status.err_leak_detected));
     try std.testing.expectEqual(@as(u32, 255), @intFromEnum(Backend.null));

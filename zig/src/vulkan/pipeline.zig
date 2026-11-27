@@ -1,6 +1,7 @@
 const std = @import("std");
 const abi = @import("../abi.zig");
 const errors = @import("../errors.zig");
+const vertex_cache = @import("../vertex_cache.zig");
 const vk = @import("vk.zig");
 const loader_mod = @import("loader.zig");
 const device_mod = @import("device.zig");
@@ -21,11 +22,6 @@ pub const Shader = struct {
     frag_module: vk.ShaderModule, // owned by Shader
     vert_entry: [:0]u8,
     frag_entry: [:0]u8,
-};
-
-const VertexCacheKey = struct {
-    hash: u64,
-    len: usize,
 };
 
 pub const PipelineKey = struct {
@@ -142,9 +138,15 @@ fn createShaderModule(
     return mod;
 }
 
+fn destroyShaderModule(dev: *const device_mod.Device, mod: *vk.ShaderModule) void {
+    if (mod.* != .null_handle) {
+        dev.disp.vkDestroyShaderModule(dev.handle, mod.*, null);
+    }
+}
+
 pub const PipelineCache = struct {
     vk_cache: vk.PipelineCache = .null_handle,
-    vertex_cache: std.AutoHashMapUnmanaged(VertexCacheKey, vk.ShaderModule) = .empty,
+    vertex_cache: vertex_cache.VertexStageCache(vk.ShaderModule) = .{},
     pipelines: std.AutoHashMapUnmanaged(PipelineKey, vk.Pipeline) = .empty,
 
     pub fn init(dev: *const device_mod.Device, diag: *Diag) Error!PipelineCache {
@@ -178,17 +180,13 @@ pub const PipelineCache = struct {
         const vs = try validateSpirv("vertex", desc.vertex, diag);
         const fs = try validateSpirv("fragment", desc.fragment, diag);
 
-        // Cache vertex shader modules by Wyhash(code) + len.
-        const vs_key = VertexCacheKey{
-            .hash = std.hash.Wyhash.hash(0, vs.code),
-            .len = vs.code.len,
-        };
-        const vert_mod: vk.ShaderModule = if (self.vertex_cache.get(vs_key)) |cached|
+        // Cache vertex shader modules by exact SPIR-V bytes.
+        const vert_mod: vk.ShaderModule = if (self.vertex_cache.get(vs.code, "", 0)) |cached|
             cached
         else blk: {
             const created = try createShaderModule(gpa, dev, vs.code, diag);
             errdefer dev.disp.vkDestroyShaderModule(dev.handle, created, null);
-            self.vertex_cache.put(gpa, vs_key, created) catch return error.OutOfMemory;
+            try self.vertex_cache.put(gpa, vs.code, "", 0, created);
             break :blk created;
         };
 
@@ -405,13 +403,7 @@ pub const PipelineCache = struct {
         }
         self.pipelines.deinit(gpa);
 
-        var vit = self.vertex_cache.valueIterator();
-        while (vit.next()) |mod| {
-            if (mod.* != .null_handle) {
-                dev.disp.vkDestroyShaderModule(dev.handle, mod.*, null);
-            }
-        }
-        self.vertex_cache.deinit(gpa);
+        self.vertex_cache.deinit(gpa, dev, destroyShaderModule);
 
         if (self.vk_cache != .null_handle) {
             dev.disp.vkDestroyPipelineCache(dev.handle, self.vk_cache, null);

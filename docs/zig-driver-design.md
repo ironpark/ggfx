@@ -66,14 +66,15 @@ Go (Producer)                                Zig (Consumer / GPU Driver)
 ### Wire / Memory Layout Rules (C ABI)
 
 - All integers are native little-endian; all structs are Zig `extern struct` verified with comptime `@sizeOf` / `@offsetOf` assertions and matching Go compile-time size checks.
-- **Opaque `u32` handle IDs** (`0` = none/null) allocated monotonically by Go for Images, Shaders, and Surfaces. Zig stores native GPU objects in dense slot tables indexed/hashed by `u32`. **No Go pointers are ever retained by Zig across calls.**
+- **Opaque `u32` handle IDs** (`0` = none/null) managed by Go for Images, Shaders, and Surfaces. Surface IDs are allocated monotonically; Image and Shader IDs are recycled from a free list once the batch carrying their `OP_DISPOSE_*` command has been submitted (`idAllocator` in `graphics.go`). Zig stores native GPU objects in dense slot tables indexed by `u32`. **No Go pointers are ever retained by Zig across calls.**
+- **Shared GPU-mapped upload arena** (`ggfx_acquire_upload_arena`): Backends advertising `GGFX_CAP_SHARED_UPLOAD_ARENA` expose a persistently mapped GPU upload buffer to Go across batches. This intentionally inverts the usual pointer direction: Go retains the driver-owned `GgfxUploadArena.ptr` until the arena rotates or the device closes, advancing monotonically within `[batchStart:cursor]` so `WritePixels` and uniform payloads are written directly into GPU-accessible memory with zero Go-heap staging copies. When the backend requires row-pitch alignment (e.g., 256 bytes on D3D12), Go lays out rows directly at `GgfxUploadArena.row_pitch_alignment` and records that alignment in `GgfxCmdWritePixels.hdr.aux`. On rotation, the backend allocates and maps the replacement buffer before retiring the old one; if rotation fails, Go clears its shared-arena pointer and falls back cleanly to the Go-heap payload arena.
 - Command records in `cmds[]` are 8-byte aligned:
 
 ```c
 typedef struct {
     uint8_t  op;       // GgfxOp enum
     uint8_t  flags;
-    uint16_t aux;      // e.g. dst_region_count, write_count, pixel_format
+    uint16_t aux;      // e.g. dst_region_count, write_count, pixel_format, or write_pixels row_pitch_align
     uint32_t size;     // total record byte size (multiple of 8)
 } GgfxCmdHeader;
 ```
@@ -93,10 +94,10 @@ Supported opcodes in `cmds[]`:
 
 ## 4. C ABI Sketch (`ggfx_driver.h` / Zig `export fn`)
 
-Every exported Zig function returns a `GgfxStatus` (`0 = OK`, non-zero error code) and writes human-readable diagnostics into a caller-supplied error buffer (`char* err_buf, size_t err_cap`), so no heap-allocated error strings cross the ABI.
+Lifecycle, submission, and resource-management functions return a `GgfxStatus` (`0 = OK`, non-zero error code) and write human-readable diagnostics into a caller-supplied error buffer (`char* err_buf, size_t err_cap`), so no heap-allocated error strings cross the ABI. Lightweight queries and setters (`ggfx_abi_version`, `ggfx_device_set_main_thread_mode`, `ggfx_device_is_occluded`, `ggfx_surface_set_window_state`, `ggfx_surface_kept`, and `ggfx_debug_stats`) omit the error buffer.
 
 ```c
-#define GGFX_DRIVER_ABI_VERSION 1
+#define GGFX_DRIVER_ABI_VERSION 2u
 
 uint32_t ggfx_abi_version(void);
 
@@ -107,7 +108,9 @@ GgfxStatus ggfx_device_create(
     GgfxDriverCaps* out_caps,        // max_image_size, flips_y, supports_a8, needs_clear, direct_comp, backend_kind
     char* err_buf, size_t err_cap);
 
-void ggfx_device_destroy(GgfxDevice* dev);
+GgfxStatus ggfx_device_destroy(
+    GgfxDevice* dev,
+    char* err_buf, size_t err_cap);
 
 // Hot path (render thread): 1 call per Flush
 GgfxStatus ggfx_submit(
@@ -115,6 +118,12 @@ GgfxStatus ggfx_submit(
     const GgfxBatch* batch,          // ptr+len for cmds, vertices, indices, payload
     uint32_t flush_mode,             // 0=Intermediate, 1=EndFrame, 2=Present
     GgfxSubmitResult* out_res,       // occluded flag, etc.
+    char* err_buf, size_t err_cap);
+
+GgfxStatus ggfx_acquire_upload_arena(
+    GgfxDevice* dev,
+    uint64_t min_bytes,
+    GgfxUploadArena* out_arena,      // arena_id, GPU-mapped ptr, capacity, alignment, row_pitch_alignment
     char* err_buf, size_t err_cap);
 
 // Synchronous round-trips (render thread)
@@ -149,14 +158,18 @@ void ggfx_surface_set_window_state(
     uint32_t surface_id,
     uint32_t state_flags);           // bit0=live_resizing, bit1=fullscreen, bit2=hidden (atomic store in Zig)
 
-bool ggfx_surface_kept(
+uint32_t ggfx_surface_kept(
     GgfxDevice* dev,
-    uint32_t surface_id);
+    uint32_t surface_id);            // returns 1 if kept, 0 otherwise
 ```
 
 ### Key ABI Safety Invariants
 
-- **Go GC pinning**: All pointers in `GgfxBatch` and `GgfxReadRegion` are valid only for the duration of the synchronous FFI call (keeping `runtime.KeepAlive` on the Go slices across the `purego` call). Zig never stores any pointer received from Go past function return.
+- **Strict ABI version handshake**: Both sides enforce `GGFX_DRIVER_ABI_VERSION` (currently `2`) before any struct crosses the ABI. Immediately after loading the shared library (whether via `GGFX_DRIVER_LIB`, linked `LibraryPath`, embedded extraction, or dynamic linker search), Go calls `ggfx_abi_version()` and unloads the library with `ErrABIMismatch` on any difference. On the native side, `ggfx_device_create` validates `opts->abi_version` before inspecting the full `struct_size` or writing to `out_dev`/`out_caps`, refusing mismatched callers with `GGFX_ERR_ABI_MISMATCH` without touching output memory.
+- **Terminal device-lost state & teardown**: The shared layer (`root.zig`) latches a device into a terminal lost state (tracked atomically across threads) only for (i) physical device loss reported by the GPU API (`GGFX_ERR_DEVICE_LOST`), (ii) a failure after partial or uncertain submission (command submission failed, or a post-submit wait/reset failed), or (iii) a failure after a screen swapchain image was acquired in the batch and not consumed by a successful submit. Offscreen-only batch aborts reset the command buffer and roll back tracked layouts cleanly. On WSI paths, a first acquire `OUT_OF_DATE` retries once after recreating the swapchain, a present `OUT_OF_DATE` schedules swapchain recreation for the next frame and usually returns `GGFX_OK`, and `SURFACE_LOST` (or a repeated acquire `OUT_OF_DATE` with no unconsumed acquire) returns `GGFX_ERR_SURFACE_LOST` without latching device loss. Once latched, status-returning operations fail immediately with `GGFX_ERR_DEVICE_LOST` without mutating outputs or backend state, void setters become no-ops, scalar queries (`ggfx_device_is_occluded`, `ggfx_surface_kept`) return `0`, `ggfx_debug_stats` continues to report counters, and `ggfx_device_destroy` remains callable. If `ggfx_device_destroy` runs while GPU completion is uncertain and its checked idle wait fails with anything other than API-reported device loss, teardown is abandoned without releasing GPU resources (deliberately leaking the device rather than freeing a partial dependency set while GPU work may still run); clean teardown is not guaranteed in that uncertain state.
+- **Post-abort vertex rebinding & deferred disposals**: Any aborted batch invalidates the active vertex/index binding, so a subsequent draw with indices must issue `OP_SET_VERTICES` again or fail with `GGFX_ERR_INVALID_ARGUMENT`. On the Go side, `Image.Dispose`, `Shader.Dispose`, and `Surface.Dispose` keep their native disposals pending until the carrying batch succeeds; on recoverable batch failure, Go re-queues those lifecycle disposals idempotently at the front of the next batch and withholds handle ID recycling until a batch carrying them succeeds.
+- **Go GC pinning**: All Go-owned pointers in `GgfxBatch`, `GgfxCmdSetVertices`, `GgfxShaderDesc`, and `GgfxReadRegion` are valid only for the duration of the synchronous FFI call. Go pins `OP_SET_VERTICES` vertex/index backing arrays on the slot with `runtime.Pinner` (unpinned on slot reset after `ggfx_submit` returns) and keeps `GgfxBatch` / `GgfxReadRegion` / `GgfxShaderDesc` backing slices alive across `purego.SyscallN`. Zig never stores any pointer received from Go past function return.
+- **Shared upload arena ownership**: For `ggfx_acquire_upload_arena`, ownership is reversed — the native backend owns the GPU-mapped memory and keeps it valid until the next successful `ggfx_acquire_upload_arena` rotation or `ggfx_device_destroy`. Go clears its cached pointer immediately on any failed rotation or device close.
 - **No Zig → Go callbacks on the hot path**: Avoid `purego.NewCallback` re-entrancy into Go during rendering. On macOS, Zig uses `dispatch_sync_f(dispatch_get_main_queue(), ...)` directly when Metal needs a main-thread layer update during live resize, or performs main-thread surface operations during explicit `ggfx_surface_*` calls from Go's main thread.
 
 ---
@@ -165,8 +178,8 @@ bool ggfx_surface_kept(
 
 | Platform | Primary Zig Backend | Notes |
 |---|---|---|
-| macOS (`arm64`, `amd64`) | **Metal** | Direct ObjC runtime / Metal bindings; `MTLStorageModeShared` on unified memory (`hasUnifiedMemory`), `MTLStorageModePrivate` + staging on discrete GPUs; native `R8Unorm` + `RRRR` swizzle for `PixelFormatA8`; `SetFragmentBuffer` fallback for uniform blocks `> 4096` bytes; lock-safe `IOSurface` swap chain. |
-| Windows (`amd64`, `arm64`) | **Direct3D 12** (DX11 fallback) | Single `DIRECT` command list (eliminating copy-list stalls), persistently mapped per-frame upload ring, `MipLevels = 1`, root CBVs gated on `UniformVersions`, native `DXGI_FORMAT_R8_UNORM` + SRV swizzle for `PixelFormatA8`, DirectComposition support. |
+| macOS (`arm64`, `amd64`) | **Metal** | Direct ObjC runtime / Metal bindings; `MTLStorageModeShared` on unified memory (`hasUnifiedMemory`), `MTLStorageModeManaged` on discrete GPUs; native `R8Unorm` + `RRRR` swizzle for `PixelFormatA8`; `SetFragmentBuffer` fallback for uniform blocks `> 4096` bytes; lock-safe `IOSurface` swap chain. |
+| Windows (`amd64`, `arm64`) | **Direct3D 12** | Single `DIRECT` command list (eliminating copy-list stalls), persistently mapped per-frame upload ring and 256-byte row-pitched shared upload arena, `MipLevels = 1`, root CBVs gated on `UniformVersions`, native `DXGI_FORMAT_R8_UNORM` + SRV swizzle for `PixelFormatA8`, DirectComposition support. |
 | Linux (`amd64`, `arm64`) | **Vulkan** | First-class native backend using X11/Wayland surface descriptors from `ggwd`; native `VK_FORMAT_R8_UNORM` + `ComponentMapping(R,R,R,R)` for `PixelFormatA8`; avoids Linux `libGL` vs `libGLESv2` loader fragility. |
 | Browser (`js/wasm`) | **Go WebGL** (unchanged) | Stays in Go (`internal/graphicsdriver/opengl`) — no shared library in browsers. |
 
@@ -236,7 +249,7 @@ Verify `ggfx_abi_version() == GGFX_DRIVER_ABI_VERSION` immediately after loading
 
 ### Summary of Implementation
 
-- **C ABI v1 (`zig/include/ggfx_driver.h`)**: 14 exported flat-C functions (`ggfx_abi_version`, `ggfx_device_create`, `ggfx_device_destroy`, `ggfx_device_set_main_thread_mode`, `ggfx_submit`, `ggfx_create_shader`, `ggfx_read_pixels`, `ggfx_finish_forced_frame`, `ggfx_present_on_main_thread`, `ggfx_device_is_occluded`, `ggfx_surface_create`, `ggfx_surface_set_window_state`, `ggfx_surface_kept`, `ggfx_debug_stats`) verified by Zig comptime layout checks, `zig cc -std=c11` `_Static_assert` checks (`zig/tests/abi_check.c`), and Go `TestABILayout` / `TestGoldenBatchV1`.
+- **C ABI v2 (`zig/include/ggfx_driver.h`)**: 15 exported flat-C functions (`ggfx_abi_version`, `ggfx_device_create`, `ggfx_device_destroy`, `ggfx_device_set_main_thread_mode`, `ggfx_submit`, `ggfx_acquire_upload_arena`, `ggfx_create_shader`, `ggfx_read_pixels`, `ggfx_finish_forced_frame`, `ggfx_present_on_main_thread`, `ggfx_device_is_occluded`, `ggfx_surface_create`, `ggfx_surface_set_window_state`, `ggfx_surface_kept`, `ggfx_debug_stats`) verified by Zig comptime layout checks, `zig cc -std=c11` `_Static_assert` checks (`zig/tests/abi_check.c`), and Go `TestABILayout` / `TestGoldenBatchV1`.
 - **Zero-allocation Go FFI (`internal/graphicsdriver/zigdriver`)**: Resolves symbol addresses via `purego.Dlsym` (Unix) / `windows.GetProcAddress` (Windows) and invokes them directly with `purego.SyscallN` using pooled argument buffers, keeping steady-state `Begin`/`SetVertices`/`DrawTriangles`/`End` at **0 allocs/op**.
 - **Zig Backends (`zig/src/`)**: Shared linear command replayer, dense handle tables, and pipeline/uniform-version state cache driving:
   - **Metal** (macOS `arm64`/`amd64`): native `R8Unorm` A8 swizzle, unified-memory shared textures, IOSurface swap chain, and configurable main-thread presentation (`inline`, `deferred` via `MainThreadRunner`, or `dispatch` via `GGFX_ZIG_METAL_DISPATCH=1`).

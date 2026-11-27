@@ -25,6 +25,12 @@ fn fail(diag: *Diag, cmd_idx: u32, op_name: []const u8, byte_off: usize, msg: []
 /// Validates and replays every command in `batch` into `be`.
 /// Validation runs in all build modes (including ReleaseFast) in O(n) time.
 pub fn replay(be: anytype, batch: *const abi.Batch, diag: *Diag) Error!void {
+    return replayWithState(be, batch, null, diag);
+}
+
+/// Validates and replays every command in `batch` into `be`, tracking whether a non-empty
+/// OP_SET_VERTICES has established active geometry when `vertices_valid` is non-null.
+pub fn replayWithState(be: anytype, batch: *const abi.Batch, vertices_valid: ?*bool, diag: *Diag) Error!void {
     if (batch.struct_size != @sizeOf(abi.Batch)) {
         diag.print("batch struct_size mismatch: got {d}, want {d}", .{
             batch.struct_size,
@@ -127,6 +133,9 @@ pub fn replay(be: anytype, batch: *const abi.Batch, diag: *Diag) Error!void {
                     break :blk p[0..cmd.index_count];
                 };
                 try be.setVertices(verts, idxs, diag);
+                if (verts.len > 0 and idxs.len > 0) {
+                    if (vertices_valid) |vv| vv.* = true;
+                }
             },
             .new_image => {
                 if (hdr.size != @sizeOf(abi.CmdNewImage)) {
@@ -152,21 +161,22 @@ pub fn replay(be: anytype, batch: *const abi.Batch, diag: *Diag) Error!void {
                     return fail(diag, cmd_idx, op_name, offset, "invalid DISPOSE_IMAGE record size");
                 }
                 const cmd: *const abi.CmdDisposeImage = @ptrCast(rec_ptr);
-                try be.disposeImage(cmd.id);
+                // Re-queued disposals after a partially replayed batch are idempotent.
+                be.disposeImage(cmd.id) catch |err| if (err != error.UnknownHandle) return err;
             },
             .dispose_shader => {
                 if (hdr.size != @sizeOf(abi.CmdDisposeShader)) {
                     return fail(diag, cmd_idx, op_name, offset, "invalid DISPOSE_SHADER record size");
                 }
                 const cmd: *const abi.CmdDisposeShader = @ptrCast(rec_ptr);
-                try be.disposeShader(cmd.id);
+                be.disposeShader(cmd.id) catch |err| if (err != error.UnknownHandle) return err;
             },
             .dispose_surface => {
                 if (hdr.size != @sizeOf(abi.CmdDisposeSurface)) {
                     return fail(diag, cmd_idx, op_name, offset, "invalid DISPOSE_SURFACE record size");
                 }
                 const cmd: *const abi.CmdDisposeSurface = @ptrCast(rec_ptr);
-                try be.disposeSurface(cmd.surface_id);
+                be.disposeSurface(cmd.surface_id) catch |err| if (err != error.UnknownHandle) return err;
             },
             .write_pixels => {
                 if (hdr.size < @sizeOf(abi.CmdWritePixels)) {
@@ -182,6 +192,9 @@ pub fn replay(be: anytype, batch: *const abi.Batch, diag: *Diag) Error!void {
                     @as([*]align(4) const u8, @alignCast(rec_ptr + @sizeOf(abi.CmdWritePixels))),
                 );
                 const regions = regions_ptr[0..cmd.count];
+                if (hdr.aux != 0 and !std.math.isPowerOfTwo(hdr.aux)) {
+                    return fail(diag, cmd_idx, op_name, offset, "WRITE_PIXELS row_pitch_align must be 0 or a power of 2");
+                }
                 for (regions) |r| {
                     if (r.payload_offset % 16 != 0) {
                         return fail(diag, cmd_idx, op_name, offset, "WRITE_PIXELS payload_offset not 16-byte aligned");
@@ -191,7 +204,7 @@ pub fn replay(be: anytype, batch: *const abi.Batch, diag: *Diag) Error!void {
                         return fail(diag, cmd_idx, op_name, offset, "WRITE_PIXELS payload slice out of bounds");
                     }
                 }
-                try be.writePixels(cmd.image_id, regions, payload, diag);
+                try be.writePixels(cmd.image_id, regions, payload, hdr.aux, diag);
             },
             .draw_triangles => {
                 if (hdr.size < @sizeOf(abi.CmdDrawTriangles)) {
@@ -241,6 +254,25 @@ pub fn replay(be: anytype, batch: *const abi.Batch, diag: *Diag) Error!void {
                     @as([*]align(4) const u8, @alignCast(rec_ptr + @sizeOf(abi.CmdDrawTriangles))),
                 );
 
+                const regions = regions_ptr[0..cmd.region_count];
+                if (vertices_valid) |vv| {
+                    if (!vv.*) {
+                        for (regions) |r| {
+                            if (r.index_count > 0) {
+                                diag.set("drawTriangles: no active vertices/indices set");
+                                return error.InvalidArgument;
+                            }
+                        }
+                    }
+                }
+
+                for (cmd.src_ids) |src_id| {
+                    if (src_id != 0 and src_id == cmd.dst_id) {
+                        diag.set("drawTriangles: destination and source images must be different");
+                        return error.InvalidArgument;
+                    }
+                }
+
                 const dc = DrawCall{
                     .dst = cmd.dst_id,
                     .srcs = cmd.src_ids,
@@ -251,7 +283,7 @@ pub fn replay(be: anytype, batch: *const abi.Batch, diag: *Diag) Error!void {
                     .internal_version = cmd.internal_version,
                     .user = user_slice,
                     .user_version = cmd.user_version,
-                    .regions = regions_ptr[0..cmd.region_count],
+                    .regions = regions,
                 };
                 try be.drawTriangles(&dc, diag);
             },

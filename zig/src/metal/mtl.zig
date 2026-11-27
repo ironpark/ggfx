@@ -528,6 +528,79 @@ pub const CommandBuffer = struct {
     }
 };
 
+/// Reusable MTLRenderPassDescriptor + colorAttachment[0] handle to avoid per-pass ObjC allocations.
+pub const ReusableRenderPass = struct {
+    rpd: Id = null,
+    att0: Id = null,
+    last_load_action: LoadAction = .dont_care,
+    last_tex: Id = null,
+
+    pub fn init() ReusableRenderPass {
+        const rt = objc.get();
+        const rpd = objc.send(*const fn (Class, Sel) callconv(.c) Id)(rt.classes.MTLRenderPassDescriptor, rt.sels.new);
+        if (rpd == null) return .{};
+        const attachments = objc.send(*const fn (Id, Sel) callconv(.c) Id)(rpd, rt.sels.colorAttachments);
+        const att0 = objc.send(*const fn (Id, Sel, usize) callconv(.c) Id)(attachments, rt.sels.objectAtIndexedSubscript, 0);
+        objc.send(*const fn (Id, Sel, usize) callconv(.c) void)(att0, rt.sels.setStoreAction, @intFromEnum(StoreAction.store));
+        objc.send(*const fn (Id, Sel, ClearColor) callconv(.c) void)(att0, rt.sels.setClearColor, .{});
+        objc.send(*const fn (Id, Sel, usize) callconv(.c) void)(att0, rt.sels.setLoadAction, @intFromEnum(LoadAction.load));
+        return .{
+            .rpd = rpd,
+            .att0 = att0,
+            .last_load_action = .load,
+            .last_tex = null,
+        };
+    }
+
+    pub fn clearTexture(self: *ReusableRenderPass) void {
+        if (self.att0 == null or self.last_tex == null) return;
+        const rt = objc.get();
+        objc.send(*const fn (Id, Sel, Id) callconv(.c) void)(self.att0, rt.sels.setTexture, null);
+        self.last_tex = null;
+    }
+
+    pub fn clearTextureIfMatches(self: *ReusableRenderPass, tex: Texture) void {
+        if (tex.id != null and self.last_tex == tex.id) {
+            self.clearTexture();
+        }
+    }
+
+    pub fn beginEncoder(self: *ReusableRenderPass, cb: CommandBuffer, texture: Texture, load_action: LoadAction) RenderCommandEncoder {
+        if (self.rpd == null) {
+            return cb.renderCommandEncoder(.{
+                .texture = texture,
+                .load_action = load_action,
+                .store_action = .store,
+                .clear_color = .{},
+            });
+        }
+        const rt = objc.get();
+        if (self.last_load_action != load_action) {
+            objc.send(*const fn (Id, Sel, usize) callconv(.c) void)(self.att0, rt.sels.setLoadAction, @intFromEnum(load_action));
+            self.last_load_action = load_action;
+        }
+        if (self.last_tex != texture.id) {
+            objc.send(*const fn (Id, Sel, Id) callconv(.c) void)(self.att0, rt.sels.setTexture, texture.id);
+            self.last_tex = texture.id;
+        }
+        const rce = objc.send(*const fn (Id, Sel, Id) callconv(.c) Id)(
+            cb.id,
+            rt.sels.renderCommandEncoderWithDescriptor,
+            self.rpd,
+        );
+        return .{ .id = rce };
+    }
+
+    pub fn deinit(self: *ReusableRenderPass) void {
+        if (self.rpd != null) {
+            self.clearTexture();
+            objc.release(self.rpd);
+            self.rpd = null;
+            self.att0 = null;
+        }
+    }
+};
+
 pub const RenderCommandEncoder = struct {
     id: Id = null,
 

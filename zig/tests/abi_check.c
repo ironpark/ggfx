@@ -6,6 +6,7 @@
 #define CHECK_OFF(T, F, K) _Static_assert(offsetof(T, F) == (K), "offsetof(" #T ", " #F ") != " #K)
 
 _Static_assert(sizeof(void*) == 8, "64-bit platform required");
+_Static_assert(GGFX_DRIVER_ABI_VERSION == 2u, "GGFX_DRIVER_ABI_VERSION must be 2");
 
 /* GgfxRect: 16 B */
 CHECK_SIZE(GgfxRect, 16);
@@ -125,14 +126,16 @@ CHECK_OFF(GgfxDebugStats, draws, 40);
 CHECK_OFF(GgfxDebugStats, binds_skipped, 48);
 CHECK_OFF(GgfxDebugStats, uploaded_bytes, 56);
 
-/* GgfxUploadArena: 32 B */
-CHECK_SIZE(GgfxUploadArena, 32);
+/* GgfxUploadArena: 40 B */
+CHECK_SIZE(GgfxUploadArena, 40);
 CHECK_OFF(GgfxUploadArena, struct_size, 0);
 CHECK_OFF(GgfxUploadArena, arena_id, 4);
 CHECK_OFF(GgfxUploadArena, ptr, 8);
 CHECK_OFF(GgfxUploadArena, capacity, 16);
 CHECK_OFF(GgfxUploadArena, alignment, 24);
 CHECK_OFF(GgfxUploadArena, flags, 28);
+CHECK_OFF(GgfxUploadArena, row_pitch_alignment, 32);
+CHECK_OFF(GgfxUploadArena, reserved, 36);
 
 /* Command records */
 CHECK_SIZE(GgfxCmdSetVertices, 32);

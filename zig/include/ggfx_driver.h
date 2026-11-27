@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define GGFX_DRIVER_ABI_VERSION 1u
+#define GGFX_DRIVER_ABI_VERSION 2u
 
 /* Status codes */
 typedef int32_t GgfxStatus;
@@ -280,6 +280,8 @@ typedef struct GgfxUploadArena {
     uint64_t capacity;
     uint32_t alignment;
     uint32_t flags;
+    uint32_t row_pitch_alignment;
+    uint32_t reserved;
 } GgfxUploadArena;
 
 /* Command records (8-byte aligned inside GgfxBatch.cmds) */

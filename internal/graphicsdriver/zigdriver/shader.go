@@ -144,6 +144,5 @@ func (s *Shader) Dispose() {
 		return
 	}
 	s.disposed = true
-	s.g.ring.cur().encodeDisposeShader(s.id)
-	s.g.shaderIDs.deferRelease(s.id)
+	s.g.queueDisposeShader(s.id)
 }

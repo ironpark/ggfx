@@ -8,6 +8,8 @@ pub const dynlib = @import("dynlib.zig");
 pub const handles = @import("handles.zig");
 pub const state_cache = @import("state_cache.zig");
 pub const upload_arena = @import("upload_arena.zig");
+pub const pixel_regions = @import("pixel_regions.zig");
+pub const vertex_cache = @import("vertex_cache.zig");
 pub const replayer = @import("replayer.zig");
 pub const backend = @import("backend.zig");
 pub const null_backend = @import("null/backend.zig");
@@ -18,6 +20,16 @@ const Error = errors.Error;
 pub const Device = struct {
     alloc_state: alloc.AllocatorState,
     impl: *backend.Impl,
+    lost: std.atomic.Value(bool) = .init(false),
+    vertices_valid: bool = false,
+
+    pub fn isLost(self: *const Device) bool {
+        return self.lost.load(.acquire);
+    }
+
+    pub fn markLost(self: *Device) void {
+        self.lost.store(true, .release);
+    }
 };
 
 inline fn enterAutoreleasePool() ?*anyopaque {
@@ -33,20 +45,45 @@ inline fn leaveAutoreleasePool(pool: ?*anyopaque) void {
     }
 }
 
-/// Replays one batch between beginBatch and endBatch, aborting the batch if replay fails.
+/// Replays one batch between beginBatch and endBatch, aborting on replay/end failure and
+/// latching the terminal device-lost state only when the API reports DeviceLost or the
+/// backend signals an unrecoverable execution/WSI state.
 fn runBatch(
-    impl: *backend.Impl,
+    dev: *Device,
     batch: *const abi.Batch,
     mode: abi.FlushMode,
     out_res: *abi.SubmitResult,
     diag: *Diag,
 ) Error!void {
-    try impl.beginBatch(diag);
-    replayer.replay(impl, batch, diag) catch |err| {
-        impl.abortBatch();
+    dev.impl.beginBatch(diag) catch |err| {
+        if (err == error.DeviceLost or dev.impl.isDeviceLost()) dev.markLost();
         return err;
     };
-    try impl.endBatch(mode, out_res, diag);
+    replayer.replayWithState(dev.impl, batch, &dev.vertices_valid, diag) catch |err| {
+        dev.vertices_valid = false;
+        if (dev.impl.abortBatch() or err == error.DeviceLost or dev.impl.isDeviceLost()) {
+            dev.markLost();
+        }
+        return err;
+    };
+    dev.impl.endBatch(mode, out_res, diag) catch |err| {
+        dev.vertices_valid = false;
+        if (dev.impl.abortBatch() or err == error.DeviceLost or dev.impl.isDeviceLost()) {
+            dev.markLost();
+        }
+        return err;
+    };
+    if (mode != .intermediate) {
+        dev.vertices_valid = false;
+    }
+}
+
+fn checkNotLost(dev: *const Device, diag: *Diag) bool {
+    if (dev.isLost()) {
+        diag.set("device is lost");
+        return false;
+    }
+    return true;
 }
 
 fn parseFlushMode(mode: u32) Error!abi.FlushMode {
@@ -73,14 +110,12 @@ pub export fn ggfx_device_create(
     defer leaveAutoreleasePool(pool);
 
     var diag = Diag.init(err_buf, err_cap);
-    const out_dev = out_dev_opt orelse {
-        diag.set("out_dev is null");
-        return .err_invalid_argument;
-    };
-    out_dev.* = null;
-
     const opts = opts_opt orelse {
         diag.set("opts is null");
+        return .err_invalid_argument;
+    };
+    const out_dev = out_dev_opt orelse {
+        diag.set("out_dev is null");
         return .err_invalid_argument;
     };
     const out_caps = out_caps_opt orelse {
@@ -88,8 +123,10 @@ pub export fn ggfx_device_create(
         return .err_invalid_argument;
     };
 
-    if (opts.struct_size != @sizeOf(abi.DeviceOptions)) {
-        diag.print("DeviceOptions struct_size mismatch: got {d}, want {d}", .{
+    // Validate the caller's ABI version before inspecting full struct size or writing any output
+    // struct so a mismatched caller's memory is never touched.
+    if (opts.struct_size < @offsetOf(abi.DeviceOptions, "abi_version") + @sizeOf(u32)) {
+        diag.print("DeviceOptions struct_size too small: got {d}, want {d}", .{
             opts.struct_size,
             @sizeOf(abi.DeviceOptions),
         });
@@ -102,12 +139,23 @@ pub export fn ggfx_device_create(
         });
         return .err_abi_mismatch;
     }
+    if (opts.struct_size != @sizeOf(abi.DeviceOptions)) {
+        diag.print("DeviceOptions struct_size mismatch: got {d}, want {d}", .{
+            opts.struct_size,
+            @sizeOf(abi.DeviceOptions),
+        });
+        return .err_invalid_argument;
+    }
+
+    out_dev.* = null;
 
     const dev = std.heap.page_allocator.create(Device) catch {
         diag.set("out of memory allocating Device");
         return .err_out_of_memory;
     };
     dev.alloc_state = .init;
+    dev.lost = .init(false);
+    dev.vertices_valid = false;
 
     out_caps.* = std.mem.zeroes(abi.DriverCaps);
     const impl = backend.Impl.init(dev.alloc_state.allocator(), opts, out_caps, &diag) catch |err| {
@@ -150,6 +198,7 @@ pub export fn ggfx_device_set_main_thread_mode(
     mode: u32,
 ) callconv(.c) void {
     const dev = dev_opt orelse return;
+    if (dev.isLost()) return;
     dev.impl.setMainThreadMode(mode);
 }
 
@@ -169,6 +218,7 @@ pub export fn ggfx_submit(
         diag.set("dev is null");
         return .err_invalid_argument;
     };
+    if (!checkNotLost(dev, &diag)) return .err_device_lost;
     const batch = batch_opt orelse {
         diag.set("batch is null");
         return .err_invalid_argument;
@@ -184,7 +234,7 @@ pub export fn ggfx_submit(
         return .err_invalid_argument;
     };
 
-    runBatch(dev.impl, batch, flush_mode, out_res, &diag) catch |err| return errors.toStatus(err);
+    runBatch(dev, batch, flush_mode, out_res, &diag) catch |err| return errors.toStatus(err);
     return .ok;
 }
 
@@ -203,6 +253,7 @@ pub export fn ggfx_create_shader(
         diag.set("dev is null");
         return .err_invalid_argument;
     };
+    if (!checkNotLost(dev, &diag)) return .err_device_lost;
     const desc = desc_opt orelse {
         diag.set("desc is null");
         return .err_invalid_argument;
@@ -215,7 +266,10 @@ pub export fn ggfx_create_shader(
         return .err_invalid_argument;
     }
 
-    dev.impl.createShader(shader_id, desc, &diag) catch |err| return errors.toStatus(err);
+    dev.impl.createShader(shader_id, desc, &diag) catch |err| {
+        if (err == error.DeviceLost or dev.impl.isDeviceLost()) dev.markLost();
+        return errors.toStatus(err);
+    };
     return .ok;
 }
 
@@ -236,6 +290,7 @@ pub export fn ggfx_read_pixels(
         diag.set("dev is null");
         return .err_invalid_argument;
     };
+    if (!checkNotLost(dev, &diag)) return .err_device_lost;
     const regions: []const abi.ReadRegion = if (region_count == 0)
         &.{}
     else blk: {
@@ -248,10 +303,15 @@ pub export fn ggfx_read_pixels(
 
     if (pending_opt) |pending| {
         var dummy_res = std.mem.zeroes(abi.SubmitResult);
-        runBatch(dev.impl, pending, .intermediate, &dummy_res, &diag) catch |err| return errors.toStatus(err);
+        runBatch(dev, pending, .intermediate, &dummy_res, &diag) catch |err| return errors.toStatus(err);
     }
 
-    dev.impl.readPixels(image_id, regions, &diag) catch |err| return errors.toStatus(err);
+    dev.impl.readPixels(image_id, regions, &diag) catch |err| {
+        if (dev.impl.abortBatch() or err == error.DeviceLost or dev.impl.isDeviceLost()) {
+            dev.markLost();
+        }
+        return errors.toStatus(err);
+    };
     return .ok;
 }
 
@@ -268,7 +328,11 @@ pub export fn ggfx_finish_forced_frame(
         diag.set("dev is null");
         return .err_invalid_argument;
     };
-    dev.impl.finishForcedFrame(&diag) catch |err| return errors.toStatus(err);
+    if (!checkNotLost(dev, &diag)) return .err_device_lost;
+    dev.impl.finishForcedFrame(&diag) catch |err| {
+        if (err == error.DeviceLost or dev.impl.isDeviceLost()) dev.markLost();
+        return errors.toStatus(err);
+    };
     return .ok;
 }
 
@@ -285,12 +349,17 @@ pub export fn ggfx_present_on_main_thread(
         diag.set("dev is null");
         return .err_invalid_argument;
     };
-    dev.impl.presentOnMainThread(&diag) catch |err| return errors.toStatus(err);
+    if (!checkNotLost(dev, &diag)) return .err_device_lost;
+    dev.impl.presentOnMainThread(&diag) catch |err| {
+        if (err == error.DeviceLost or dev.impl.isDeviceLost()) dev.markLost();
+        return errors.toStatus(err);
+    };
     return .ok;
 }
 
 pub export fn ggfx_device_is_occluded(dev_opt: ?*Device) callconv(.c) u32 {
     const dev = dev_opt orelse return 0;
+    if (dev.isLost()) return 0;
     return if (dev.impl.isOccluded()) 1 else 0;
 }
 
@@ -310,6 +379,7 @@ pub export fn ggfx_surface_create(
         diag.set("dev is null");
         return .err_invalid_argument;
     };
+    if (!checkNotLost(dev, &diag)) return .err_device_lost;
     const desc = desc_opt orelse {
         diag.set("desc is null");
         return .err_invalid_argument;
@@ -327,7 +397,10 @@ pub export fn ggfx_surface_create(
     }
 
     out_caps.* = std.mem.zeroes(abi.SurfaceCaps);
-    dev.impl.createSurface(surface_id, desc, out_caps, &diag) catch |err| return errors.toStatus(err);
+    dev.impl.createSurface(surface_id, desc, out_caps, &diag) catch |err| {
+        if (err == error.DeviceLost or dev.impl.isDeviceLost()) dev.markLost();
+        return errors.toStatus(err);
+    };
     return .ok;
 }
 
@@ -337,6 +410,7 @@ pub export fn ggfx_surface_set_window_state(
     state_flags: u32,
 ) callconv(.c) void {
     const dev = dev_opt orelse return;
+    if (dev.isLost()) return;
     dev.impl.setWindowState(surface_id, state_flags);
 }
 
@@ -345,6 +419,7 @@ pub export fn ggfx_surface_kept(
     surface_id: u32,
 ) callconv(.c) u32 {
     const dev = dev_opt orelse return 0;
+    if (dev.isLost()) return 0;
     return if (dev.impl.surfaceKept(surface_id)) 1 else 0;
 }
 
@@ -374,14 +449,135 @@ pub export fn ggfx_acquire_upload_arena(
         diag.set("dev is null");
         return .err_invalid_argument;
     };
+    if (!checkNotLost(dev, &diag)) return .err_device_lost;
     const out_arena = out_arena_opt orelse {
         diag.set("out_arena is null");
         return .err_invalid_argument;
     };
     out_arena.* = std.mem.zeroes(abi.UploadArena);
 
-    dev.impl.acquireUploadArena(min_bytes, out_arena, &diag) catch |err| return errors.toStatus(err);
+    dev.impl.acquireUploadArena(min_bytes, out_arena, &diag) catch |err| {
+        if (err == error.DeviceLost or dev.impl.isDeviceLost()) dev.markLost();
+        return errors.toStatus(err);
+    };
     return .ok;
+}
+
+test "device_create rejects ABI version mismatch without writing output structs" {
+    const opts = abi.DeviceOptions{
+        .struct_size = @sizeOf(abi.DeviceOptions),
+        .abi_version = abi.driver_abi_version - 1,
+        .backend = @intFromEnum(abi.Backend.null),
+        .color_space = 1,
+        .flags = 0,
+        .frames_in_flight = 2,
+        .dx_feature_level = 0,
+        .main_thread_mode = 0,
+        .reserved = .{ 0, 0 },
+    };
+    const sentinel_ptr: *Device = @ptrFromInt(0x12340);
+    var out_dev: ?*Device = sentinel_ptr;
+    var out_caps: abi.DriverCaps = undefined;
+    @memset(std.mem.asBytes(&out_caps), 0xA5);
+    var err_buf: [256]u8 = @splat(0);
+
+    const st = ggfx_device_create(&opts, &out_dev, &out_caps, &err_buf, err_buf.len);
+    try std.testing.expectEqual(abi.Status.err_abi_mismatch, st);
+    try std.testing.expectEqual(@as(?*Device, sentinel_ptr), out_dev);
+    for (std.mem.asBytes(&out_caps)) |b| {
+        try std.testing.expectEqual(@as(u8, 0xA5), b);
+    }
+}
+
+test "terminal device-lost state rejects all subsequent operations until destroy" {
+    if (backend.Impl != null_backend.Backend) return;
+
+    const opts = abi.DeviceOptions{
+        .struct_size = @sizeOf(abi.DeviceOptions),
+        .abi_version = abi.driver_abi_version,
+        .backend = @intFromEnum(abi.Backend.null),
+        .color_space = 1,
+        .flags = 0,
+        .frames_in_flight = 2,
+        .dx_feature_level = 0,
+        .main_thread_mode = 0,
+        .reserved = .{ 0, 0 },
+    };
+    var dev: ?*Device = null;
+    var caps: abi.DriverCaps = undefined;
+    var err_buf: [256]u8 = @splat(0);
+    try std.testing.expectEqual(abi.Status.ok, ggfx_device_create(&opts, &dev, &caps, &err_buf, err_buf.len));
+    errdefer _ = ggfx_device_destroy(dev, &err_buf, err_buf.len);
+
+    // A non-terminal surface condition during endBatch does not latch device-lost.
+    dev.?.impl.fail_next_end_batch = .{ .err = error.SurfaceLost, .mark_lost = false };
+    const empty_batch = abi.Batch{
+        .struct_size = @sizeOf(abi.Batch),
+        .cmd_count = 0,
+        .cmds = null,
+        .cmds_len = 0,
+        .payload = null,
+        .payload_len = 0,
+        .sequence = 1,
+    };
+    var res: abi.SubmitResult = undefined;
+    try std.testing.expectEqual(
+        abi.Status.err_surface_lost,
+        ggfx_submit(dev, &empty_batch, @intFromEnum(abi.FlushMode.present), &res, &err_buf, err_buf.len),
+    );
+    try std.testing.expect(!dev.?.isLost());
+    try std.testing.expectEqual(
+        abi.Status.ok,
+        ggfx_submit(dev, &empty_batch, @intFromEnum(abi.FlushMode.end_frame), &res, &err_buf, err_buf.len),
+    );
+
+    // An uncertain submission failure latches terminal device-lost state so every subsequent
+    // status-returning call reports err_device_lost while stats and destroy still succeed.
+    dev.?.impl.fail_next_end_batch = .{ .err = error.OutOfMemory, .mark_lost = true };
+    try std.testing.expectEqual(
+        abi.Status.err_out_of_memory,
+        ggfx_submit(dev, &empty_batch, @intFromEnum(abi.FlushMode.end_frame), &res, &err_buf, err_buf.len),
+    );
+    try std.testing.expect(dev.?.isLost());
+
+    // Every subsequent API entry point must report err_device_lost without mutating outputs.
+    try std.testing.expectEqual(
+        abi.Status.err_device_lost,
+        ggfx_submit(dev, &empty_batch, @intFromEnum(abi.FlushMode.end_frame), &res, &err_buf, err_buf.len),
+    );
+    const shader_desc = std.mem.zeroes(abi.ShaderDesc);
+    try std.testing.expectEqual(
+        abi.Status.err_device_lost,
+        ggfx_create_shader(dev, 1, &shader_desc, &err_buf, err_buf.len),
+    );
+    try std.testing.expectEqual(
+        abi.Status.err_device_lost,
+        ggfx_read_pixels(dev, null, 1, null, 0, &err_buf, err_buf.len),
+    );
+    try std.testing.expectEqual(
+        abi.Status.err_device_lost,
+        ggfx_finish_forced_frame(dev, &err_buf, err_buf.len),
+    );
+    try std.testing.expectEqual(
+        abi.Status.err_device_lost,
+        ggfx_present_on_main_thread(dev, &err_buf, err_buf.len),
+    );
+    const surf_desc = std.mem.zeroes(abi.SurfaceDesc);
+    var surf_caps: abi.SurfaceCaps = undefined;
+    try std.testing.expectEqual(
+        abi.Status.err_device_lost,
+        ggfx_surface_create(dev, 1, &surf_desc, &surf_caps, &err_buf, err_buf.len),
+    );
+    var arena: abi.UploadArena = undefined;
+    @memset(std.mem.asBytes(&arena), 0x5A);
+    try std.testing.expectEqual(
+        abi.Status.err_device_lost,
+        ggfx_acquire_upload_arena(dev, 4096, &arena, &err_buf, err_buf.len),
+    );
+    for (std.mem.asBytes(&arena)) |b| {
+        try std.testing.expectEqual(@as(u8, 0x5A), b);
+    }
+    try std.testing.expectEqual(abi.Status.ok, ggfx_device_destroy(dev, &err_buf, err_buf.len));
 }
 
 test {
@@ -390,6 +586,9 @@ test {
     _ = sync;
     _ = time;
     _ = dynlib;
+    _ = state_cache;
     _ = upload_arena;
+    _ = pixel_regions;
+    _ = vertex_cache;
     _ = null_backend;
 }

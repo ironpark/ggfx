@@ -119,6 +119,72 @@ func BenchmarkDraw10k(b *testing.B) {
 	})
 }
 
+func BenchmarkDraw1kAlternatingDst(b *testing.B) {
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	runBenchDrivers(b, func(b *testing.B, g graphicsdriver.Graphics) {
+		const w, h = 64, 64
+		if err := g.Begin(); err != nil {
+			b.Fatal(err)
+		}
+		src, err := g.NewImage(16, 16, graphicsdriver.PixelFormatRGBA8)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer src.Dispose()
+		dstA, err := g.NewImage(w, h, graphicsdriver.PixelFormatRGBA8)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer dstA.Dispose()
+		dstB, err := g.NewImage(w, h, graphicsdriver.PixelFormatRGBA8)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer dstB.Dispose()
+		sh, err := g.NewShader(prog.Descriptor())
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer sh.Dispose()
+		if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+			b.Fatal(err)
+		}
+
+		vs := make([]float32, 4*graphics.VertexFloatCount)
+		graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, 16, 16, 0, 0, 16, 16, 1, 1, 1, 1)
+		is := graphics.QuadIndices()
+		uniforms := drivertest.MakeInternalUniforms(prog, w, h, g.FlipsY())
+		var srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image
+		srcs[0] = src
+		regions := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, w, h), IndexCount: len(is)}}
+		vers := graphicsdriver.UniformVersions{Internal: 1, User: 1}
+		dsts := [2]graphicsdriver.Image{dstA, dstB}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			if err := g.Begin(); err != nil {
+				b.Fatal(err)
+			}
+			if err := g.SetVertices(vs, is); err != nil {
+				b.Fatal(err)
+			}
+			for i := range 1_000 {
+				if err := g.DrawTriangles(dsts[i&1], srcs, sh, regions, 0, graphicsdriver.BlendSourceOver, uniforms, vers); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func BenchmarkWritePixelsGlyphs(b *testing.B) {
 	runBenchDrivers(b, func(b *testing.B, g graphicsdriver.Graphics) {
 		format := graphicsdriver.PixelFormatA8

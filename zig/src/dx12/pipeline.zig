@@ -1,6 +1,7 @@
 const std = @import("std");
 const abi = @import("../abi.zig");
 const errors = @import("../errors.zig");
+const vertex_cache = @import("../vertex_cache.zig");
 const win32 = @import("win32.zig");
 const d3d12 = @import("d3d12.zig");
 const dxgi = @import("dxgi.zig");
@@ -114,17 +115,14 @@ pub const Shader = struct {
     }
 };
 
-const VsCacheKey = struct {
-    code_hash: u64,
-    entry_hash: u64,
-    code_len: usize,
-    format: u32,
-};
+fn destroyOwnedBytecode(gpa: Allocator, entry: *OwnedBytecode) void {
+    entry.deinit(gpa);
+}
 
 pub const PipelineCache = struct {
     root_signature: *d3d12.ID3D12RootSignature,
     allow_dxil: bool,
-    vs_cache: std.AutoHashMapUnmanaged(VsCacheKey, OwnedBytecode) = .empty,
+    vs_cache: vertex_cache.VertexStageCache(OwnedBytecode) = .{},
 
     pub fn init(
         device: *d3d12.ID3D12Device,
@@ -216,11 +214,7 @@ pub const PipelineCache = struct {
     }
 
     pub fn deinit(self: *PipelineCache, gpa: Allocator) void {
-        var it = self.vs_cache.valueIterator();
-        while (it.next()) |entry| {
-            entry.deinit(gpa);
-        }
-        self.vs_cache.deinit(gpa);
+        self.vs_cache.deinit(gpa, gpa, destroyOwnedBytecode);
         _ = self.root_signature.release();
     }
 
@@ -268,14 +262,8 @@ pub const PipelineCache = struct {
         const ps_entry: [*:0]const u8 = desc.fragment.entry orelse "main";
         const vs_entry_slice = std.mem.span(vs_entry);
 
-        // Vertex shader bytecode (Wyhash-cached across shaders in this device).
-        const vs_key = VsCacheKey{
-            .code_hash = std.hash.Wyhash.hash(0, vs_code),
-            .entry_hash = std.hash.Wyhash.hash(0x9e3779b97f4a7c15, vs_entry_slice),
-            .code_len = vs_code.len,
-            .format = desc.format,
-        };
-        const vs_bytecode: []const u8 = if (self.vs_cache.getPtr(vs_key)) |cached|
+        // Vertex shader bytecode (cached by exact source/entry/format bytes across shaders in this device).
+        const vs_bytecode: []const u8 = if (self.vs_cache.getPtr(vs_code, vs_entry_slice, desc.format)) |cached|
             cached.slice()
         else blk: {
             var compiled_vs: OwnedBytecode = switch (format) {
@@ -285,7 +273,7 @@ pub const PipelineCache = struct {
             };
             errdefer compiled_vs.deinit(gpa);
             const s = compiled_vs.slice();
-            self.vs_cache.put(gpa, vs_key, compiled_vs) catch return error.OutOfMemory;
+            try self.vs_cache.put(gpa, vs_code, vs_entry_slice, desc.format, compiled_vs);
             break :blk s;
         };
 

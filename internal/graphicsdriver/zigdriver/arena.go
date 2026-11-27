@@ -19,6 +19,7 @@ package zigdriver
 import (
 	"image"
 	"math"
+	"runtime"
 	"unsafe"
 
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
@@ -60,13 +61,14 @@ func allocAligned16(size int) (raw, aligned []byte) {
 // [batchStart:cursor] so subsequent batches never overwrite bytes already handed
 // to the GPU until the backend rotates in an idle buffer via acquireUploadArena.
 type sharedUploadArena struct {
-	enabled    bool
-	arenaID    uint32
-	buf        []byte
-	align      int // >= 16, power of 2
-	batchStart int
-	cursor     int
-	flags      uint32
+	enabled       bool
+	arenaID       uint32
+	buf           []byte
+	align         int // >= 16, power of 2
+	rowPitchAlign int // 0 (tightly packed) or power of 2 (e.g. 256 on DX12)
+	batchStart    int
+	cursor        int
+	flags         uint32
 }
 
 func (a *sharedUploadArena) set(ua UploadArena) bool {
@@ -80,6 +82,12 @@ func (a *sharedUploadArena) set(ua UploadArena) bool {
 	if align&(align-1) != 0 {
 		align = recent.NextPowerOf2(align)
 	}
+	rowPitchAlign := int(ua.RowPitchAlignment)
+	if rowPitchAlign <= 1 {
+		rowPitchAlign = 0
+	} else if rowPitchAlign > math.MaxUint16 || rowPitchAlign&(rowPitchAlign-1) != 0 {
+		return false
+	}
 	capBytes := ua.Capacity
 	if capBytes > uint64(maxPayloadBytes) {
 		capBytes = uint64(maxPayloadBytes)
@@ -87,6 +95,7 @@ func (a *sharedUploadArena) set(ua UploadArena) bool {
 	a.buf = nativeBytes(ua.Ptr, int(capBytes))
 	a.arenaID = ua.ArenaID
 	a.align = align
+	a.rowPitchAlign = rowPitchAlign
 	a.batchStart = 0
 	a.cursor = 0
 	a.flags = ua.Flags
@@ -99,9 +108,23 @@ func (a *sharedUploadArena) clear() {
 	a.arenaID = 0
 	a.buf = nil
 	a.align = 0
+	a.rowPitchAlign = 0
 	a.batchStart = 0
 	a.cursor = 0
 	a.flags = 0
+}
+
+func pitchedRegionLen(r image.Rectangle, bpp, pitchAlign int) int {
+	dx, dy := r.Dx(), r.Dy()
+	if dx <= 0 || dy <= 0 {
+		return 0
+	}
+	rowBytes := dx * bpp
+	if pitchAlign <= 1 {
+		return rowBytes * dy
+	}
+	pitch := alignUp(rowBytes, pitchAlign)
+	return pitch*(dy-1) + rowBytes
 }
 
 func (a *sharedUploadArena) alignment() int {
@@ -163,20 +186,24 @@ func (a *sharedUploadArena) canFit(n uint64) bool {
 	return c.reserve(int(n))
 }
 
-func (a *sharedUploadArena) canFitWritePixels(args []graphicsdriver.PixelsArgs) bool {
+func (a *sharedUploadArena) canFitWritePixels(args []graphicsdriver.PixelsArgs, bpp int) bool {
 	if !a.enabled {
 		return false
 	}
 	c := a.arenaCursor()
 	for _, arg := range args {
-		if !c.reserve(len(arg.Pixels)) {
+		n := len(arg.Pixels)
+		if a.rowPitchAlign > 1 {
+			n = pitchedRegionLen(arg.Region, bpp, a.rowPitchAlign)
+		}
+		if !c.reserve(n) {
 			return false
 		}
 	}
 	return true
 }
 
-func (a *sharedUploadArena) writePixelsNeed(args []graphicsdriver.PixelsArgs) (uint64, bool) {
+func (a *sharedUploadArena) writePixelsNeed(args []graphicsdriver.PixelsArgs, bpp int) (uint64, bool) {
 	align := uint64(a.alignment())
 	var total uint64
 	for _, arg := range args {
@@ -184,7 +211,11 @@ func (a *sharedUploadArena) writePixelsNeed(args []graphicsdriver.PixelsArgs) (u
 		if off < total {
 			return 0, false
 		}
-		n := uint64(len(arg.Pixels))
+		rawN := len(arg.Pixels)
+		if a.rowPitchAlign > 1 {
+			rawN = pitchedRegionLen(arg.Region, bpp, a.rowPitchAlign)
+		}
+		n := uint64(rawN)
 		if off > math.MaxUint64-n {
 			return 0, false
 		}
@@ -217,8 +248,8 @@ type slot struct {
 	payload []byte // 16B-aligned view into payRaw
 	payLen  int
 
-	pinsF [][]float32 // retains borrowed vertex slices for GC during batch lifetime
-	pinsU [][]uint32  // retains borrowed index slices for GC during batch lifetime
+	pinner   runtime.Pinner // pins borrowed vertex/index slices across the native submit call
+	pinCount int            // number of pinned vertex/index slices in this batch
 
 	lastInternalVer uint64
 	lastUserVer     uint64
@@ -349,16 +380,52 @@ func (s *slot) appendPayloadUint32s(u []uint32) (uint32, bool) {
 	return s.appendPayload(b)
 }
 
+// appendPitchedPixels writes a pixel rectangle into the shared upload arena
+// with each row aligned to pitchAlign bytes (last row unpadded).
+func (s *slot) appendPitchedPixels(src []byte, r image.Rectangle, bpp, pitchAlign int) (uint32, uint32, bool) {
+	dx, dy := r.Dx(), r.Dy()
+	if dx <= 0 || dy <= 0 {
+		off, ok := s.appendPayload(nil)
+		return off, 0, ok
+	}
+	rowBytes := dx * bpp
+	pitch := alignUp(rowBytes, pitchAlign)
+	if pitch == rowBytes {
+		off, ok := s.appendPayload(src)
+		return off, uint32(len(src)), ok
+	}
+	totalLen := pitch*(dy-1) + rowBytes
+	if !s.canAppendPayload(totalLen) {
+		return 0, 0, false
+	}
+	sh := s.shared
+	absOff := alignUp(sh.cursor, sh.alignment())
+	end := absOff + totalLen
+	if absOff > sh.cursor {
+		clear(sh.buf[sh.cursor:absOff])
+	}
+	dst := sh.buf[absOff:end]
+	for row := range dy {
+		dstOff := row * pitch
+		srcOff := row * rowBytes
+		copy(dst[dstOff:dstOff+rowBytes], src[srcOff:srcOff+rowBytes])
+	}
+	sh.cursor = end
+	s.usingShared = true
+	s.payLen = end - sh.batchStart
+	return uint32(absOff - sh.batchStart), uint32(totalLen), true
+}
+
 func (s *slot) reset() {
 	s.cmdLen = 0
 	s.cmdCount = 0
 	s.payLen = 0
 	s.usingShared = false
 	s.forceHeap = false
-	clear(s.pinsF)
-	s.pinsF = s.pinsF[:0]
-	clear(s.pinsU)
-	s.pinsU = s.pinsU[:0]
+	if s.pinCount > 0 {
+		s.pinner.Unpin()
+		s.pinCount = 0
+	}
 	s.lastInternalVer = 0
 	s.lastUserVer = 0
 	s.lastInternalOff = 0
@@ -418,12 +485,14 @@ func (s *slot) fillBatch(dst *Batch) {
 func (s *slot) encodeSetVertices(vertices []float32, indices []uint32) {
 	var vPtr, iPtr uintptr
 	if len(vertices) > 0 {
+		s.pinner.Pin(&vertices[0])
+		s.pinCount++
 		vPtr = uintptr(unsafe.Pointer(&vertices[0]))
-		s.pinsF = append(s.pinsF, vertices)
 	}
 	if len(indices) > 0 {
+		s.pinner.Pin(&indices[0])
+		s.pinCount++
 		iPtr = uintptr(unsafe.Pointer(&indices[0]))
-		s.pinsU = append(s.pinsU, indices)
 	}
 	const sz = int(unsafe.Sizeof(CmdSetVertices{}))
 	buf := s.appendCmd(sz)
@@ -508,15 +577,25 @@ func (s *slot) encodeDisposeSurface(surfaceID uint32) {
 }
 
 // encodeWritePixels writes OP_WRITE_PIXELS and copies all region pixel buffers into payload.
+// When writing into a shared arena that requests a row-pitch alignment, rows are laid out
+// at that pitch and CmdHeader.Aux records the pitch alignment.
 // Returns false without mutating the slot if payload capacity would exceed the slot limit.
-func (s *slot) encodeWritePixels(imageID uint32, args []graphicsdriver.PixelsArgs) bool {
+func (s *slot) encodeWritePixels(imageID uint32, bpp int, args []graphicsdriver.PixelsArgs) bool {
 	if len(args) == 0 {
 		return true
+	}
+	pitchAlign := 0
+	if s.useShared() && s.shared.rowPitchAlign > 1 {
+		pitchAlign = s.shared.rowPitchAlign
 	}
 	// Pre-flight payload fit check so partial state is never written on overflow.
 	fit := s.payloadCursor()
 	for _, a := range args {
-		if !fit.reserve(len(a.Pixels)) {
+		n := len(a.Pixels)
+		if pitchAlign > 1 {
+			n = pitchedRegionLen(a.Region, bpp, pitchAlign)
+		}
+		if !fit.reserve(n) {
 			return false
 		}
 	}
@@ -528,6 +607,7 @@ func (s *slot) encodeWritePixels(imageID uint32, args []graphicsdriver.PixelsArg
 	*(*CmdWritePixels)(unsafe.Pointer(&buf[0])) = CmdWritePixels{
 		Hdr: CmdHeader{
 			Op:   OpWritePixels,
+			Aux:  uint16(pitchAlign),
 			Size: uint32(totalSz),
 		},
 		ImageID: imageID,
@@ -535,7 +615,14 @@ func (s *slot) encodeWritePixels(imageID uint32, args []graphicsdriver.PixelsArg
 	}
 	regs := unsafe.Slice((*PixelsRegion)(unsafe.Pointer(&buf[hdrSz])), len(args))
 	for i, a := range args {
-		off, ok := s.appendPayload(a.Pixels)
+		var off, payLen uint32
+		var ok bool
+		if pitchAlign > 1 {
+			off, payLen, ok = s.appendPitchedPixels(a.Pixels, a.Region, bpp, pitchAlign)
+		} else {
+			off, ok = s.appendPayload(a.Pixels)
+			payLen = uint32(len(a.Pixels))
+		}
 		if !ok {
 			panic("zigdriver: payload pre-flight check failed unexpectedly")
 		}
@@ -547,7 +634,7 @@ func (s *slot) encodeWritePixels(imageID uint32, args []graphicsdriver.PixelsArg
 				Y1: int32(a.Region.Max.Y),
 			},
 			PayloadOffset: off,
-			PayloadLen:    uint32(len(a.Pixels)),
+			PayloadLen:    payLen,
 		}
 	}
 	return true

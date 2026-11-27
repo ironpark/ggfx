@@ -72,9 +72,12 @@ type Graphics struct {
 	mainThreadMu    sync.Mutex
 	runOnMainThread func(func())
 
-	// Render-thread handle allocators.
-	imageIDs  idAllocator
-	shaderIDs idAllocator
+	// Render-thread handle allocators and pending lifecycle disposals.
+	imageIDs               idAllocator
+	shaderIDs              idAllocator
+	pendingDisposeImages   []uint32
+	pendingDisposeShaders  []uint32
+	pendingDisposeSurfaces []uint32
 
 	// Main-thread surface handle allocator (never reused).
 	nextSurfaceID atomic.Uint32
@@ -240,15 +243,17 @@ func NewGraphics(o Options) (*Graphics, error) {
 
 func (g *Graphics) acquireSharedArena(minBytes uint64) bool {
 	if g.dev == 0 || g.caps.Flags&CapFlagSharedUploadArena == 0 {
+		g.shared.clear()
 		return false
 	}
 	g.errBuf[0] = 0
 	g.uploadArena = UploadArena{}
 	st := g.lib.acquireUploadArena(g.dev, minBytes, &g.uploadArena, &g.errBuf[0], uintptr(len(g.errBuf)))
-	if st != StatusOK {
+	if st != StatusOK || !g.shared.set(g.uploadArena) {
+		g.shared.clear()
 		return false
 	}
-	return g.shared.set(g.uploadArena)
+	return true
 }
 
 // SharedUploadArenaActive reports whether the device is currently writing batch
@@ -415,6 +420,38 @@ func (g *Graphics) stageBatch(cur *slot) batchUse {
 	return use
 }
 
+func (g *Graphics) queueDisposeImage(id uint32) {
+	g.pendingDisposeImages = append(g.pendingDisposeImages, id)
+	g.ring.cur().encodeDisposeImage(id)
+	g.imageIDs.deferRelease(id)
+}
+
+func (g *Graphics) queueDisposeShader(id uint32) {
+	g.pendingDisposeShaders = append(g.pendingDisposeShaders, id)
+	g.ring.cur().encodeDisposeShader(id)
+	g.shaderIDs.deferRelease(id)
+}
+
+func (g *Graphics) queueDisposeSurface(id uint32) {
+	g.pendingDisposeSurfaces = append(g.pendingDisposeSurfaces, id)
+	g.ring.cur().encodeDisposeSurface(id)
+}
+
+// requeuePendingDisposals encodes any disposals from a rejected batch at the front
+// of the next empty slot so native resources are never stranded after recoverable errors.
+func (g *Graphics) requeuePendingDisposals() {
+	cur := g.ring.cur()
+	for _, id := range g.pendingDisposeImages {
+		cur.encodeDisposeImage(id)
+	}
+	for _, id := range g.pendingDisposeShaders {
+		cur.encodeDisposeShader(id)
+	}
+	for _, id := range g.pendingDisposeSurfaces {
+		cur.encodeDisposeSurface(id)
+	}
+}
+
 // retireBatch empties cur once the native driver has consumed or rejected the
 // staged batch (st is its status), settles the IDs disposed in that batch, and
 // folds the batch's size into the frame's peak usage.
@@ -426,9 +463,9 @@ func (g *Graphics) retireBatch(cur *slot, use batchUse, st int32) {
 	if st == StatusOK {
 		g.imageIDs.commit()
 		g.shaderIDs.commit()
-	} else {
-		g.imageIDs.discard()
-		g.shaderIDs.discard()
+		g.pendingDisposeImages = g.pendingDisposeImages[:0]
+		g.pendingDisposeShaders = g.pendingDisposeShaders[:0]
+		g.pendingDisposeSurfaces = g.pendingDisposeSurfaces[:0]
 	}
 	cur.frameMaxCmd = max(cur.frameMaxCmd, use.cmd)
 	cur.frameMaxPay = max(cur.frameMaxPay, use.pay)
@@ -454,6 +491,9 @@ func (g *Graphics) submitCurrent(flushMode uint32) error {
 	}
 
 	if st != StatusOK {
+		if st != StatusErrDeviceLost && !g.closed.Load() {
+			g.requeuePendingDisposals()
+		}
 		return statusToError("submit", st, g.errBuf[:])
 	}
 
@@ -489,7 +529,7 @@ func (g *Graphics) SetVertices(vertices []float32, indices []uint32) error {
 	if g.closed.Load() {
 		return ErrClosed
 	}
-	if len(vertices) == 0 && len(indices) == 0 {
+	if len(vertices) == 0 || len(indices) == 0 {
 		return nil
 	}
 	g.ring.cur().encodeSetVertices(vertices, indices)
@@ -610,6 +650,9 @@ func (g *Graphics) Close() error {
 	if g.ring.cur().cmdCount > 0 {
 		flushErr = g.submitCurrent(FlushIntermediate)
 	}
+	for i := range g.ring.n {
+		g.ring.slots[i].pinner.Unpin()
+	}
 
 	g.devMu.Lock()
 	defer g.devMu.Unlock()
@@ -665,11 +708,5 @@ func (a *idAllocator) deferRelease(id uint32) {
 // commit makes every deferred ID available.
 func (a *idAllocator) commit() {
 	a.free = append(a.free, a.pending...)
-	a.pending = a.pending[:0]
-}
-
-// discard drops every deferred ID without making it available: the batch that
-// disposed them failed, so the native driver may still hold them.
-func (a *idAllocator) discard() {
 	a.pending = a.pending[:0]
 }

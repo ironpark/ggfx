@@ -205,11 +205,25 @@ pub const SwapChain = struct {
     }
 
     /// Marks the non-front IOSurface purgeable once idle for >= swap_idle_ns.
-    pub fn tickIdle(self: *SwapChain, now_ns: u64) void {
+    /// Returns true if a non-front buffer is still waiting for the idle timeout.
+    pub fn tickIdle(self: *SwapChain, now_ns: u64) bool {
         self.mu.lock();
         defer self.mu.unlock();
-        if (self.released or !self.has_presented) return;
-        if (now_ns < self.last_present_ns or (now_ns - self.last_present_ns) < swap_idle_ns) return;
+        if (self.released or !self.has_presented) return false;
+
+        var has_non_volatile = false;
+        for (&self.bufs, 0..) |*b, idx| {
+            const i: i32 = @intCast(idx);
+            if (i == self.front or i == self.drawing or b.surface == null or b.volatile_flag) {
+                continue;
+            }
+            has_non_volatile = true;
+            break;
+        }
+        if (!has_non_volatile) return false;
+        if (now_ns < self.last_present_ns or (now_ns - self.last_present_ns) < swap_idle_ns) {
+            return true;
+        }
 
         for (&self.bufs, 0..) |*b, idx| {
             const i: i32 = @intCast(idx);
@@ -220,6 +234,7 @@ pub const SwapChain = struct {
             _ = iosurface.setPurgeable(b.surface, iosurface.purgeable_volatile, &old_state);
             b.volatile_flag = true;
         }
+        return false;
     }
 
     /// Drops both buffers and clears layer contents when the window is hidden.

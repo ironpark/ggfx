@@ -906,3 +906,715 @@ func TestSharedUploadArenaActiveAndRollover(t *testing.T) {
 		t.Fatalf("SharedUploadArenaActive() = true after Close, want false")
 	}
 }
+
+// TestAcquireSharedArenaFailureDisablesShared verifies that a failed
+// acquireSharedArena rotation clears the Go-side shared arena state so no stale
+// GPU-mapped pointer is retained, and subsequent uploads/draws fall back cleanly
+// to the Go heap payload arena.
+func TestAcquireSharedArenaFailureDisablesShared(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	if g.Caps().Flags&CapFlagSharedUploadArena == 0 {
+		t.Skip("backend does not advertise CapFlagSharedUploadArena")
+	}
+	if !g.SharedUploadArenaActive() {
+		t.Fatalf("SharedUploadArenaActive() = false initially, want true")
+	}
+
+	// Request larger than the native 256 MiB arena cap to trigger a rotation failure.
+	const oversize = 512 << 20
+	if g.acquireSharedArena(oversize) {
+		t.Fatalf("acquireSharedArena(%d) succeeded unexpectedly", oversize)
+	}
+	if g.SharedUploadArenaActive() {
+		t.Fatalf("SharedUploadArenaActive() = true after failed rotation, want false")
+	}
+	if g.shared.buf != nil || g.shared.arenaID != 0 {
+		t.Fatalf("shared arena state not cleared on failure: len=%d id=%d", len(g.shared.buf), g.shared.arenaID)
+	}
+
+	// Subsequent WritePixels + ReadPixels must succeed via Go heap fallback.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	img, err := g.NewImage(16, 16, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]byte, 16*16*4)
+	for i := range want {
+		want[i] = byte((i*29 + 3) & 0xff)
+	}
+	if err := img.WritePixels([]graphicsdriver.PixelsArgs{
+		{Pixels: want, Region: image.Rect(0, 0, 16, 16)},
+	}); err != nil {
+		t.Fatalf("WritePixels after fallback: %v", err)
+	}
+	got := make([]byte, len(want))
+	if err := img.ReadPixels([]graphicsdriver.PixelsArgs{
+		{Pixels: got, Region: image.Rect(0, 0, 16, 16)},
+	}); err != nil {
+		t.Fatalf("ReadPixels after fallback: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("pixel mismatch after fallback")
+	}
+	img.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End after fallback: %v", err)
+	}
+}
+
+// TestDrawTrianglesRejectsSrcEqualsDst verifies that using the same image as
+// both destination and source is rejected with ErrInvalidArgument and leaves
+// the device usable afterwards.
+func TestDrawTrianglesRejectsSrcEqualsDst(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	img, err := g.NewImage(16, 16, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := g.NewShader(prog.Descriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+
+	vs := make([]float32, 4*graphics.VertexFloatCount)
+	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, 16, 16, 0, 0, 16, 16, 1, 1, 1, 1)
+	is := graphics.QuadIndices()
+	uniforms := make([]uint32, InternalUniformDwords+uint32(prog.UniformDwordCount))
+	uniforms[56] = 0x3f800000
+	var srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image
+	srcs[0] = img
+	regions := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 16, 16), IndexCount: len(is)}}
+
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(img, srcs, sh, regions, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("End with src == dst = %v, want ErrInvalidArgument", err)
+	}
+
+	// Device must remain healthy for cleanup and subsequent frames.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	sh.Dispose()
+	img.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End cleanup after rejected batch: %v", err)
+	}
+}
+
+// TestSetVerticesEmptyAndScissorEdgeCases verifies that empty vertex/index slices
+// are a clean no-op and that zero-index or completely out-of-bounds scissor
+// regions are skipped cleanly without drawing or failing.
+func TestSetVerticesEmptyAndScissorEdgeCases(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	src, err := g.NewImage(16, 16, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := g.NewImage(16, 16, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := g.NewShader(prog.Descriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty vertex or index slice must be a clean no-op.
+	if err := g.SetVertices(nil, nil); err != nil {
+		t.Fatalf("SetVertices(nil, nil): %v", err)
+	}
+	vs := make([]float32, 4*graphics.VertexFloatCount)
+	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, 16, 16, 0, 0, 16, 16, 1, 1, 1, 1)
+	if err := g.SetVertices(vs, nil); err != nil {
+		t.Fatalf("SetVertices(vs, nil): %v", err)
+	}
+	is := graphics.QuadIndices()
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatalf("SetVertices(vs, is): %v", err)
+	}
+
+	uniforms := make([]uint32, InternalUniformDwords+uint32(prog.UniformDwordCount))
+	uniforms[56] = 0x3f800000
+	var srcs [graphics.ShaderSrcImageCount]graphicsdriver.Image
+	srcs[0] = src
+	// Mix of zero-index, completely out-of-bounds, and partially out-of-bounds scissor rects.
+	regions := []graphicsdriver.DstRegion{
+		{Region: image.Rect(0, 0, 16, 16), IndexCount: 0},
+		{Region: image.Rect(-20, -20, -5, -5), IndexCount: 0},
+		{Region: image.Rect(100, 100, 120, 120), IndexCount: 0},
+		{Region: image.Rect(-4, -4, 8, 8), IndexCount: len(is)},
+	}
+	if err := g.DrawTriangles(dst, srcs, sh, regions, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatalf("DrawTriangles scissor edge cases: %v", err)
+	}
+	sh.Dispose()
+	src.Dispose()
+	dst.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End: %v", err)
+	}
+}
+
+// TestABIVersionMismatchHandshake verifies both directions of the ABI version handshake:
+//  1. Native ggfx_device_create rejects a caller with a different ABI version before
+//     writing to out_dev or out_caps.
+//  2. The Go loader rejects a library reporting a different ABI version, closes it, and
+//     does not cache it (covering explicit path loading as well as candidate scanning).
+func TestABIVersionMismatchHandshake(t *testing.T) {
+	// Direction 1: native library refuses mismatched caller without touching output structs.
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	for _, fakeVer := range []uint32{DriverABIVersion - 1, DriverABIVersion + 1} {
+		opts := DeviceOptions{
+			StructSize: uint32(unsafe.Sizeof(DeviceOptions{})),
+			ABIVersion: fakeVer,
+			Backend:    BackendAuto,
+		}
+		const sentinelDev = uintptr(0xDEADBEEF)
+		outDev := sentinelDev
+		var outCaps DriverCaps
+		capsBytes := unsafe.Slice((*byte)(unsafe.Pointer(&outCaps)), unsafe.Sizeof(outCaps))
+		for i := range capsBytes {
+			capsBytes[i] = 0xA5
+		}
+		var errBuf [256]byte
+		st := g.lib.deviceCreate(&opts, &outDev, &outCaps, &errBuf[0], uintptr(len(errBuf)))
+		err := statusToError("device_create", st, errBuf[:])
+		if !errors.Is(err, ErrABIMismatch) {
+			t.Fatalf("deviceCreate(ver=%d) = %v, want ErrABIMismatch", fakeVer, err)
+		}
+		if outDev != sentinelDev {
+			t.Fatalf("deviceCreate(ver=%d) mutated outDev to %#x", fakeVer, outDev)
+		}
+		for i, b := range capsBytes {
+			if b != 0xA5 {
+				t.Fatalf("deviceCreate(ver=%d) mutated outCaps[%d] = %#x, want 0xA5", fakeVer, i, b)
+			}
+		}
+	}
+
+	// Direction 2: Go loader refuses a library reporting a mismatched ABI version.
+	origOpen := openLibraryFn
+	origClose := closeLibraryFn
+	defer func() {
+		openLibraryFn = origOpen
+		closeLibraryFn = origClose
+	}()
+
+	for _, fakeVer := range []uint32{DriverABIVersion - 1, DriverABIVersion + 1} {
+		const fakeHandle = uintptr(0xCAFE)
+		closedHandle := uintptr(0)
+		openLibraryFn = func(path string) (*library, error) {
+			return &library{
+				path:               path,
+				handle:             fakeHandle,
+				abiVersionOverride: func() uint32 { return fakeVer },
+			}, nil
+		}
+		closeLibraryFn = func(h uintptr) {
+			closedHandle = h
+		}
+
+		fakePath := "/nonexistent/fake-abi-mismatch.so"
+		if _, err := loadExplicitLibrary(fakePath); !errors.Is(err, ErrABIMismatch) {
+			t.Fatalf("loadExplicitLibrary(ver=%d) = %v, want ErrABIMismatch", fakeVer, err)
+		}
+		if closedHandle != fakeHandle {
+			t.Fatalf("loadExplicitLibrary(ver=%d) did not close mismatched handle: got %#x, want %#x", fakeVer, closedHandle, fakeHandle)
+		}
+		libCacheMu.Lock()
+		_, cached := libCache[fakePath]
+		libCacheMu.Unlock()
+		if cached {
+			t.Fatalf("loadExplicitLibrary(ver=%d) cached mismatched library", fakeVer)
+		}
+	}
+}
+
+// TestDeviceLostReporting verifies that ErrDeviceLost is surfaced cleanly by the
+// Go adapter's status conversion and error handling.
+func TestDeviceLostReporting(t *testing.T) {
+	if err := statusToError("submit", StatusErrDeviceLost, []byte("device is lost\x00")); !errors.Is(err, ErrDeviceLost) {
+		t.Fatalf("statusToError(StatusErrDeviceLost) = %v, want ErrDeviceLost", err)
+	}
+	if err := statusToError("read_pixels", StatusErrDeviceLost, nil); !errors.Is(err, ErrDeviceLost) {
+		t.Fatalf("statusToError(read_pixels, StatusErrDeviceLost) = %v, want ErrDeviceLost", err)
+	}
+	if err := statusToError("acquire_upload_arena", StatusErrDeviceLost, []byte("lost\x00")); !errors.Is(err, ErrDeviceLost) {
+		t.Fatalf("statusToError(acquire_upload_arena, StatusErrDeviceLost) = %v, want ErrDeviceLost", err)
+	}
+}
+
+// TestOffscreenBatchAbortRecovery verifies that aborting a batch after recording
+// offscreen WritePixels and DrawTriangles commands (via an invalid later draw in
+// the same batch) discards the uncommitted GPU work, rolls back tracked image
+// layouts cleanly, preserves pre-batch pixel contents deterministically, and
+// leaves the device usable for subsequent uploads, draws, and readbacks with
+// zero Vulkan validation errors.
+func TestOffscreenBatchAbortRecovery(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame 1: initialize src (green) and dst (red) and submit cleanly.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	src, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := g.NewShader(prog.Descriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	red := bytes.Repeat([]byte{0xff, 0x00, 0x00, 0xff}, 8*8)
+	green := bytes.Repeat([]byte{0x00, 0xff, 0x00, 0xff}, 8*8)
+	blue := bytes.Repeat([]byte{0x00, 0x00, 0xff, 0xff}, 8*8)
+	if err := src.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: green, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: red, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End frame 1: %v", err)
+	}
+
+	vs := make([]float32, 4*graphics.VertexFloatCount)
+	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, 8, 8, 0, 0, 8, 8, 1, 1, 1, 1)
+	is := graphics.QuadIndices()
+	uniforms := drivertest.MakeInternalUniforms(prog, 8, 8, g.FlipsY())
+	var srcsValid, srcsSelf [graphics.ShaderSrcImageCount]graphicsdriver.Image
+	srcsValid[0] = src
+	srcsSelf[0] = dst
+	fullRect := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 8, 8), IndexCount: len(is)}}
+
+	// Frame 2: record offscreen upload + offscreen render pass, then fail replay with src == dst.
+	// The uncommitted command buffer must be discarded and tracked layouts rolled back without
+	// putting the device into a terminal lost state.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: blue, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsValid, sh, fullRect, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsSelf, sh, fullRect, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("End aborted offscreen batch = %v, want ErrInvalidArgument", err)
+	}
+
+	// Frame 3: device must remain healthy, and dst must deterministically retain its pre-batch
+	// contents (red) because the uncommitted command buffer from frame 2 never executed.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 8*8*4)
+	if err := dst.ReadPixels([]graphicsdriver.PixelsArgs{{Pixels: got, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatalf("ReadPixels after offscreen abort: %v", err)
+	}
+	if !bytes.Equal(got, red) {
+		t.Fatalf("dst contents after aborted batch = %v..., want pre-batch red %v...", got[:4], red[:4])
+	}
+
+	// Continue drawing and uploading to the exact same images to verify rolled-back layouts
+	// produce valid transitions and expected pixels.
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsValid, sh, []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 4, 8), IndexCount: len(is)}}, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatalf("DrawTriangles after recovery: %v", err)
+	}
+	if err := dst.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: blue[:4*8*4], Region: image.Rect(4, 0, 8, 8)}}); err != nil {
+		t.Fatalf("WritePixels after recovery: %v", err)
+	}
+	if err := dst.ReadPixels([]graphicsdriver.PixelsArgs{{Pixels: got, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatalf("ReadPixels after recovery draw/upload: %v", err)
+	}
+	sh.Dispose()
+	src.Dispose()
+	dst.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End frame 3: %v", err)
+	}
+
+	px := func(x, y int) [4]byte {
+		o := (y*8 + x) * 4
+		return [4]byte{got[o], got[o+1], got[o+2], got[o+3]}
+	}
+	if p := px(0, 0); p != ([4]byte{0, 255, 0, 255}) {
+		t.Fatalf("px(0,0) after recovery = %v, want green", p)
+	}
+	if p := px(7, 7); p != ([4]byte{0, 0, 255, 255}) {
+		t.Fatalf("px(7,7) after recovery = %v, want blue", p)
+	}
+}
+
+// TestAbortedBatchInvalidatesVertices verifies that geometry bound inside a rejected
+// batch does not survive as active vertex/index state: drawing with indices after an
+// abort without calling SetVertices again fails with ErrInvalidArgument, and re-sending
+// valid vertices draws the expected pixels.
+func TestAbortedBatchInvalidatesVertices(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	src, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := g.NewShader(prog.Descriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	red := bytes.Repeat([]byte{0xff, 0x00, 0x00, 0xff}, 8*8)
+	green := bytes.Repeat([]byte{0x00, 0xff, 0x00, 0xff}, 8*8)
+	if err := src.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: green, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dst.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: red, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	validQuad := make([]float32, 4*graphics.VertexFloatCount)
+	graphics.QuadVerticesFromDstAndSrc(validQuad, 0, 0, 8, 8, 0, 0, 8, 8, 1, 1, 1, 1)
+	degenerateQuad := make([]float32, 4*graphics.VertexFloatCount) // all zeros
+	is := graphics.QuadIndices()
+	uniforms := drivertest.MakeInternalUniforms(prog, 8, 8, g.FlipsY())
+	var srcsValid, srcsSelf [graphics.ShaderSrcImageCount]graphicsdriver.Image
+	srcsValid[0] = src
+	srcsSelf[0] = dst
+	fullRect := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 8, 8), IndexCount: len(is)}}
+
+	// Intermediate batch 1: bind valid quad cleanly.
+	if err := g.SetVertices(validQuad, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeIntermediate); err != nil {
+		t.Fatalf("End intermediate 1: %v", err)
+	}
+
+	// Intermediate batch 2: bind a degenerate quad, then fail replay (src == dst).
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetVertices(degenerateQuad, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsSelf, sh, fullRect, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeIntermediate); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("End rejected intermediate batch = %v, want ErrInvalidArgument", err)
+	}
+
+	// Batch 3: draw WITHOUT re-sending vertices must be rejected with ErrInvalidArgument
+	// (neither the rejected degenerate quad nor the pre-abort quad may silently be used).
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsValid, sh, fullRect, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("End draw without SetVertices after abort = %v, want ErrInvalidArgument", err)
+	}
+
+	// Batch 4: re-bind valid quad, draw green onto dst, and verify dst turns green.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetVertices(validQuad, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsValid, sh, fullRect, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 8*8*4)
+	if err := dst.ReadPixels([]graphicsdriver.PixelsArgs{{Pixels: got, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatalf("ReadPixels after re-set vertices: %v", err)
+	}
+	sh.Dispose()
+	src.Dispose()
+	dst.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End batch 4: %v", err)
+	}
+	if !bytes.Equal(got, green) {
+		t.Fatalf("dst pixels after re-set vertices = %v..., want green %v...", got[:4], green[:4])
+	}
+}
+
+// TestAbortedBatchRequeuesDisposals verifies that disposals encoded before and after
+// a failing command in a recoverable batch are re-queued idempotently at the front of
+// the next batch without stranding native handles or recycling IDs prematurely.
+func TestAbortedBatchRequeuesDisposals(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	img1, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img2, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := g.NewShader(prog.Descriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := g.DebugStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LiveImages != 2 || st.LiveShaders != 1 {
+		t.Fatalf("initial DebugStats = %+v, want LiveImages=2 LiveShaders=1", st)
+	}
+
+	// Failing batch with img1.Dispose() BEFORE the failing draw and img2/sh.Dispose() AFTER.
+	vs := make([]float32, 4*graphics.VertexFloatCount)
+	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, 8, 8, 0, 0, 8, 8, 1, 1, 1, 1)
+	is := graphics.QuadIndices()
+	uniforms := drivertest.MakeInternalUniforms(prog, 8, 8, g.FlipsY())
+	var srcsSelf [graphics.ShaderSrcImageCount]graphicsdriver.Image
+	srcsSelf[0] = img2
+	fullRect := []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 8, 8), IndexCount: len(is)}}
+
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	img1.Dispose()
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(img2, srcsSelf, sh, fullRect, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	img2.Dispose()
+	sh.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("End failing batch with disposals = %v, want ErrInvalidArgument", err)
+	}
+
+	// Retry batch carries the re-queued disposals at its front and drops native counts to 0.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatalf("End retry batch: %v", err)
+	}
+
+	st, err = g.DebugStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.LiveImages != 0 || st.LiveShaders != 0 {
+		t.Fatalf("DebugStats after retry = %+v, want LiveImages=0 LiveShaders=0", st)
+	}
+}
+
+// TestConsecutiveRenderPassesSameDestination exercises consecutive render passes
+// targeting the same destination image across an intervening upload and across
+// non-presenting EndFrame boundaries, verifying pixel output and Vulkan sync validation.
+func TestConsecutiveRenderPassesSameDestination(t *testing.T) {
+	g := newTestGraphics(t, Options{Slots: 2})
+	defer func() {
+		if err := g.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	prog, err := shader.CompileUser(builtinshader.ShaderSource(builtinshader.FilterNearest, builtinshader.AddressUnsafe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	srcA, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcB, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := g.NewImage(8, 8, graphicsdriver.PixelFormatRGBA8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := g.NewShader(prog.Descriptor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	red := bytes.Repeat([]byte{0xff, 0x00, 0x00, 0xff}, 8*8)
+	blue := bytes.Repeat([]byte{0x00, 0x00, 0xff, 0xff}, 8*8)
+	if err := srcA.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: red, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+	vs := make([]float32, 4*graphics.VertexFloatCount)
+	graphics.QuadVerticesFromDstAndSrc(vs, 0, 0, 8, 8, 0, 0, 8, 8, 1, 1, 1, 1)
+	is := graphics.QuadIndices()
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatal(err)
+	}
+	uniforms := drivertest.MakeInternalUniforms(prog, 8, 8, g.FlipsY())
+	var srcsA, srcsB [graphics.ShaderSrcImageCount]graphicsdriver.Image
+	srcsA[0] = srcA
+	srcsB[0] = srcB
+
+	// Render pass 1: draw red into left half of dst.
+	if err := g.DrawTriangles(dst, srcsA, sh, []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 4, 8), IndexCount: len(is)}}, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	// Close render pass 1 with an intervening upload to srcB, then open render pass 2 on dst
+	// (unchanged COLOR_ATTACHMENT_OPTIMAL layout, loadOp=LOAD) drawing blue into right half.
+	if err := srcB.WritePixels([]graphicsdriver.PixelsArgs{{Pixels: blue, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsB, sh, []graphicsdriver.DstRegion{{Region: image.Rect(4, 0, 8, 8), IndexCount: len(is)}}, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+
+	// Frame 2 (across rotated frame slot): draw blue over top-left quarter while preserving bottom-left.
+	if err := g.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.SetVertices(vs, is); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.DrawTriangles(dst, srcsB, sh, []graphicsdriver.DstRegion{{Region: image.Rect(0, 0, 4, 4), IndexCount: len(is)}}, 0, graphicsdriver.BlendCopy, uniforms, graphicsdriver.UniformVersions{Internal: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 8*8*4)
+	if err := dst.ReadPixels([]graphicsdriver.PixelsArgs{{Pixels: got, Region: image.Rect(0, 0, 8, 8)}}); err != nil {
+		t.Fatal(err)
+	}
+	sh.Dispose()
+	srcA.Dispose()
+	srcB.Dispose()
+	dst.Dispose()
+	if err := g.End(graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify (0,0) is blue, (0,7) stayed red, (7,7) stayed blue.
+	px := func(x, y int) [4]byte {
+		o := (y*8 + x) * 4
+		return [4]byte{got[o], got[o+1], got[o+2], got[o+3]}
+	}
+	if p := px(0, 0); p != ([4]byte{0, 0, 255, 255}) {
+		t.Fatalf("px(0,0) = %v, want blue", p)
+	}
+	if p := px(0, 7); p != ([4]byte{255, 0, 0, 255}) {
+		t.Fatalf("px(0,7) = %v, want red", p)
+	}
+	if p := px(7, 7); p != ([4]byte{0, 0, 255, 255}) {
+		t.Fatalf("px(7,7) = %v, want blue", p)
+	}
+}

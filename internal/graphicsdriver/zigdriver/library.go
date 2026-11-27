@@ -42,11 +42,6 @@ func call0(fn uintptr) uintptr {
 }
 
 //go:uintptrescapes
-func call1(fn, a1 uintptr) uintptr {
-	return callN(fn, 1, a1, 0, 0, 0, 0, 0, 0)
-}
-
-//go:uintptrescapes
 func call2(fn, a1, a2 uintptr) uintptr {
 	return callN(fn, 2, a1, a2, 0, 0, 0, 0, 0)
 }
@@ -102,6 +97,8 @@ type library struct {
 	fnSurfaceKept           uintptr
 	fnDebugStats            uintptr
 	fnAcquireUploadArena    uintptr
+
+	abiVersionOverride func() uint32 // test hook for loader mismatch tests
 }
 
 type libSymbol struct {
@@ -130,6 +127,9 @@ func (l *library) symbols() []libSymbol {
 }
 
 func (l *library) abiVersion() uint32 {
+	if l.abiVersionOverride != nil {
+		return l.abiVersionOverride()
+	}
 	return uint32(call0(l.fnABIVersion))
 }
 
@@ -393,13 +393,18 @@ func loadDefaultLibrary() (*library, error) {
 	return nil, fmt.Errorf("%w: could not load %s (%v)", ErrBackendUnavailable, name, lastErr)
 }
 
+var (
+	openLibraryFn  = openLibrary
+	closeLibraryFn = closeLibrary
+)
+
 func openAndVerifyLibrary(path string) (*library, error) {
-	lib, err := openLibrary(path)
+	lib, err := openLibraryFn(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: open %q: %v", ErrBackendUnavailable, path, err)
 	}
 	if ver := lib.abiVersion(); ver != DriverABIVersion {
-		closeLibrary(lib.handle)
+		closeLibraryFn(lib.handle)
 		return nil, fmt.Errorf("%w: library %q reports ABI version %d, want %d", ErrABIMismatch, path, ver, DriverABIVersion)
 	}
 	return lib, nil

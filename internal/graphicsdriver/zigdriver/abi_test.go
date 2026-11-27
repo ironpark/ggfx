@@ -144,14 +144,16 @@ func TestABILayout(t *testing.T) {
 		{"DebugStats.BindsSkipped", unsafe.Offsetof(DebugStats{}.BindsSkipped), 48},
 		{"DebugStats.UploadedBytes", unsafe.Offsetof(DebugStats{}.UploadedBytes), 56},
 
-		// UploadArena (32 B)
-		{"sizeof(UploadArena)", unsafe.Sizeof(UploadArena{}), 32},
+		// UploadArena (40 B)
+		{"sizeof(UploadArena)", unsafe.Sizeof(UploadArena{}), 40},
 		{"UploadArena.StructSize", unsafe.Offsetof(UploadArena{}.StructSize), 0},
 		{"UploadArena.ArenaID", unsafe.Offsetof(UploadArena{}.ArenaID), 4},
 		{"UploadArena.Ptr", unsafe.Offsetof(UploadArena{}.Ptr), 8},
 		{"UploadArena.Capacity", unsafe.Offsetof(UploadArena{}.Capacity), 16},
 		{"UploadArena.Alignment", unsafe.Offsetof(UploadArena{}.Alignment), 24},
 		{"UploadArena.Flags", unsafe.Offsetof(UploadArena{}.Flags), 28},
+		{"UploadArena.RowPitchAlignment", unsafe.Offsetof(UploadArena{}.RowPitchAlignment), 32},
+		{"UploadArena.Reserved", unsafe.Offsetof(UploadArena{}.Reserved), 36},
 
 		// Command records
 		{"sizeof(CmdSetVertices)", unsafe.Sizeof(CmdSetVertices{}), 32},

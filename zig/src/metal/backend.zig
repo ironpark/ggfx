@@ -8,6 +8,7 @@ const sync = @import("../sync.zig");
 const time = @import("../time.zig");
 const replayer = @import("../replayer.zig");
 const upload_arena = @import("../upload_arena.zig");
+const pixel_regions = @import("../pixel_regions.zig");
 
 const objc = @import("objc.zig");
 const mtl = @import("mtl.zig");
@@ -101,6 +102,7 @@ pub const Backend = struct {
     cb: mtl.CommandBuffer = .{},
     rce: mtl.RenderCommandEncoder = .{},
     bce: mtl.BlitCommandEncoder = .{},
+    reusable_rpd: mtl.ReusableRenderPass = .{},
     encoders: u32 = 0,
     encoder_has_drawn: bool = false,
     cache: state_cache.BindCache = .{},
@@ -131,9 +133,11 @@ pub const Backend = struct {
     main_presents: std.ArrayList(MainPresentItem) = .empty,
 
     // Housekeeping thread (250ms swapchain purgeable + 500ms displaylink idle stop).
+    // Sleeps without a timeout until armed by a present or waitForRefresh.
     hk_mu: sync.Mutex = .{},
     hk_cv: sync.Condition = .{},
     hk_stop: bool = false,
+    hk_armed: bool = false,
     hk_thread: ?std.Thread = null,
 
     main_thread_mode: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -190,6 +194,7 @@ pub const Backend = struct {
             .no_iosurface = (opts.flags & abi.device_metal_no_iosurface) != 0,
             .max_image_size = max_img_size,
             .supports_a8 = supports_a8,
+            .reusable_rpd = mtl.ReusableRenderPass.init(),
             .ring = buffers.ResourceRing.init(dev),
             .main_thread_mode = std.atomic.Value(u32).init(opts.main_thread_mode),
         };
@@ -238,6 +243,7 @@ pub const Backend = struct {
         // 2. End any active encoder and commit any active command buffer so waits never stall.
         self.flushRenderCommandEncoderIfNeeded();
         self.flushBlitCommandEncoderIfNeeded();
+        self.reusable_rpd.deinit();
         if (!self.cb.isNull()) {
             self.cb.commit();
             self.cb = .{};
@@ -303,15 +309,30 @@ pub const Backend = struct {
         gpa.destroy(self);
     }
 
+    pub fn armHousekeeping(self: *Backend) void {
+        self.hk_mu.lock();
+        if (!self.hk_armed) {
+            self.hk_armed = true;
+            self.hk_cv.signal();
+        }
+        self.hk_mu.unlock();
+    }
+
     fn housekeepingMain(self: *Backend) void {
         while (true) {
             self.hk_mu.lock();
+            while (!self.hk_stop and !self.hk_armed) {
+                self.hk_cv.wait(&self.hk_mu);
+            }
             if (self.hk_stop) {
                 self.hk_mu.unlock();
                 return;
             }
             _ = self.hk_cv.timedWaitNs(&self.hk_mu, housekeeping_tick_ns);
             const stop = self.hk_stop;
+            // Clear hk_armed before scanning surfaces so a concurrent present or
+            // waitForRefresh re-arms the thread and cannot lose its wakeup.
+            self.hk_armed = false;
             self.hk_mu.unlock();
             if (stop) return;
 
@@ -319,13 +340,22 @@ pub const Backend = struct {
             defer objc.autoreleasePoolPop(pool);
 
             const now = time.monotonicNs();
+            var pending = false;
             self.surfaces_lock.lock();
             for (self.surfaces.items.items) |slot| {
                 if (slot) |surf| {
-                    surf.tickHousekeeping(now);
+                    if (surf.tickHousekeeping(now)) {
+                        pending = true;
+                    }
                 }
             }
             self.surfaces_lock.unlock();
+
+            if (pending) {
+                self.hk_mu.lock();
+                self.hk_armed = true;
+                self.hk_mu.unlock();
+            }
         }
     }
 
@@ -347,7 +377,7 @@ pub const Backend = struct {
         }
     }
 
-    pub fn abortBatch(self: *Backend) void {
+    pub fn abortBatch(self: *Backend) bool {
         self.flushRenderCommandEncoderIfNeeded();
         self.flushBlitCommandEncoderIfNeeded();
         if (!self.cb.isNull()) {
@@ -357,8 +387,16 @@ pub const Backend = struct {
             self.encoders = 0;
         }
         self.cache.reset();
+        self.vb = .{};
+        self.ib = .{};
         self.last_dst_id = 0;
         self.last_dst_surface_id = 0;
+        return false;
+    }
+
+    pub fn isDeviceLost(self: *const Backend) bool {
+        _ = self;
+        return false;
     }
 
     pub fn endBatch(self: *Backend, mode: abi.FlushMode, res: *abi.SubmitResult, diag: *Diag) Error!void {
@@ -516,6 +554,7 @@ pub const Backend = struct {
             self.flushRenderCommandEncoderIfNeeded();
         }
         if (!img.texture.isNull()) {
+            self.reusable_rpd.clearTextureIfMatches(img.texture);
             self.cache.invalidateTexture(@intFromPtr(img.texture.id));
         }
         if (!img.sampled.isNull()) {
@@ -575,6 +614,7 @@ pub const Backend = struct {
         id: u32,
         regions: []align(4) const abi.PixelsRegion,
         payload: []const u8,
+        row_pitch_align: u32,
         diag: *Diag,
     ) Error!void {
         const img = self.images.get(id) catch {
@@ -590,28 +630,25 @@ pub const Backend = struct {
             return error.UnknownHandle;
         }
 
-        const bpp: usize = img.format.bytesPerPixel();
-        var total_aligned: usize = 0;
-        var total_raw: u64 = 0;
+        const bpp = img.format.bytesPerPixel();
+        const summary = try pixel_regions.validateWriteRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            row_pitch_align,
+            "metal",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
 
+        var total_aligned: usize = 0;
         for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("metal: writePixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const want_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.payload_len != want_len) {
-                diag.print("metal: writePixels payload_len {d} != expected {d}", .{ r.payload_len, want_len });
-                return error.InvalidArgument;
-            }
             if (r.payload_len > 0) {
                 total_aligned += buffers.alignUploadOffset(r.payload_len);
-                total_raw += r.payload_len;
             }
         }
-        if (total_aligned == 0) return;
+        const total_raw = summary.total_raw_bytes;
 
         // Zero-copy fast path: payload already resides in the GPU-mapped shared upload arena.
         if (self.sharedPayloadOffset(payload)) |base_off| {
@@ -632,7 +669,7 @@ pub const Backend = struct {
             }
             for (regions) |r| {
                 if (r.payload_len == 0) continue;
-                copyRegionToTexture(bce, self.shared_upload_buf, base_off + r.payload_offset, bpp, r.rect, img.texture);
+                copyRegionToTexture(bce, self.shared_upload_buf, base_off + r.payload_offset, bpp, row_pitch_align, r.rect, img.texture);
             }
             self.uploaded_bytes += total_raw;
             return;
@@ -662,30 +699,31 @@ pub const Backend = struct {
         o = alloc.offset;
         for (regions) |r| {
             if (r.payload_len == 0) continue;
-            copyRegionToTexture(bce, alloc.buf, o, bpp, r.rect, img.texture);
+            copyRegionToTexture(bce, alloc.buf, o, bpp, row_pitch_align, r.rect, img.texture);
             o += buffers.alignUploadOffset(r.payload_len);
         }
 
         self.uploaded_bytes += total_raw;
     }
 
-    /// Blits tightly packed pixels for `rect` from `buf` at `offset` into `texture`.
+    /// Blits pixels for `rect` from `buf` at `offset` into `texture`.
     fn copyRegionToTexture(
         bce: mtl.BlitCommandEncoder,
         buf: mtl.Buffer,
         offset: usize,
-        bpp: usize,
+        bpp: u32,
+        row_pitch_align: u32,
         rect: abi.Rect,
         texture: mtl.Texture,
     ) void {
-        const dx: usize = @intCast(rect.x1 - rect.x0);
-        const dy: usize = @intCast(rect.y1 - rect.y0);
-        const bpr = bpp * dx;
+        const dx: u32 = @intCast(rect.x1 - rect.x0);
+        const dy: u32 = @intCast(rect.y1 - rect.y0);
+        const bpr: usize = @intCast(pixel_regions.rowPitch(dx, bpp, row_pitch_align));
         bce.copyFromBuffer(
             buf,
             offset,
             bpr,
-            bpr * dy,
+            bpr * @as(usize, dy),
             .{ .width = dx, .height = dy, .depth = 1 },
             texture,
             0,
@@ -710,6 +748,10 @@ pub const Backend = struct {
         var src_textures: [abi.max_src_images]mtl.Texture = @splat(.{});
         for (dc.srcs, 0..) |src_id, i| {
             if (src_id == 0) continue;
+            if (src_id == dc.dst) {
+                diag.set("metal: destination and source images must be different");
+                return error.InvalidArgument;
+            }
             const src_img = self.images.get(src_id) catch {
                 diag.print("metal: drawTriangles unknown src image {d}", .{src_id});
                 return error.UnknownHandle;
@@ -725,12 +767,7 @@ pub const Backend = struct {
                 if (!surf.cleared) {
                     self.flushRenderCommandEncoderIfNeeded();
                     const cb = try self.encoderCommandBuffer();
-                    const clear_rce = cb.renderCommandEncoder(.{
-                        .texture = stex,
-                        .load_action = .clear,
-                        .store_action = .store,
-                        .clear_color = .{},
-                    });
+                    const clear_rce = self.reusable_rpd.beginEncoder(cb, stex, .clear);
                     clear_rce.endEncoding();
                     surf.cleared = true;
                 }
@@ -770,18 +807,13 @@ pub const Backend = struct {
             }
 
             const cb = try self.encoderCommandBuffer();
-            const rce = cb.renderCommandEncoder(.{
-                .texture = dst_tex,
-                .load_action = load_action,
-                .store_action = .store,
-                .clear_color = .{},
-            });
+            const rce = self.reusable_rpd.beginEncoder(cb, dst_tex, load_action);
             if (rce.isNull()) {
                 diag.set("metal: renderCommandEncoderWithDescriptor returned nil");
                 return error.Internal;
             }
-            // Retain so rce stays valid even if an error skips endBatch before autorelease drain.
-            rce.retain();
+            // rce is autoreleased in the current ggfx_submit autorelease pool and is
+            // always ended before the pool pops (via endBatch or abortBatch).
             self.rce = rce;
             self.encoder_has_drawn = false;
             self.cache.reset();
@@ -998,24 +1030,16 @@ pub const Backend = struct {
         }
 
         // Validate all regions up front before waiting on GPU.
-        const bpp: usize = img.format.bytesPerPixel();
-        for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("metal: readPixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const want_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.dst_len != want_len) {
-                diag.print("metal: readPixels dst_len {d} != expected {d}", .{ r.dst_len, want_len });
-                return error.InvalidArgument;
-            }
-            if (want_len > 0 and r.dst == null) {
-                diag.set("metal: readPixels dst pointer is null");
-                return error.InvalidArgument;
-            }
-        }
+        const bpp = img.format.bytesPerPixel();
+        const summary = try pixel_regions.validateReadRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            "metal",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
 
         // Flush any open encoder and commit pending CB without presenting.
         self.flushBlitCommandEncoderIfNeeded();
@@ -1157,12 +1181,8 @@ pub const Backend = struct {
             try self.flushCommandBufferIfNeeded(false, null);
         }
 
-        if (!self.shared_upload_buf.isNull()) {
-            self.ring.retireSharedBuffer(self.gpa, self.shared_upload_buf);
-            self.shared_upload_buf = .{};
-            self.shared_upload_ptr = null;
-        }
-
+        // Allocate and map the replacement buffer before retiring the previous one so a
+        // failed rotation never leaves Go holding a mapping to an already-retired buffer.
         const req: usize = @intCast(@max(min_bytes, upload_arena.default_size));
         const buf = self.ring.acquireStandaloneBuffer(self.gpa, req) catch {
             diag.print("metal: allocating shared upload arena ({d} bytes) failed", .{req});
@@ -1174,6 +1194,9 @@ pub const Backend = struct {
             return error.Internal;
         };
 
+        if (!self.shared_upload_buf.isNull()) {
+            self.ring.retireSharedBuffer(self.gpa, self.shared_upload_buf);
+        }
         self.shared_upload_buf = buf;
         self.shared_upload_ptr = ptr;
 
@@ -1185,6 +1208,8 @@ pub const Backend = struct {
             .alignment = buffers.upload_alignment,
             .flags = abi.arena_flag_gpu_mapped |
                 (if (self.device.has_unified_memory) abi.arena_flag_coherent else 0),
+            .row_pitch_alignment = 0,
+            .reserved = 0,
         };
     }
 
@@ -1258,7 +1283,6 @@ pub const Backend = struct {
     pub fn flushRenderCommandEncoderIfNeeded(self: *Backend) void {
         if (self.rce.isNull()) return;
         self.rce.endEncoding();
-        self.rce.release();
         self.rce = .{};
         self.encoder_has_drawn = false;
         self.cache.reset();
@@ -1330,8 +1354,16 @@ pub const Backend = struct {
     fn flushCommandBufferIfNeeded(self: *Backend, present: bool, out_res: ?*abi.SubmitResult) Error!void {
         self.flushBlitCommandEncoderIfNeeded();
         self.flushRenderCommandEncoderIfNeeded();
+        self.reusable_rpd.clearTexture();
 
-        if (self.cb.isNull() and !present) return;
+        if (!present) {
+            if (self.cb.isNull()) return;
+            const cb = self.cb;
+            cb.commit();
+            self.cb = .{};
+            self.encoders = 0;
+            return;
+        }
 
         var snapshot: SurfaceSnapshot = .{};
         defer snapshot.deinit(self.gpa);
@@ -1458,6 +1490,9 @@ pub const Backend = struct {
             }
         }
 
+        if (presented_count > 0) {
+            self.armHousekeeping();
+        }
         if (out_res) |r| {
             r.presented_surfaces = presented_count;
         }

@@ -6,6 +6,7 @@ const state_cache = @import("../state_cache.zig");
 const sync = @import("../sync.zig");
 const replayer = @import("../replayer.zig");
 const upload_arena = @import("../upload_arena.zig");
+const pixel_regions = @import("../pixel_regions.zig");
 const Allocator = std.mem.Allocator;
 const Diag = errors.Diag;
 const Error = errors.Error;
@@ -59,6 +60,9 @@ pub const Backend = struct {
 
     shared_arena: []align(16) u8 = &.{},
     shared_arena_id: u32 = 0,
+    has_vertices: bool = false,
+    device_lost: std.atomic.Value(bool) = .init(false),
+    fail_next_end_batch: ?struct { err: Error, mark_lost: bool } = null,
 
     pub fn init(gpa: Allocator, opts: *const abi.DeviceOptions, caps: *abi.DriverCaps, diag: *Diag) Error!*Backend {
         _ = diag;
@@ -113,13 +117,24 @@ pub const Backend = struct {
         self.has_drawn = false;
     }
 
-    pub fn abortBatch(self: *Backend) void {
+    pub fn abortBatch(self: *Backend) bool {
         self.cache.reset();
         self.has_drawn = false;
+        self.has_vertices = false;
+        return self.device_lost.load(.acquire);
+    }
+
+    pub fn isDeviceLost(self: *const Backend) bool {
+        return self.device_lost.load(.acquire);
     }
 
     pub fn endBatch(self: *Backend, mode: abi.FlushMode, res: *abi.SubmitResult, diag: *Diag) Error!void {
         _ = diag;
+        if (self.fail_next_end_batch) |f| {
+            self.fail_next_end_batch = null;
+            if (f.mark_lost) self.device_lost.store(true, .release);
+            return f.err;
+        }
         self.submits += 1;
         res.* = std.mem.zeroes(abi.SubmitResult);
 
@@ -152,11 +167,12 @@ pub const Backend = struct {
 
     pub fn setVertices(self: *Backend, vertices: []const f32, indices: []const u32, diag: *Diag) Error!void {
         _ = diag;
+        if (vertices.len == 0 or indices.len == 0) return;
         const vbytes: u64 = @as(u64, vertices.len) * @sizeOf(f32);
         const ibytes: u64 = @as(u64, indices.len) * @sizeOf(u32);
         self.uploaded_bytes += vbytes + ibytes;
-        const vptr: usize = if (vertices.len > 0) @intFromPtr(vertices.ptr) else 0;
-        self.cache.vertex_buffer = vptr;
+        self.cache.vertex_buffer = @intFromPtr(vertices.ptr);
+        self.has_vertices = true;
     }
 
     pub fn newImage(
@@ -254,34 +270,37 @@ pub const Backend = struct {
         id: u32,
         regions: []align(4) const abi.PixelsRegion,
         payload: []const u8,
+        row_pitch_align: u32,
         diag: *Diag,
     ) Error!void {
         const img = try self.images.get(id);
         if (img.is_screen) {
-            diag.set("cannot write pixels to a screen image");
+            diag.set("null: cannot write pixels to a screen image");
             return error.InvalidArgument;
         }
-        const bpp: usize = img.format.bytesPerPixel();
-        const img_stride: usize = @as(usize, img.internal_width) * bpp;
+        const bpp = img.format.bytesPerPixel();
+        const summary = try pixel_regions.validateWriteRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            row_pitch_align,
+            "null",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
 
+        const img_stride: usize = @as(usize, img.internal_width) * bpp;
         for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("writePixels rect ({d},{d})-({d},{d}) out of image bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const expected_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.payload_len != expected_len) {
-                diag.print("writePixels payload_len {d} != expected {d}", .{ r.payload_len, expected_len });
-                return error.InvalidArgument;
-            }
+            const bounds = r.rect.validate(img.internal_width, img.internal_height).?;
+            if (bounds.dx == 0 or bounds.dy == 0) continue;
             const src = payload[r.payload_offset .. r.payload_offset + r.payload_len];
             const row_bytes: usize = @as(usize, bounds.dx) * bpp;
+            const src_stride: usize = @intCast(pixel_regions.rowPitch(bounds.dx, bpp, row_pitch_align));
             var row: usize = 0;
             while (row < bounds.dy) : (row += 1) {
                 const dst_off = (@as(usize, bounds.y0) + row) * img_stride + @as(usize, bounds.x0) * bpp;
-                const src_off = row * row_bytes;
+                const src_off = row * src_stride;
                 @memcpy(img.pixels[dst_off .. dst_off + row_bytes], src[src_off .. src_off + row_bytes]);
             }
             self.uploaded_bytes += r.payload_len;
@@ -298,12 +317,31 @@ pub const Backend = struct {
             return error.UnknownHandle;
         };
         for (dc.srcs) |src_id| {
-            if (src_id != 0) {
-                _ = self.images.get(src_id) catch {
-                    diag.print("drawTriangles: unknown src image {d}", .{src_id});
-                    return error.UnknownHandle;
-                };
+            if (src_id == 0) continue;
+            if (src_id == dc.dst) {
+                diag.set("null: destination and source images must be different");
+                return error.InvalidArgument;
             }
+            const src_img = self.images.get(src_id) catch {
+                diag.print("drawTriangles: unknown src image {d}", .{src_id});
+                return error.UnknownHandle;
+            };
+            if (src_img.is_screen) {
+                diag.set("null: sampling from a screen image is not supported");
+                return error.Unsupported;
+            }
+        }
+
+        var has_indexed_draw = false;
+        for (dc.regions) |r| {
+            if (r.index_count > 0) {
+                has_indexed_draw = true;
+                break;
+            }
+        }
+        if (has_indexed_draw and !self.has_vertices) {
+            diag.set("null: drawTriangles called without active vertices/indices");
+            return error.InvalidArgument;
         }
 
         if (dst.is_screen) {
@@ -355,11 +393,20 @@ pub const Backend = struct {
             }
         }
 
+        const max_w: i32 = @intCast(dst.internal_width);
+        const max_h: i32 = @intCast(dst.internal_height);
         for (dc.regions) |r| {
-            if (self.cache.scissor_valid and self.cache.scissor.eql(r.rect)) {
+            if (r.index_count == 0) continue;
+            const x0 = @max(r.rect.x0, 0);
+            const y0 = @max(r.rect.y0, 0);
+            const x1 = @min(r.rect.x1, max_w);
+            const y1 = @min(r.rect.y1, max_h);
+            if (x1 <= x0 or y1 <= y0) continue;
+            const clamped = abi.Rect{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1 };
+            if (self.cache.scissor_valid and self.cache.scissor.eql(clamped)) {
                 self.binds_skipped += 1;
             } else {
-                self.cache.scissor = r.rect;
+                self.cache.scissor = clamped;
                 self.cache.scissor_valid = true;
             }
             self.draws += 1;
@@ -408,29 +455,25 @@ pub const Backend = struct {
     ) Error!void {
         const img = try self.images.get(id);
         if (img.is_screen) {
-            diag.set("cannot read pixels from a screen image");
+            diag.set("null: cannot read pixels from a screen image");
             return error.InvalidArgument;
         }
-        const bpp: usize = img.format.bytesPerPixel();
-        const img_stride: usize = @as(usize, img.internal_width) * bpp;
+        const bpp = img.format.bytesPerPixel();
+        const summary = try pixel_regions.validateReadRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            "null",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
 
+        const img_stride: usize = @as(usize, img.internal_width) * bpp;
         for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("readPixels rect ({d},{d})-({d},{d}) out of image bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const expected_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.dst_len != expected_len) {
-                diag.print("readPixels dst_len {d} != expected {d}", .{ r.dst_len, expected_len });
-                return error.InvalidArgument;
-            }
-            if (expected_len == 0) continue;
-            const dst = r.dst orelse {
-                diag.set("readPixels dst pointer is null");
-                return error.InvalidArgument;
-            };
+            const bounds = r.rect.validate(img.internal_width, img.internal_height).?;
+            if (bounds.dx == 0 or bounds.dy == 0) continue;
+            const dst = r.dst.?;
             const row_bytes: usize = @as(usize, bounds.dx) * bpp;
             var row: usize = 0;
             while (row < bounds.dy) : (row += 1) {
@@ -545,6 +588,8 @@ pub const Backend = struct {
             .capacity = self.shared_arena.len,
             .alignment = 16,
             .flags = abi.arena_flag_coherent,
+            .row_pitch_alignment = 0,
+            .reserved = 0,
         };
     }
 };
@@ -593,7 +638,7 @@ test "null backend writePixels and readPixels roundtrip (RGBA8 and A8) plus bind
         .payload_offset = 0,
         .payload_len = 16,
     }};
-    try be.writePixels(1, &wr, &payload, &diag);
+    try be.writePixels(1, &wr, &payload, 0, &diag);
 
     var read_buf: [16]u8 = @splat(0);
     const rr = [_]abi.ReadRegion{.{
@@ -610,7 +655,7 @@ test "null backend writePixels and readPixels roundtrip (RGBA8 and A8) plus bind
         .payload_offset = 0,
         .payload_len = 16,
     }};
-    try be.writePixels(1, &pad_wr, &payload, &diag);
+    try be.writePixels(1, &pad_wr, &payload, 0, &diag);
     var pad_read: [16]u8 = @splat(0);
     const pad_rr = [_]abi.ReadRegion{.{
         .rect = .{ .x0 = 4, .y0 = 4, .x1 = 6, .y1 = 6 },
@@ -626,7 +671,7 @@ test "null backend writePixels and readPixels roundtrip (RGBA8 and A8) plus bind
         .payload_offset = 16,
         .payload_len = 4,
     }};
-    try be.writePixels(2, &a8_wr, &payload, &diag);
+    try be.writePixels(2, &a8_wr, &payload, 0, &diag);
 
     var a8_read: [4]u8 = @splat(0);
     const a8_rr = [_]abi.ReadRegion{.{
@@ -674,6 +719,9 @@ test "null backend writePixels and readPixels roundtrip (RGBA8 and A8) plus bind
     };
 
     try be.beginBatch(&diag);
+    const verts = [_]f32{ 0, 0, 0, 0, 1, 1, 1, 1 };
+    const indices = [_]u32{ 0, 1, 2, 0, 2, 3 };
+    try be.setVertices(&verts, &indices, &diag);
     try be.drawTriangles(&dc, &diag);
     var st1: abi.DebugStats = undefined;
     be.stats(&st1);
@@ -691,4 +739,125 @@ test "null backend writePixels and readPixels roundtrip (RGBA8 and A8) plus bind
     be.stats(&st2);
     try std.testing.expectEqual(@as(u64, 0), st2.live_images);
     try std.testing.expectEqual(@as(u64, 0), st2.live_shaders);
+}
+
+test "null backend pitched writePixels, screen sampling error, src==dst and scissor clipping" {
+    const gpa = std.testing.allocator;
+    var diag = Diag.none();
+    const opts = abi.DeviceOptions{
+        .struct_size = @sizeOf(abi.DeviceOptions),
+        .abi_version = abi.driver_abi_version,
+        .backend = @intFromEnum(abi.Backend.null),
+        .color_space = 1,
+        .flags = 0,
+        .frames_in_flight = 2,
+        .dx_feature_level = 0,
+        .main_thread_mode = 0,
+        .reserved = .{ 0, 0 },
+    };
+    var caps: abi.DriverCaps = undefined;
+    const be = try Backend.init(gpa, &opts, &caps, &diag);
+    defer be.deinit();
+
+    try be.newImage(1, 5, 3, 16, 16, .rgba8, &diag);
+    defer _ = be.disposeImage(1) catch {};
+
+    // Pitched 5x3 RGBA8 upload with 256B row pitch: 2*256 + 20 = 532 bytes.
+    var pitched: [532]u8 align(16) = @splat(0);
+    var expected: [60]u8 = undefined;
+    for (0..3) |y| {
+        for (0..20) |x| {
+            const v: u8 = @intCast((y * 20 + x + 1) & 0xff);
+            pitched[y * 256 + x] = v;
+            expected[y * 20 + x] = v;
+        }
+    }
+    const pwr = [_]abi.PixelsRegion{.{
+        .rect = .{ .x0 = 2, .y0 = 1, .x1 = 7, .y1 = 4 },
+        .payload_offset = 0,
+        .payload_len = pitched.len,
+    }};
+    try be.writePixels(1, &pwr, &pitched, 256, &diag);
+
+    var read_out: [60]u8 = @splat(0);
+    const prr = [_]abi.ReadRegion{.{
+        .rect = .{ .x0 = 2, .y0 = 1, .x1 = 7, .y1 = 4 },
+        .dst = &read_out,
+        .dst_len = read_out.len,
+    }};
+    try be.readPixels(1, &prr, &diag);
+    try std.testing.expectEqualSlices(u8, &expected, &read_out);
+
+    // Create a surface and screen image to verify screen sampling returns Unsupported.
+    var sdesc = abi.SurfaceDesc{
+        .struct_size = @sizeOf(abi.SurfaceDesc),
+        .kind = @intFromEnum(abi.SurfaceKind.x11),
+        .flags = 0,
+        .reserved = 0,
+        .handle1 = 1,
+        .handle2 = 2,
+        .width_hint = 16,
+        .height_hint = 16,
+    };
+    var scaps: abi.SurfaceCaps = undefined;
+    try be.createSurface(50, &sdesc, &scaps, &diag);
+    defer _ = be.disposeSurface(50) catch {};
+    try be.newScreenImage(2, 50, 16, 16, &diag);
+    defer _ = be.disposeImage(2) catch {};
+
+    const vs_code = "vs";
+    const fs_code = "fs";
+    const shader_desc = abi.ShaderDesc{
+        .struct_size = @sizeOf(abi.ShaderDesc),
+        .format = @intFromEnum(abi.ShaderFormat.spirv),
+        .texture_count = 1,
+        .user_uniform_dwords = 0,
+        .flags = 0,
+        .reserved = 0,
+        .vertex = .{ .code = vs_code.ptr, .code_len = vs_code.len, .entry = "main", .entry_len = 4, .reserved = 0 },
+        .fragment = .{ .code = fs_code.ptr, .code_len = fs_code.len, .entry = "main", .entry_len = 4, .reserved = 0 },
+    };
+    try be.createShader(10, &shader_desc, &diag);
+    defer _ = be.disposeShader(10) catch {};
+
+    var internal_u: [abi.internal_uniform_dwords]u32 = @splat(0);
+    const regions = [_]abi.DrawRegion{.{
+        .rect = .{ .x0 = 0, .y0 = 0, .x1 = 4, .y1 = 4 },
+        .index_count = 6,
+        .reserved = 0,
+    }};
+    const screen_src_dc = replayer.DrawCall{
+        .dst = 1,
+        .srcs = .{ 2, 0, 0, 0 },
+        .shader = 10,
+        .index_offset = 0,
+        .blend = .{ .src_rgb = 1, .src_a = 1, .dst_rgb = 0, .dst_a = 0, .op_rgb = 0, .op_a = 0 },
+        .internal = &internal_u,
+        .internal_version = 1,
+        .user = &.{},
+        .user_version = 0,
+        .regions = &regions,
+    };
+    try std.testing.expectError(error.Unsupported, be.drawTriangles(&screen_src_dc, &diag));
+
+    var self_dc = screen_src_dc;
+    self_dc.srcs = .{ 1, 0, 0, 0 };
+    try std.testing.expectError(error.InvalidArgument, be.drawTriangles(&self_dc, &diag));
+
+    // Out-of-bounds and zero-index regions must be skipped without incrementing draws.
+    const empty_regions = [_]abi.DrawRegion{
+        .{ .rect = .{ .x0 = 0, .y0 = 0, .x1 = 4, .y1 = 4 }, .index_count = 0, .reserved = 0 },
+        .{ .rect = .{ .x0 = 32, .y0 = 32, .x1 = 40, .y1 = 40 }, .index_count = 6, .reserved = 0 },
+        .{ .rect = .{ .x0 = -10, .y0 = -10, .x1 = -1, .y1 = -1 }, .index_count = 6, .reserved = 0 },
+    };
+    var skip_dc = screen_src_dc;
+    skip_dc.srcs = .{ 0, 0, 0, 0 };
+    skip_dc.regions = &empty_regions;
+    const verts = [_]f32{ 0, 0, 0, 0, 1, 1, 1, 1 };
+    const indices = [_]u32{ 0, 1, 2, 0, 2, 3 };
+    try be.setVertices(&verts, &indices, &diag);
+    try be.drawTriangles(&skip_dc, &diag);
+    var st: abi.DebugStats = undefined;
+    be.stats(&st);
+    try std.testing.expectEqual(@as(u64, 0), st.draws);
 }

@@ -7,7 +7,7 @@ import (
 	"unsafe"
 )
 
-const DriverABIVersion uint32 = 1
+const DriverABIVersion uint32 = 2
 
 // Status codes returned by the Zig driver C ABI (GgfxStatus).
 const (
@@ -305,15 +305,17 @@ type DebugStats struct {
 	UploadedBytes uint64
 }
 
-// UploadArena mirrors GgfxUploadArena (32 B).
+// UploadArena mirrors GgfxUploadArena (40 B).
 type UploadArena struct {
-	_          structs.HostLayout
-	StructSize uint32
-	ArenaID    uint32
-	Ptr        uintptr
-	Capacity   uint64
-	Alignment  uint32
-	Flags      uint32
+	_                 structs.HostLayout
+	StructSize        uint32
+	ArenaID           uint32
+	Ptr               uintptr
+	Capacity          uint64
+	Alignment         uint32
+	Flags             uint32
+	RowPitchAlignment uint32
+	Reserved          uint32
 }
 
 // CmdSetVertices mirrors GgfxCmdSetVertices (32 B).
@@ -464,8 +466,8 @@ const (
 	_ = uint(unsafe.Sizeof(DebugStats{}) - 64)
 	_ = uint(64 - unsafe.Sizeof(DebugStats{}))
 
-	_ = uint(unsafe.Sizeof(UploadArena{}) - 32)
-	_ = uint(32 - unsafe.Sizeof(UploadArena{}))
+	_ = uint(unsafe.Sizeof(UploadArena{}) - 40)
+	_ = uint(40 - unsafe.Sizeof(UploadArena{}))
 
 	_ = uint(unsafe.Sizeof(CmdSetVertices{}) - 32)
 	_ = uint(32 - unsafe.Sizeof(CmdSetVertices{}))

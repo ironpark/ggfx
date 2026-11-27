@@ -1,5 +1,6 @@
 const std = @import("std");
 const errors = @import("../errors.zig");
+const upload_arena = @import("../upload_arena.zig");
 const vk = @import("vk.zig");
 const loader_mod = @import("loader.zig");
 const device_mod = @import("device.zig");
@@ -117,7 +118,7 @@ pub const UploadRing = struct {
         }
         self.retired.clearRetainingCapacity();
         for (self.retired_shared.items) |chunk| {
-            pool.put(dev, mem, chunk);
+            pool.put(.{ .dev = dev, .mem = mem }, chunk);
         }
         self.retired_shared.clearRetainingCapacity();
         if (self.active) |*chunk| {
@@ -142,56 +143,26 @@ pub const UploadRing = struct {
     }
 };
 
-/// Idle shared upload arenas kept for reuse, so that rotating the arena does
-/// not create, bind, and map a new buffer every time. Bounded by count and by
-/// total bytes; a chunk that does not fit is destroyed instead.
-pub const SharedChunkPool = struct {
-    pub const max_idle = 4;
-    pub const max_idle_bytes: u64 = 64 << 20;
-
-    idle: [max_idle]Chunk = undefined,
-    len: usize = 0,
-    bytes: u64 = 0,
-
-    /// Removes and returns the smallest idle chunk holding at least `capacity` bytes.
-    pub fn take(self: *SharedChunkPool, capacity: u64) ?Chunk {
-        var best: ?usize = null;
-        for (self.idle[0..self.len], 0..) |chunk, i| {
-            if (chunk.capacity < capacity) continue;
-            if (best == null or chunk.capacity < self.idle[best.?].capacity) best = i;
-        }
-        const i = best orelse return null;
-        const chunk = self.idle[i];
-        self.len -= 1;
-        self.idle[i] = self.idle[self.len];
-        self.bytes -= chunk.capacity;
-        return chunk;
-    }
-
-    /// Keeps `chunk` for reuse. The GPU must no longer be reading it.
-    pub fn put(
-        self: *SharedChunkPool,
-        dev: *const device_mod.Device,
-        mem: *memory_mod.MemoryAllocator,
-        chunk: Chunk,
-    ) void {
-        if (self.len == max_idle or chunk.capacity > max_idle_bytes - self.bytes) {
-            destroyChunk(dev, mem, chunk);
-            return;
-        }
-        self.idle[self.len] = chunk;
-        self.len += 1;
-        self.bytes += chunk.capacity;
-    }
-
-    pub fn deinit(self: *SharedChunkPool, dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator) void {
-        for (self.idle[0..self.len]) |chunk| {
-            destroyChunk(dev, mem, chunk);
-        }
-        self.len = 0;
-        self.bytes = 0;
-    }
+pub const DestroyCtx = struct {
+    dev: *const device_mod.Device,
+    mem: *memory_mod.MemoryAllocator,
 };
+
+fn chunkCapacity(chunk: Chunk) u64 {
+    return chunk.capacity;
+}
+
+fn destroyChunkCtx(ctx: DestroyCtx, chunk: Chunk) void {
+    destroyChunk(ctx.dev, ctx.mem, chunk);
+}
+
+/// Idle shared upload arenas kept for reuse across rotations.
+pub const SharedChunkPool = upload_arena.Pool(
+    Chunk,
+    DestroyCtx,
+    chunkCapacity,
+    destroyChunkCtx,
+);
 
 fn createChunkWithUsage(
     dev: *const device_mod.Device,
@@ -341,7 +312,12 @@ pub const ReadbackBuffer = struct {
         self.capacity = cap;
     }
 
-    pub fn invalidate(self: *const ReadbackBuffer, dev: *const device_mod.Device, size: u64) void {
+    pub fn invalidate(
+        self: *const ReadbackBuffer,
+        dev: *const device_mod.Device,
+        size: u64,
+        diag: *Diag,
+    ) Error!void {
         if (self.alloc.coherent or self.alloc.memory == .null_handle) return;
         const atom = @max(dev.props.limits.nonCoherentAtomSize, 1);
         const aligned_size = @min(memory_mod.alignUp(size, atom), self.alloc.size);
@@ -350,7 +326,11 @@ pub const ReadbackBuffer = struct {
             .offset = self.alloc.offset,
             .size = if (aligned_size == self.alloc.size) vk.WHOLE_SIZE else aligned_size,
         };
-        _ = dev.disp.vkInvalidateMappedMemoryRanges(dev.handle, 1, @ptrCast(&range));
+        try loader_mod.check(
+            dev.disp.vkInvalidateMappedMemoryRanges(dev.handle, 1, @ptrCast(&range)),
+            diag,
+            "vkInvalidateMappedMemoryRanges",
+        );
     }
 
     pub fn deinit(self: *ReadbackBuffer, dev: *const device_mod.Device, mem: *memory_mod.MemoryAllocator) void {

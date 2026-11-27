@@ -149,13 +149,14 @@ func TestSlotUniformDeduplication(t *testing.T) {
 func TestSlotPinsAndReset(t *testing.T) {
 	var s slot
 	s.init()
+	defer s.reset()
 
 	vs := []float32{1, 2, 3, 4}
 	is := []uint32{0, 1, 2}
 	s.encodeSetVertices(vs, is)
 
-	if len(s.pinsF) != 1 || len(s.pinsU) != 1 {
-		t.Fatalf("expected 1 pinned vertex and index slice, got (%d, %d)", len(s.pinsF), len(s.pinsU))
+	if s.pinCount != 2 {
+		t.Fatalf("expected 2 pinned vertex/index slices, got %d", s.pinCount)
 	}
 	cmd := (*CmdSetVertices)(unsafe.Pointer(&s.cmdBytes()[0]))
 	if cmd.Vertices != uintptr(unsafe.Pointer(&vs[0])) || cmd.Indices != uintptr(unsafe.Pointer(&is[0])) {
@@ -167,8 +168,8 @@ func TestSlotPinsAndReset(t *testing.T) {
 	if s.cmdLen != 0 || s.cmdCount != 0 || s.payLen != 0 {
 		t.Fatalf("slot not cleared after reset")
 	}
-	if len(s.pinsF) != 0 || len(s.pinsU) != 0 {
-		t.Fatalf("pins not cleared after reset")
+	if s.pinCount != 0 {
+		t.Fatalf("pins not cleared after reset: %d", s.pinCount)
 	}
 	if s.seq != prevSeq+1 {
 		t.Fatalf("seq did not increment on reset: got %d, want %d", s.seq, prevSeq+1)
@@ -182,7 +183,7 @@ func TestSlotPayloadOverflowLeavesSlotUnmodified(t *testing.T) {
 
 	pix := make([]byte, 80)
 	args := []graphicsdriver.PixelsArgs{{Pixels: pix, Region: image.Rect(0, 0, 5, 4)}}
-	if !s.encodeWritePixels(1, args) {
+	if !s.encodeWritePixels(1, 4, args) {
 		t.Fatal("first WritePixels should fit")
 	}
 	savedCmdLen := s.cmdLen
@@ -190,7 +191,7 @@ func TestSlotPayloadOverflowLeavesSlotUnmodified(t *testing.T) {
 	savedPayLen := s.payLen
 
 	// Second WritePixels would need align16(80)+80 = 160 > 128 -> must fail cleanly.
-	if s.encodeWritePixels(1, args) {
+	if s.encodeWritePixels(1, 4, args) {
 		t.Fatal("second WritePixels should overflow")
 	}
 	if s.cmdLen != savedCmdLen || s.cmdCount != savedCmdCount || s.payLen != savedPayLen {
@@ -318,7 +319,7 @@ func TestSlotSharedUploadArena(t *testing.T) {
 		{Pixels: p0, Region: image.Rect(0, 0, 5, 1)},
 		{Pixels: p1, Region: image.Rect(0, 1, 9, 2)},
 	}
-	if !s.encodeWritePixels(1, args) {
+	if !s.encodeWritePixels(1, 4, args) {
 		t.Fatal("encodeWritePixels in shared arena failed")
 	}
 	if !s.usingShared {
@@ -384,7 +385,7 @@ func TestSlotSharedUploadArena(t *testing.T) {
 		{Pixels: big, Region: image.Rect(0, 0, 225, 1)},
 		{Pixels: big, Region: image.Rect(0, 1, 225, 2)},
 	}
-	if s.encodeWritePixels(1, overflowArgs) {
+	if s.encodeWritePixels(1, 4, overflowArgs) {
 		t.Fatal("expected multi-region WritePixels to overflow shared arena")
 	}
 	if s.cmdLen != savedCmdLen || s.cmdCount != savedCmdCount || sh.cursor != savedCursor {
@@ -399,7 +400,7 @@ func TestSlotSharedUploadArena(t *testing.T) {
 	// and reset() restores shared arena mode on the following batch.
 	cursorBeforeFallback := sh.cursor
 	s.forceHeap = true
-	if !s.encodeWritePixels(1, []graphicsdriver.PixelsArgs{{Pixels: p0, Region: image.Rect(0, 0, 5, 1)}}) {
+	if !s.encodeWritePixels(1, 4, []graphicsdriver.PixelsArgs{{Pixels: p0, Region: image.Rect(0, 0, 5, 1)}}) {
 		t.Fatal("heap fallback encodeWritePixels failed")
 	}
 	if s.usingShared {
@@ -416,5 +417,97 @@ func TestSlotSharedUploadArena(t *testing.T) {
 	s.reset()
 	if !s.useShared() {
 		t.Fatal("expected slot to resume shared arena mode after reset()")
+	}
+}
+
+func TestSlotSharedUploadArenaPitchedWritePixels(t *testing.T) {
+	_, backing := allocAligned16(4096)
+
+	var sh sharedUploadArena
+	ok := sh.set(UploadArena{
+		StructSize:        uint32(unsafe.Sizeof(UploadArena{})),
+		ArenaID:           1,
+		Ptr:               uintptr(unsafe.Pointer(&backing[0])),
+		Capacity:          uint64(len(backing)),
+		Alignment:         512,
+		Flags:             ArenaFlagGPUMapped | ArenaFlagCoherent,
+		RowPitchAlignment: 256,
+	})
+	if !ok {
+		t.Fatal("sharedUploadArena.set failed")
+	}
+
+	var s slot
+	s.init()
+	s.shared = &sh
+
+	// 5x3 RGBA8: rowBytes=20, pitched row stride=256 -> payloadLen = 2*256 + 20 = 532.
+	const w, h, bpp = 5, 3, 4
+	pix := make([]byte, w*h*bpp)
+	for i := range pix {
+		pix[i] = byte(i + 1)
+	}
+	args := []graphicsdriver.PixelsArgs{
+		{Pixels: pix, Region: image.Rect(0, 0, w, h)},
+	}
+	if !s.encodeWritePixels(1, bpp, args) {
+		t.Fatal("pitched encodeWritePixels failed")
+	}
+	if !s.usingShared {
+		t.Fatal("expected s.usingShared == true")
+	}
+
+	cmd := (*CmdWritePixels)(unsafe.Pointer(&s.cmdBytes()[0]))
+	if cmd.Hdr.Op != OpWritePixels || cmd.Hdr.Aux != 256 {
+		t.Fatalf("CmdWritePixels header = %+v, want Op=%d Aux=256", cmd.Hdr, OpWritePixels)
+	}
+	reg := (*PixelsRegion)(unsafe.Pointer(&s.cmdBytes()[unsafe.Sizeof(CmdWritePixels{})]))
+	const wantLen = 2*256 + w*bpp
+	if reg.PayloadOffset != 0 || reg.PayloadLen != wantLen {
+		t.Fatalf("PixelsRegion = (%d, %d), want (0, %d)", reg.PayloadOffset, reg.PayloadLen, wantLen)
+	}
+	for y := range h {
+		wantRow := pix[y*w*bpp : (y+1)*w*bpp]
+		gotRow := sh.buf[y*256 : y*256+w*bpp]
+		if !bytes.Equal(gotRow, wantRow) {
+			t.Fatalf("row %d mismatch: got %v, want %v", y, gotRow, wantRow)
+		}
+	}
+
+	// Verify writePixelsNeed matches actual cursor advancement for multi-region pitched writes.
+	sh.advanceBatch()
+	s.reset()
+	need, needOK := sh.writePixelsNeed([]graphicsdriver.PixelsArgs{
+		{Pixels: pix, Region: image.Rect(0, 0, w, h)},
+		{Pixels: pix, Region: image.Rect(0, h, w, 2*h)},
+	}, bpp)
+	// Region 0: 532B, aligned to 512 -> 1024; Region 1: 532B -> total 1556B.
+	if !needOK || need != 1024+wantLen {
+		t.Fatalf("writePixelsNeed = (%d, %v), want (%d, true)", need, needOK, 1024+wantLen)
+	}
+
+	// Overflow pre-flight leaves slot and cursor untouched.
+	sh.batchStart = len(sh.buf) - 512
+	sh.cursor = sh.batchStart
+	savedCmdLen, savedCmdCount, savedCursor := s.cmdLen, s.cmdCount, sh.cursor
+	if s.encodeWritePixels(1, bpp, args) {
+		t.Fatal("expected pitched WritePixels to overflow remaining 512B")
+	}
+	if s.cmdLen != savedCmdLen || s.cmdCount != savedCmdCount || sh.cursor != savedCursor {
+		t.Fatalf("slot mutated on pitched overflow")
+	}
+
+	// Heap fallback must encode tightly packed rows with Aux == 0.
+	s.forceHeap = true
+	if !s.encodeWritePixels(1, bpp, args) {
+		t.Fatal("heap fallback encodeWritePixels failed")
+	}
+	heapCmd := (*CmdWritePixels)(unsafe.Pointer(&s.cmdBytes()[0]))
+	if heapCmd.Hdr.Aux != 0 {
+		t.Fatalf("heap fallback Aux = %d, want 0", heapCmd.Hdr.Aux)
+	}
+	heapReg := (*PixelsRegion)(unsafe.Pointer(&s.cmdBytes()[unsafe.Sizeof(CmdWritePixels{})]))
+	if heapReg.PayloadLen != uint32(len(pix)) {
+		t.Fatalf("heap fallback PayloadLen = %d, want %d", heapReg.PayloadLen, len(pix))
 	}
 }

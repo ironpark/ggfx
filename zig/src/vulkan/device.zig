@@ -247,6 +247,15 @@ pub const Device = struct {
         }
     }
 
+    pub fn waitIdleChecked(self: *const Device, diag: *Diag) Error!void {
+        if (self.handle == null) return;
+        try loader_mod.check(
+            self.disp.vkDeviceWaitIdle(self.handle),
+            diag,
+            "vkDeviceWaitIdle",
+        );
+    }
+
     pub fn deinit(self: *Device) void {
         if (self.handle != null) {
             self.disp.vkDestroyDevice(self.handle, null);

@@ -6,6 +6,7 @@ const state_cache = @import("../state_cache.zig");
 const sync = @import("../sync.zig");
 const replayer = @import("../replayer.zig");
 const upload_arena = @import("../upload_arena.zig");
+const pixel_regions = @import("../pixel_regions.zig");
 
 const win32 = @import("win32.zig");
 const com = @import("com.zig");
@@ -43,6 +44,18 @@ const Image = struct {
             .a8 => dxgi.DXGI_FORMAT_R8_UNORM,
         };
     }
+};
+
+const ImgStateUndo = struct {
+    id: u32,
+    old_state: d3d12.D3D12_RESOURCE_STATES,
+};
+
+const SurfStateUndo = struct {
+    id: u32,
+    buf_idx: u32,
+    old_state: d3d12.D3D12_RESOURCE_STATES,
+    old_drawn: bool,
 };
 
 const DeferredImage = struct {
@@ -120,10 +133,15 @@ pub const Backend = struct {
     dummy_cbv_buf: *d3d12.ID3D12Resource,
     dummy_cbv_gpu: d3d12.D3D12_GPU_VIRTUAL_ADDRESS,
 
-    // Active GPU-mapped shared upload arena (zero-copy writePixels)
+    // Active GPU-mapped shared upload arena (zero-copy writePixels & CBVs)
     shared_upload: ?upload.MappedUploadBuffer = null,
     shared_pool: upload.SharedArenaPool = .{},
     shared_arena_id: u32 = 0,
+    readback: upload.ReadbackBuffer = .{},
+
+    // Resource state undo logs for rolling back uncommitted transitions on abortBatch.
+    img_state_undo: std.ArrayList(ImgStateUndo) = .empty,
+    surf_state_undo: std.ArrayList(SurfStateUndo) = .empty,
 
     // Resource handle tables
     images: handles.HandleTable(Image) = .{},
@@ -139,6 +157,8 @@ pub const Backend = struct {
     active_vbv: d3d12.D3D12_VERTEX_BUFFER_VIEW = .{},
     active_ibv: d3d12.D3D12_INDEX_BUFFER_VIEW = .{},
     active_buffers_valid: bool = false,
+    device_lost: std.atomic.Value(bool) = .init(false),
+    readback_in_flight: bool = false,
 
     // Per-command-list binding state cache (reset on every cmd_list.Reset)
     cache: state_cache.BindCache = .{},
@@ -420,14 +440,27 @@ pub const Backend = struct {
 
         // Wait for GPU to finish all pending work across all frames before releasing anything.
         if (self.cmd_list_open) {
-            _ = self.cmd_list.close();
+            const close_hr = self.cmd_list.close();
             self.cmd_list_open = false;
-            if (self.cmd_list_has_work) {
+            if (win32.failed(close_hr)) {
+                self.cmd_list_has_work = false;
+                self.markDeviceLost();
+            } else if (self.cmd_list_has_work) {
                 self.cmd_queue.executeCommandLists(&.{self.cmd_list});
                 self.cmd_list_has_work = false;
             }
         }
-        self.waitForQueueIdle(&dummy_diag) catch {};
+        const wait_err: ?Error = if (self.waitForQueueIdle(&dummy_diag)) |_| null else |err| err;
+        if (wait_err) |err| {
+            if (err != error.DeviceLost and (self.readback_in_flight or self.isDeviceLost())) {
+                // GPU work may still be reading or writing device resources and the queue
+                // failed to confirm idle without reporting device removal. Abandon GPU-side
+                // teardown entirely (deliberately leaking the D3D12 device and its children
+                // rather than releasing a partial dependency set); the process is expected
+                // to be exiting or the driver unusable.
+                return;
+            }
+        }
 
         // Drain all deferred disposal queues across every frame slot.
         for (0..max_frames) |f| {
@@ -470,7 +503,10 @@ pub const Backend = struct {
         self.surfaces_lock.unlock();
         self.surfaces_lock.deinit();
 
-        // Release shared upload arena, upload rings, dummy CBV, pipelines, descriptors.
+        // Release shared upload arena, upload rings, readback buffer, dummy CBV, pipelines, descriptors.
+        self.img_state_undo.deinit(gpa);
+        self.surf_state_undo.deinit(gpa);
+        self.readback.deinit();
         if (self.shared_upload) |arena| {
             upload.destroyMappedUploadBuffer(arena);
             self.shared_upload = null;
@@ -478,7 +514,7 @@ pub const Backend = struct {
         for (&self.upload_rings) |*ring| {
             ring.deinit(gpa, &self.shared_pool);
         }
-        self.shared_pool.deinit();
+        self.shared_pool.deinit({});
         _ = self.dummy_cbv_buf.release();
         self.pipelines.deinit(gpa);
         self.descriptors.deinit(gpa);
@@ -509,20 +545,67 @@ pub const Backend = struct {
         // Command list is opened lazily on first GPU command so empty batches emit 0 D3D12 calls.
     }
 
-    pub fn abortBatch(self: *Backend) void {
+    pub fn abortBatch(self: *Backend) bool {
         if (self.cmd_list_open) {
-            _ = self.cmd_list.close();
+            const close_hr = self.cmd_list.close();
+            if (win32.failed(close_hr)) self.markDeviceLost();
             self.cmd_list_open = false;
             self.cmd_list_has_work = false;
             var dummy = Diag.none();
             if (self.waitForQueueIdle(&dummy)) |_| {
                 if (self.cmd_allocators[self.frame_index]) |alloc| {
-                    _ = alloc.reset();
+                    if (win32.failed(alloc.reset())) self.markDeviceLost();
                     self.allocator_needs_reset[self.frame_index] = false;
                 }
-            } else |_| {}
+            } else |_| {
+                self.markDeviceLost();
+            }
+        }
+        // Invalidate active vertex/index geometry so geometry from a rejected batch cannot
+        // survive into a later draw; callers must issue OP_SET_VERTICES again.
+        self.active_buffers_valid = false;
+        self.active_vbv = .{};
+        self.active_ibv = .{};
+
+        // Restore tracked resource/swapchain states whose transition barriers were discarded.
+        var i: usize = self.img_state_undo.items.len;
+        while (i > 0) {
+            i -= 1;
+            const u = self.img_state_undo.items[i];
+            if (self.images.getOpt(u.id)) |img| {
+                img.state = u.old_state;
+            }
+        }
+        self.img_state_undo.clearRetainingCapacity();
+
+        if (self.surf_state_undo.items.len > 0) {
+            self.surfaces_lock.lock();
+            var j: usize = self.surf_state_undo.items.len;
+            while (j > 0) {
+                j -= 1;
+                const u = self.surf_state_undo.items[j];
+                if (self.surfaces.getOpt(u.id)) |surf| {
+                    surf.drawn = u.old_drawn;
+                    if (surf.swapchain) |*sc| {
+                        if (u.buf_idx < sc.buffer_count) {
+                            sc.states[u.buf_idx] = u.old_state;
+                        }
+                    }
+                }
+            }
+            self.surfaces_lock.unlock();
+            self.surf_state_undo.clearRetainingCapacity();
         }
         self.resetCmdListState();
+        return self.isDeviceLost();
+    }
+
+    pub fn isDeviceLost(self: *const Backend) bool {
+        return self.device_lost.load(.acquire);
+    }
+
+    inline fn markDeviceLost(self: *Backend) void {
+        self.device_lost.store(true, .release);
     }
 
     pub fn endBatch(self: *Backend, mode: abi.FlushMode, res: *abi.SubmitResult, diag: *Diag) Error!void {
@@ -536,57 +619,78 @@ pub const Backend = struct {
                 }
                 // Guard against unbounded retired upload buffer growth during long intermediate-only sequences.
                 if (self.upload_rings[self.frame_index].retiredCount() >= 16) {
-                    try self.waitForQueueIdle(diag);
+                    self.waitForQueueIdle(diag) catch |err| {
+                        self.markDeviceLost();
+                        return err;
+                    };
                     self.releaseDeferredForFrame(self.frame_index);
-                    // Only safe to clear retired buffers (the active buffer may still back active_vbv/ibv).
-                    self.upload_rings[self.frame_index].releaseRetired(&self.shared_pool);
+                    const keep_addrs = [_]d3d12.D3D12_GPU_VIRTUAL_ADDRESS{
+                        if (self.active_buffers_valid) self.active_vbv.BufferLocation else 0,
+                        if (self.active_buffers_valid) self.active_ibv.BufferLocation else 0,
+                    };
+                    self.upload_rings[self.frame_index].releaseRetiredExcept(&self.shared_pool, &keep_addrs);
                 }
             },
             .end_frame => {
                 if (self.cmd_list_open) {
                     try self.closeAndExecuteCmdList(diag);
                 }
-                try self.waitForQueueIdle(diag);
-                self.reclaimFrame(self.frame_index);
+                try self.advanceFrameSlot(diag);
                 self.completed_frames += 1;
             },
             .present => {
-                // 1. Transition all drawn swapchain back buffers to PRESENT before executing.
-                var barriers: [16]d3d12.D3D12_RESOURCE_BARRIER = undefined;
-                var barrier_count: usize = 0;
-
+                // 1. Open the command list before mutating any tracked swapchain state so a
+                // failed reset cannot leave tracked states ahead of the GPU.
+                var needs_present_barrier = false;
                 self.surfaces_lock.lock();
                 for (self.surfaces.items.items) |*slot| {
                     if (slot.*) |*surf| {
                         if (!surf.drawn) continue;
                         if (surf.swapchain) |*sc| {
-                            const cur_state = sc.currentState();
-                            if (cur_state != d3d12.D3D12_RESOURCE_STATE_PRESENT) {
-                                if (barrier_count == barriers.len) {
-                                    self.surfaces_lock.unlock();
-                                    try self.ensureCmdListOpen(diag);
-                                    self.cmd_list.resourceBarrier(barriers[0..barrier_count]);
-                                    self.cmd_list_has_work = true;
-                                    barrier_count = 0;
-                                    self.surfaces_lock.lock();
-                                }
-                                barriers[barrier_count] = d3d12.D3D12_RESOURCE_BARRIER.transition(
-                                    sc.currentResource(),
-                                    cur_state,
-                                    d3d12.D3D12_RESOURCE_STATE_PRESENT,
-                                );
-                                sc.setCurrentState(d3d12.D3D12_RESOURCE_STATE_PRESENT);
-                                barrier_count += 1;
+                            if (sc.currentState() != d3d12.D3D12_RESOURCE_STATE_PRESENT) {
+                                needs_present_barrier = true;
+                                break;
                             }
                         }
                     }
                 }
                 self.surfaces_lock.unlock();
 
-                if (barrier_count > 0) {
+                if (needs_present_barrier) {
                     try self.ensureCmdListOpen(diag);
-                    self.cmd_list.resourceBarrier(barriers[0..barrier_count]);
-                    self.cmd_list_has_work = true;
+
+                    var barriers: [16]d3d12.D3D12_RESOURCE_BARRIER = undefined;
+                    var barrier_count: usize = 0;
+
+                    self.surfaces_lock.lock();
+                    for (self.surfaces.items.items) |*slot| {
+                        if (slot.*) |*surf| {
+                            if (!surf.drawn) continue;
+                            if (surf.swapchain) |*sc| {
+                                const cur_state = sc.currentState();
+                                if (cur_state != d3d12.D3D12_RESOURCE_STATE_PRESENT) {
+                                    if (barrier_count == barriers.len) {
+                                        self.cmd_list.resourceBarrier(barriers[0..barrier_count]);
+                                        self.cmd_list_has_work = true;
+                                        barrier_count = 0;
+                                    }
+                                    barriers[barrier_count] = d3d12.D3D12_RESOURCE_BARRIER.transition(
+                                        sc.currentResource(),
+                                        cur_state,
+                                        d3d12.D3D12_RESOURCE_STATE_PRESENT,
+                                    );
+                                    sc.setCurrentState(d3d12.D3D12_RESOURCE_STATE_PRESENT);
+                                    barrier_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    self.surfaces_lock.unlock();
+
+                    if (barrier_count > 0) {
+                        self.cmd_list.resourceBarrier(barriers[0..barrier_count]);
+                        self.cmd_list_has_work = true;
+                    }
                 }
 
                 // 2. Close and execute command list.
@@ -635,21 +739,7 @@ pub const Backend = struct {
                 res.presented_surfaces = presented;
 
                 // 4. Signal current frame fence, advance frame_index, wait for next frame's fence.
-                const cur = self.frame_index;
-                self.fence_values[cur] += 1;
-                const sig_val = self.fence_values[cur];
-                const sig_hr = self.cmd_queue.signal(self.fences[cur].?, sig_val);
-                if (win32.failed(sig_hr)) {
-                    return self.diagnoseError(sig_hr, "CommandQueue::Signal", diag);
-                }
-
-                const next = (cur + 1) % @as(usize, self.frames_in_flight);
-                self.frame_index = next;
-                const next_fence = self.fences[next].?;
-                const target_val = self.fence_values[next];
-                try self.waitForFence(next_fence, target_val, "frame fence", diag);
-
-                self.reclaimFrame(next);
+                try self.advanceFrameSlot(diag);
                 self.completed_frames += 1;
             },
         }
@@ -875,6 +965,10 @@ pub const Backend = struct {
     }
 
     pub fn disposeImage(self: *Backend, id: u32) Error!void {
+        const img_ptr = try self.images.get(id);
+        if (!img_ptr.is_screen) {
+            self.deferred_images[self.frame_index].ensureUnusedCapacity(self.gpa, 1) catch return error.OutOfMemory;
+        }
         const img = try self.images.remove(id);
         if (img.is_screen) {
             self.surfaces_lock.lock();
@@ -899,30 +993,37 @@ pub const Backend = struct {
             self.bound_srv_table_gpu = 0;
         }
 
-        self.deferred_images[self.frame_index].append(self.gpa, .{
+        self.deferred_images[self.frame_index].appendAssumeCapacity(.{
             .resource = img.resource,
             .cpu_srv = img.cpu_srv,
             .cpu_rtv = img.cpu_rtv,
-        }) catch {
-            // Fallback: wait for GPU idle and release immediately if OOM on deferred list.
-            self.drainBestEffort();
-            if (img.cpu_srv) |s| self.descriptors.freeImageSrv(self.gpa, s);
-            if (img.cpu_rtv) |r| self.descriptors.freeImageRtv(self.gpa, r);
-            if (img.resource) |res| _ = res.release();
-        };
+        });
     }
 
     pub fn disposeShader(self: *Backend, id: u32) Error!void {
-        var sh = try self.shaders.remove(id);
+        _ = try self.shaders.get(id);
+        self.deferred_shaders[self.frame_index].ensureUnusedCapacity(self.gpa, 1) catch return error.OutOfMemory;
+        const sh = try self.shaders.remove(id);
         self.cache.pipeline = 0;
-        self.deferred_shaders[self.frame_index].append(self.gpa, sh) catch {
-            self.drainBestEffort();
-            sh.deinit(self.gpa, &self.live_pipelines);
-        };
+        self.deferred_shaders[self.frame_index].appendAssumeCapacity(sh);
     }
 
     pub fn disposeSurface(self: *Backend, id: u32) Error!void {
-        self.drainBestEffort();
+        self.surfaces_lock.lock();
+        const exists = self.surfaces.getOpt(id) != null;
+        self.surfaces_lock.unlock();
+        if (!exists) return error.UnknownHandle;
+
+        // Flush pending work and wait for the queue to drain while `id` is still registered;
+        // on failure, keep ownership registered and mark device lost rather than destroy in-use state.
+        var dummy = Diag.none();
+        if (self.cmd_list_open) {
+            try self.closeAndExecuteCmdList(&dummy);
+        }
+        self.waitForQueueIdle(&dummy) catch |err| {
+            self.markDeviceLost();
+            return err;
+        };
 
         self.surfaces_lock.lock();
         var surf = self.surfaces.remove(id) catch |err| {
@@ -940,6 +1041,7 @@ pub const Backend = struct {
         id: u32,
         regions: []align(4) const abi.PixelsRegion,
         payload: []const u8,
+        row_pitch_align: u32,
         diag: *Diag,
     ) Error!void {
         const img = try self.images.get(id);
@@ -951,29 +1053,22 @@ pub const Backend = struct {
         const bpp = img.format.bytesPerPixel();
 
         // Validate every region upfront before recording any GPU commands.
-        var has_non_empty = false;
-        for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("directx: writePixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const expected_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.payload_len != expected_len) {
-                diag.print("directx: writePixels payload_len {d} != expected {d}", .{ r.payload_len, expected_len });
-                return error.InvalidArgument;
-            }
-            if (bounds.dx > 0 and bounds.dy > 0) {
-                has_non_empty = true;
-            }
-        }
-        if (!has_non_empty) return;
+        const summary = try pixel_regions.validateWriteRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            row_pitch_align,
+            "directx",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
 
         try self.ensureCmdListOpen(diag);
 
         // Transition destination texture to COPY_DEST.
         if (img.state != d3d12.D3D12_RESOURCE_STATE_COPY_DEST) {
+            try self.recordImgStateUndo(id, img.state);
             const rb = [1]d3d12.D3D12_RESOURCE_BARRIER{
                 d3d12.D3D12_RESOURCE_BARRIER.transition(tex, img.state, d3d12.D3D12_RESOURCE_STATE_COPY_DEST),
             };
@@ -1012,10 +1107,10 @@ pub const Backend = struct {
                 .back = 1,
             };
 
-            const bpr: u64 = @as(u64, bounds.dx) * @as(u64, bpp);
+            const src_row_pitch = pixel_regions.rowPitch(bounds.dx, bpp, row_pitch_align);
             if (shared_res) |sbuf| {
                 const placed_off = shared_base_off + @as(u64, r.payload_offset);
-                if ((bpr % upload.texture_pitch_alignment) == 0 and
+                if ((src_row_pitch % upload.texture_pitch_alignment) == 0 and
                     (placed_off % upload.texture_placement_alignment) == 0 and
                     placed_off + r.payload_len <= shared_size)
                 {
@@ -1027,7 +1122,7 @@ pub const Backend = struct {
                             .Width = bounds.dx,
                             .Height = bounds.dy,
                             .Depth = 1,
-                            .RowPitch = @intCast(bpr),
+                            .RowPitch = @intCast(src_row_pitch),
                         },
                     });
                     self.cmd_list.copyTextureRegion(&dst_loc, bounds.x0, bounds.y0, 0, &src_loc, &src_box);
@@ -1046,7 +1141,15 @@ pub const Backend = struct {
             );
 
             const src_pixels = payload[r.payload_offset .. r.payload_offset + r.payload_len];
-            upload.packRowsToFootprint(staging.cpu_ptr, fp.row_pitch, src_pixels, bounds.dx, bounds.dy, bpp);
+            upload.packRowsToFootprint(
+                staging.cpu_ptr,
+                fp.row_pitch,
+                src_pixels,
+                @intCast(src_row_pitch),
+                bounds.dx,
+                bounds.dy,
+                bpp,
+            );
 
             const src_loc = d3d12.D3D12_TEXTURE_COPY_LOCATION.placedFootprint(staging.resource, .{
                 .Offset = staging.offset,
@@ -1087,8 +1190,8 @@ pub const Backend = struct {
                 return error.UnknownHandle;
             };
             if (src_img.is_screen) {
-                diag.set("directx: screen image cannot be sampled as a source texture");
-                return error.InvalidArgument;
+                diag.set("directx: sampling from a screen image is not supported");
+                return error.Unsupported;
             }
             src_imgs[i] = src_img;
         }
@@ -1107,9 +1210,20 @@ pub const Backend = struct {
             return error.InvalidArgument;
         }
 
-        // If the shader-visible SRV descriptor ring for this frame is exhausted, flush + wait GPU
-        // and reset the SRV ring (preserving upload_rings so active_vbv/active_ibv stay valid!).
-        if (!self.descriptors.hasRoom(self.frame_index)) {
+        // Collect CPU SRV handles up front so we can check whether the tuple is already cached.
+        var src_cpu_handles: [abi.max_src_images]d3d12.D3D12_CPU_DESCRIPTOR_HANDLE = undefined;
+        for (src_imgs, 0..) |s_opt, i| {
+            if (s_opt) |src| {
+                src_cpu_handles[i] = (src.cpu_srv orelse return error.Internal).handle;
+            } else {
+                src_cpu_handles[i] = self.descriptors.null_srv_slot.handle;
+            }
+        }
+
+        // If the shader-visible SRV descriptor ring for this frame is exhausted and this tuple
+        // is not cached, flush + wait GPU and reset the SRV ring (preserving upload_rings so
+        // active_vbv/active_ibv stay valid).
+        if (!self.descriptors.hasRoom(self.frame_index) and !self.descriptors.isCached(self.frame_index, src_cpu_handles)) {
             if (self.cmd_list_open) {
                 try self.closeAndExecuteCmdList(diag);
             }
@@ -1119,6 +1233,12 @@ pub const Backend = struct {
         }
 
         try self.ensureCmdListOpen(diag);
+
+        // Reserve undo-log slots up front before mutating any tracked resource or surface state.
+        self.img_state_undo.ensureUnusedCapacity(self.gpa, 1 + abi.max_src_images) catch return error.OutOfMemory;
+        if (dst.is_screen) {
+            self.surf_state_undo.ensureUnusedCapacity(self.gpa, 1) catch return error.OutOfMemory;
+        }
 
         // Resolve destination resource, state, and RTV handle.
         var dst_res: *d3d12.ID3D12Resource = undefined;
@@ -1136,10 +1256,20 @@ pub const Backend = struct {
             }
             const surf = surf_opt.?;
             const sc = &surf.swapchain.?;
+            const cur_state = sc.currentState();
+            const old_drawn = surf.drawn;
+            const buf_idx = sc.back_buffer_index;
+            if (!old_drawn or cur_state != d3d12.D3D12_RESOURCE_STATE_RENDER_TARGET) {
+                self.surf_state_undo.appendAssumeCapacity(.{
+                    .id = dst.surface_id,
+                    .buf_idx = buf_idx,
+                    .old_state = cur_state,
+                    .old_drawn = old_drawn,
+                });
+            }
             surf.drawn = true;
             dst_res = sc.currentResource();
             dst_rtv = sc.currentRtvHandle();
-            const cur_state = sc.currentState();
             if (cur_state != d3d12.D3D12_RESOURCE_STATE_RENDER_TARGET) {
                 barriers[barrier_count] = d3d12.D3D12_RESOURCE_BARRIER.transition(
                     dst_res,
@@ -1154,6 +1284,7 @@ pub const Backend = struct {
             dst_res = dst.resource orelse return error.UnknownHandle;
             dst_rtv = (dst.cpu_rtv orelse return error.Internal).handle;
             if (dst.state != d3d12.D3D12_RESOURCE_STATE_RENDER_TARGET) {
+                self.img_state_undo.appendAssumeCapacity(.{ .id = dc.dst, .old_state = dst.state });
                 barriers[barrier_count] = d3d12.D3D12_RESOURCE_BARRIER.transition(
                     dst_res,
                     dst.state,
@@ -1164,12 +1295,12 @@ pub const Backend = struct {
             }
         }
 
-        // Transition source images to PIXEL_SHADER_RESOURCE and collect CPU SRV handles.
-        var src_cpu_handles: [abi.max_src_images]d3d12.D3D12_CPU_DESCRIPTOR_HANDLE = undefined;
+        // Transition source images to PIXEL_SHADER_RESOURCE.
         for (src_imgs, 0..) |s_opt, i| {
             if (s_opt) |src| {
                 const s_res = src.resource orelse return error.UnknownHandle;
                 if (src.state != d3d12.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) {
+                    self.img_state_undo.appendAssumeCapacity(.{ .id = dc.srcs[i], .old_state = src.state });
                     barriers[barrier_count] = d3d12.D3D12_RESOURCE_BARRIER.transition(
                         s_res,
                         src.state,
@@ -1178,9 +1309,6 @@ pub const Backend = struct {
                     src.state = d3d12.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
                     barrier_count += 1;
                 }
-                src_cpu_handles[i] = (src.cpu_srv orelse return error.Internal).handle;
-            } else {
-                src_cpu_handles[i] = self.descriptors.null_srv_slot.handle;
             }
         }
 
@@ -1263,8 +1391,14 @@ pub const Backend = struct {
         const internal_gpu: d3d12.D3D12_GPU_VIRTUAL_ADDRESS = if (dc.internal_version != 0 and ring.last_internal_version == dc.internal_version)
             ring.last_internal_gpu
         else blk: {
-            const alloc = try ring.alloc(self.gpa, self.device, internal_cb_size, upload.cbv_alignment, diag);
             const src_bytes = std.mem.asBytes(dc.internal);
+            if (self.sharedCbvAddress(src_bytes, internal_cb_size)) |gpu_addr| {
+                ring.last_internal_version = dc.internal_version;
+                ring.last_internal_gpu = gpu_addr;
+                self.uploaded_bytes += src_bytes.len;
+                break :blk gpu_addr;
+            }
+            const alloc = try ring.alloc(self.gpa, self.device, internal_cb_size, upload.cbv_alignment, diag);
             @memcpy(alloc.cpu_ptr[0..src_bytes.len], src_bytes);
             ring.last_internal_version = dc.internal_version;
             ring.last_internal_gpu = alloc.gpu_addr;
@@ -1285,8 +1419,15 @@ pub const Backend = struct {
         else if (dc.user_version != 0 and ring.last_user_version == dc.user_version and ring.last_user_size == user_cb_aligned)
             ring.last_user_gpu
         else blk: {
-            const alloc = try ring.alloc(self.gpa, self.device, user_cb_aligned, upload.cbv_alignment, diag);
             const src_bytes = std.mem.sliceAsBytes(dc.user);
+            if (self.sharedCbvAddress(src_bytes, user_cb_aligned)) |gpu_addr| {
+                ring.last_user_version = dc.user_version;
+                ring.last_user_gpu = gpu_addr;
+                ring.last_user_size = user_cb_aligned;
+                self.uploaded_bytes += src_bytes.len;
+                break :blk gpu_addr;
+            }
+            const alloc = try ring.alloc(self.gpa, self.device, user_cb_aligned, upload.cbv_alignment, diag);
             @memcpy(alloc.cpu_ptr[0..src_bytes.len], src_bytes);
             ring.last_user_version = dc.user_version;
             ring.last_user_gpu = alloc.gpu_addr;
@@ -1303,7 +1444,7 @@ pub const Backend = struct {
         }
 
         // Root Parameter [2]: Descriptor Table SRV t0..t3 (PIXEL).
-        const srv_res = self.descriptors.getOrAllocSrvTable(self.device, self.frame_index, src_cpu_handles);
+        const srv_res = self.descriptors.getOrAllocSrvTable(self.gpa, self.device, self.frame_index, src_cpu_handles);
         if (self.bound_srv_table_gpu != srv_res.gpu.ptr) {
             self.cmd_list.setGraphicsRootDescriptorTable(2, srv_res.gpu);
             self.bound_srv_table_gpu = srv_res.gpu.ptr;
@@ -1311,24 +1452,35 @@ pub const Backend = struct {
             self.binds_skipped += 1;
         }
 
-        // Issue indexed draw calls per scissor region.
+        // Issue indexed draw calls per scissor region, clamping to the destination bounds.
+        const max_w: i32 = @intCast(vw);
+        const max_h: i32 = @intCast(vh);
         var idx_off = dc.index_offset;
         for (dc.regions) |r| {
-            if (!self.cache.scissor_valid or !self.cache.scissor.eql(r.rect)) {
+            defer idx_off +%= r.index_count;
+            if (r.index_count == 0) continue;
+
+            const x0 = @max(r.rect.x0, 0);
+            const y0 = @max(r.rect.y0, 0);
+            const x1 = @min(r.rect.x1, max_w);
+            const y1 = @min(r.rect.y1, max_h);
+            if (x1 <= x0 or y1 <= y0) continue;
+
+            const clamped = abi.Rect{ .x0 = x0, .y0 = y0, .x1 = x1, .y1 = y1 };
+            if (!self.cache.scissor_valid or !self.cache.scissor.eql(clamped)) {
                 const sc = [1]win32.RECT{.{
-                    .left = r.rect.x0,
-                    .top = r.rect.y0,
-                    .right = r.rect.x1,
-                    .bottom = r.rect.y1,
+                    .left = x0,
+                    .top = y0,
+                    .right = x1,
+                    .bottom = y1,
                 }};
                 self.cmd_list.rsSetScissorRects(&sc);
-                self.cache.scissor = r.rect;
+                self.cache.scissor = clamped;
                 self.cache.scissor_valid = true;
             } else {
                 self.binds_skipped += 1;
             }
             self.cmd_list.drawIndexedInstanced(r.index_count, 1, idx_off, 0, 0);
-            idx_off += r.index_count;
             self.draws += 1;
         }
 
@@ -1357,36 +1509,20 @@ pub const Backend = struct {
         const tex = img.resource orelse return error.UnknownHandle;
         const bpp = img.format.bytesPerPixel();
 
-        var union_x0: u32 = std.math.maxInt(u32);
-        var union_y0: u32 = std.math.maxInt(u32);
-        var union_x1: u32 = 0;
-        var union_y1: u32 = 0;
+        const summary = try pixel_regions.validateReadRegions(
+            regions,
+            img.internal_width,
+            img.internal_height,
+            bpp,
+            "directx",
+            diag,
+        );
+        if (!summary.has_non_empty) return;
 
-        for (regions) |r| {
-            const bounds = r.rect.validate(img.internal_width, img.internal_height) orelse {
-                diag.print("directx: readPixels rect ({d},{d})-({d},{d}) out of bounds {d}x{d}", .{
-                    r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1, img.internal_width, img.internal_height,
-                });
-                return error.InvalidArgument;
-            };
-            const expected_len = @as(u64, bounds.dx) * @as(u64, bounds.dy) * bpp;
-            if (r.dst_len != expected_len) {
-                diag.print("directx: readPixels dst_len {d} != expected {d}", .{ r.dst_len, expected_len });
-                return error.InvalidArgument;
-            }
-            if (expected_len == 0) continue;
-            if (r.dst == null) {
-                diag.set("directx: readPixels dst pointer is null");
-                return error.InvalidArgument;
-            }
-            union_x0 = @min(union_x0, bounds.x0);
-            union_y0 = @min(union_y0, bounds.y0);
-            union_x1 = @max(union_x1, bounds.x0 + bounds.dx);
-            union_y1 = @max(union_y1, bounds.y0 + bounds.dy);
-        }
-
-        if (union_x0 >= union_x1 or union_y0 >= union_y1) return;
-
+        const union_x0 = summary.union_x0;
+        const union_y0 = summary.union_y0;
+        const union_x1 = summary.union_x1;
+        const union_y1 = summary.union_y1;
         const union_w = union_x1 - union_x0;
         const union_h = union_y1 - union_y0;
         const fp_desc = d3d12.D3D12_RESOURCE_DESC{
@@ -1412,12 +1548,12 @@ pub const Backend = struct {
             return error.Internal;
         }
 
-        const readback = try upload.createBuffer(self.device, total_bytes, d3d12.D3D12_HEAP_TYPE_READBACK, diag);
-        defer _ = readback.release();
+        const readback = try self.readback.ensure(self.device, total_bytes, diag);
 
         try self.ensureCmdListOpen(diag);
 
         if (img.state != d3d12.D3D12_RESOURCE_STATE_COPY_SOURCE) {
+            try self.recordImgStateUndo(id, img.state);
             const rb = [1]d3d12.D3D12_RESOURCE_BARRIER{
                 d3d12.D3D12_RESOURCE_BARRIER.transition(tex, img.state, d3d12.D3D12_RESOURCE_STATE_COPY_SOURCE),
             };
@@ -1439,8 +1575,15 @@ pub const Backend = struct {
         self.cmd_list_has_work = true;
 
         // Submit copy and wait for GPU completion before mapping readback buffer.
+        // A failed post-submit wait leaves the readback buffer potentially in flight on the GPU,
+        // so latch device-lost and keep `readback_in_flight` set for safe teardown.
         try self.closeAndExecuteCmdList(diag);
-        try self.waitForQueueIdle(diag);
+        self.readback_in_flight = true;
+        self.waitForQueueIdle(diag) catch |err| {
+            self.markDeviceLost();
+            return err;
+        };
+        self.readback_in_flight = false;
 
         var mapped_raw: ?*anyopaque = null;
         const read_range = d3d12.D3D12_RANGE{ .Begin = 0, .End = @intCast(total_bytes) };
@@ -1475,7 +1618,10 @@ pub const Backend = struct {
         if (self.cmd_list_open) {
             try self.closeAndExecuteCmdList(diag);
         }
-        try self.waitForQueueIdle(diag);
+        self.waitForQueueIdle(diag) catch |err| {
+            self.markDeviceLost();
+            return err;
+        };
     }
 
     pub fn presentOnMainThread(self: *Backend, diag: *Diag) Error!void {
@@ -1576,6 +1722,8 @@ pub const Backend = struct {
             .capacity = mapped.size,
             .alignment = alignment,
             .flags = abi.arena_flag_gpu_mapped | abi.arena_flag_coherent,
+            .row_pitch_alignment = @intCast(upload.texture_pitch_alignment),
+            .reserved = 0,
         };
     }
 
@@ -1597,6 +1745,44 @@ pub const Backend = struct {
     }
 
     // --- Internal helpers ---
+
+    fn sharedCbvAddress(
+        self: *const Backend,
+        slice: []const u8,
+        aligned_cb_size: usize,
+    ) ?d3d12.D3D12_GPU_VIRTUAL_ADDRESS {
+        const arena = self.shared_upload orelse return null;
+        const off = upload_arena.offsetWithin(arena.cpu_ptr, @intCast(arena.size), slice) orelse return null;
+        if ((off % upload.cbv_alignment) != 0) return null;
+        if (@as(u64, off) + @as(u64, aligned_cb_size) > arena.size) return null;
+        return arena.gpu_base + @as(u64, off);
+    }
+
+    fn recordImgStateUndo(self: *Backend, id: u32, old_state: d3d12.D3D12_RESOURCE_STATES) Error!void {
+        self.img_state_undo.append(self.gpa, .{ .id = id, .old_state = old_state }) catch return error.OutOfMemory;
+    }
+
+    fn advanceFrameSlot(self: *Backend, diag: *Diag) Error!void {
+        const cur = self.frame_index;
+        self.fence_values[cur] += 1;
+        const sig_val = self.fence_values[cur];
+        const sig_hr = self.cmd_queue.signal(self.fences[cur].?, sig_val);
+        if (win32.failed(sig_hr)) {
+            self.markDeviceLost();
+            return self.diagnoseError(sig_hr, "CommandQueue::Signal", diag);
+        }
+
+        const next = (cur + 1) % @as(usize, self.frames_in_flight);
+        self.frame_index = next;
+        const next_fence = self.fences[next].?;
+        const target_val = self.fence_values[next];
+        self.waitForFence(next_fence, target_val, "frame fence", diag) catch |err| {
+            self.markDeviceLost();
+            return err;
+        };
+
+        self.reclaimFrame(next);
+    }
 
     fn resetCmdListState(self: *Backend) void {
         self.cache.reset();
@@ -1636,12 +1822,15 @@ pub const Backend = struct {
         const hr = self.cmd_list.close();
         if (win32.failed(hr)) {
             self.cmd_list_has_work = false;
+            self.markDeviceLost();
             return self.diagnoseError(hr, "CommandList::Close", diag);
         }
         if (self.cmd_list_has_work) {
             self.cmd_queue.executeCommandLists(&.{self.cmd_list});
             self.cmd_list_has_work = false;
         }
+        self.img_state_undo.clearRetainingCapacity();
+        self.surf_state_undo.clearRetainingCapacity();
     }
 
     fn waitForQueueIdle(self: *Backend, diag: *Diag) Error!void {
@@ -1652,9 +1841,13 @@ pub const Backend = struct {
 
         const sig_hr = self.cmd_queue.signal(fence, target);
         if (win32.failed(sig_hr)) {
+            self.markDeviceLost();
             return self.diagnoseError(sig_hr, "CommandQueue::Signal", diag);
         }
-        try self.waitForFence(fence, target, "queue idle", diag);
+        self.waitForFence(fence, target, "queue idle", diag) catch |err| {
+            self.markDeviceLost();
+            return err;
+        };
     }
 
     /// Blocks until `fence` has reached `target`. `what` names the wait in diagnostics.
@@ -1679,17 +1872,6 @@ pub const Backend = struct {
             diag.set("directx: WaitForSingleObject(" ++ what ++ ") failed");
             return error.Internal;
         }
-    }
-
-    /// Submits any open command list and waits for the GPU to go idle, ignoring
-    /// failures. For paths that must release resources immediately and cannot
-    /// report an error.
-    fn drainBestEffort(self: *Backend) void {
-        var dummy = Diag.none();
-        if (self.cmd_list_open) {
-            self.closeAndExecuteCmdList(&dummy) catch {};
-        }
-        self.waitForQueueIdle(&dummy) catch {};
     }
 
     fn reclaimFrame(self: *Backend, frame_idx: usize) void {

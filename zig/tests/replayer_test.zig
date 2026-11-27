@@ -25,6 +25,7 @@ const Recorder = struct {
 
     write_pixels_calls: usize = 0,
     wp_image_id: u32 = 0,
+    wp_row_pitch_align: u32 = 0,
     wp_region_count: usize = 0,
     wp_r0_rect: abi.Rect = undefined,
     wp_r0_first: u8 = 0,
@@ -103,11 +104,13 @@ const Recorder = struct {
         id: u32,
         regions: []align(4) const abi.PixelsRegion,
         payload: []const u8,
+        row_pitch_align: u32,
         diag: *Diag,
     ) Error!void {
         _ = diag;
         self.write_pixels_calls += 1;
         self.wp_image_id = id;
+        self.wp_row_pitch_align = row_pitch_align;
         self.wp_region_count = regions.len;
         if (regions.len >= 2) {
             self.wp_r0_rect = regions[0].rect;
@@ -369,4 +372,84 @@ test "replayer SET_VERTICES non-empty slices and full C API roundtrip" {
     try std.testing.expectEqual(@as(usize, 1), rec.set_vertices_calls);
     try std.testing.expectEqual(@as(usize, 6), rec.last_verts_len);
     try std.testing.expectEqual(@as(usize, 3), rec.last_indices_len);
+}
+
+test "replayer validates writePixels row_pitch_align and draw src != dst" {
+    var rec = Recorder{};
+    var err_buf: [256]u8 = undefined;
+    var diag = Diag.init(&err_buf, err_buf.len);
+
+    // Non-power-of-two hdr.aux in OP_WRITE_PIXELS must fail with MalformedBatch.
+    const WriteRec = extern struct {
+        cmd: abi.CmdWritePixels,
+        reg: abi.PixelsRegion,
+    };
+    var payload: [64]u8 align(16) = @splat(0x55);
+    var bad_wp = WriteRec{
+        .cmd = .{
+            .hdr = .{ .op = @intFromEnum(abi.Op.write_pixels), .flags = 0, .aux = 300, .size = @sizeOf(WriteRec) },
+            .image_id = 1,
+            .count = 1,
+        },
+        .reg = .{
+            .rect = .{ .x0 = 0, .y0 = 0, .x1 = 2, .y1 = 2 },
+            .payload_offset = 0,
+            .payload_len = 16,
+        },
+    };
+    var batch = abi.Batch{
+        .struct_size = @sizeOf(abi.Batch),
+        .cmd_count = 1,
+        .cmds = @ptrCast(&bad_wp),
+        .cmds_len = @sizeOf(WriteRec),
+        .payload = &payload,
+        .payload_len = payload.len,
+        .sequence = 10,
+    };
+    try std.testing.expectError(error.MalformedBatch, replayer.replay(&rec, &batch, &diag));
+
+    // Power-of-two hdr.aux=256 is accepted and forwarded to backend.writePixels.
+    bad_wp.cmd.hdr.aux = 256;
+    try replayer.replay(&rec, &batch, &diag);
+    try std.testing.expectEqual(@as(u32, 256), rec.wp_row_pitch_align);
+
+    // OP_DRAW_TRIANGLES with src == dst must be rejected with InvalidArgument.
+    const DrawRec = extern struct {
+        cmd: abi.CmdDrawTriangles,
+        reg: abi.DrawRegion,
+    };
+    var uniforms: [abi.internal_uniform_dwords]u32 align(16) = @splat(0);
+    var bad_draw = DrawRec{
+        .cmd = .{
+            .hdr = .{ .op = @intFromEnum(abi.Op.draw_triangles), .flags = 0, .aux = 0, .size = @sizeOf(DrawRec) },
+            .dst_id = 5,
+            .shader_id = 7,
+            .src_ids = .{ 1, 5, 0, 0 },
+            .index_offset = 0,
+            .region_count = 1,
+            .blend = .{ .src_rgb = 1, .src_a = 1, .dst_rgb = 0, .dst_a = 0, .op_rgb = 0, .op_a = 0 },
+            .reserved0 = 0,
+            .internal_version = 1,
+            .user_version = 0,
+            .internal_offset = 0,
+            .user_offset = 0,
+            .user_dwords = 0,
+            .reserved1 = 0,
+        },
+        .reg = .{
+            .rect = .{ .x0 = 0, .y0 = 0, .x1 = 4, .y1 = 4 },
+            .index_count = 6,
+            .reserved = 0,
+        },
+    };
+    const draw_batch = abi.Batch{
+        .struct_size = @sizeOf(abi.Batch),
+        .cmd_count = 1,
+        .cmds = @ptrCast(&bad_draw),
+        .cmds_len = @sizeOf(DrawRec),
+        .payload = std.mem.sliceAsBytes(&uniforms).ptr,
+        .payload_len = @sizeOf(@TypeOf(uniforms)),
+        .sequence = 11,
+    };
+    try std.testing.expectError(error.InvalidArgument, replayer.replay(&rec, &draw_batch, &diag));
 }
