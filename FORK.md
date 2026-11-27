@@ -201,9 +201,11 @@ again here if it applies. What follows from that so far:
 - `image.go` is split by what its parts do: `image_draw.go`,
   `image_pixels.go`, `image_sub.go` and `image_usage.go`.
 
-The oksvg fork is at `internal/oksvg`, for the `svg` package. It rasterizes with `internal/rasterx`,
-a fork of srwiley/rasterx, which is unmaintained like oksvg. `text/v2` moved to ggui as
-`internal/text`, with a copy of the oksvg fork. The windowing and the run loop are ggwd's.
+The `svg` package draws with [svgx](https://github.com/ironpark/svgx), the module the oksvg and
+rasterx forks that were at `internal/oksvg`, `internal/svganim` and `internal/rasterx` became. The
+package is what is left of them here: svgx's documents drawn under a `ggfx.GeoM`, with the drawing
+methods it had before. `text/v2` moved to ggui as `internal/text`, with a copy of the oksvg fork.
+The windowing and the run loop are ggwd's.
 
 ## Generic draw methods and uniform blocks
 

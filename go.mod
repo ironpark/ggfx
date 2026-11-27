@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/ebitengine/purego v0.11.1
 	github.com/gogpu/naga v0.21.10
+	github.com/ironpark/svgx v0.0.0-20261127171537-0b43022aecef
 	golang.org/x/image v0.46.0
 	golang.org/x/sys v0.49.0
 )
