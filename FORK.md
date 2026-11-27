@@ -204,7 +204,8 @@ again here if it applies. What follows from that so far:
 The `svg` package draws with [svgx](https://github.com/ironpark/svgx), the module the oksvg and
 rasterx forks that were at `internal/oksvg`, `internal/svganim` and `internal/rasterx` became. The
 package is what is left of them here: svgx's documents drawn under a `ggfx.GeoM`, with the drawing
-methods it had before. `text/v2` moved to ggui as `internal/text`, with a copy of the oksvg fork.
+methods it had before. `text/v2` moved to ggui as `internal/third_party/text`, which draws SVG
+glyphs through this package.
 The windowing and the run loop are ggwd's.
 
 ## Generic draw methods and uniform blocks
