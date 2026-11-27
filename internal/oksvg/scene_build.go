@@ -85,6 +85,11 @@ func (b *sceneBuilder) startElement(se xml.StartElement) svganim.ElemID {
 	}
 
 	geom, path := parseGeometry(tag, attrs)
+	var geomPtr *geometry
+	if geom.kind != geomNone {
+		gp := geom
+		geomPtr = &gp
+	}
 
 	eid := svganim.ElemID(len(b.sc.elems))
 	b.sc.elems = append(b.sc.elems, element{
@@ -94,7 +99,7 @@ func (b *sceneBuilder) startElement(se xml.StartElement) svganim.ElemID {
 		parent:  parent,
 		attrs:   attrs,
 		kind:    kind,
-		geom:    geom,
+		geom:    geomPtr,
 		path:    path,
 	})
 	if parent >= 0 {
@@ -112,6 +117,10 @@ func (b *sceneBuilder) startElement(se xml.StartElement) svganim.ElemID {
 			b.sc.clips[id] = eid
 		case "marker":
 			b.sc.markers[id] = eid
+			if b.sc.markerSpecs == nil {
+				b.sc.markerSpecs = make(map[svganim.ElemID]parsedMarker, 4)
+			}
+			b.sc.markerSpecs[eid] = parseMarkerAttrs(attrs)
 		}
 	}
 	if kind == kindRendered && tag != "svg" {
@@ -171,6 +180,9 @@ func (b *sceneBuilder) finish(animBuilder svganim.Builder) *scene {
 		}
 		resolveElementStylePatch(sc, svganim.ElemID(i), b.fallbackClasses)
 	}
+	if !sc.hasStaticSceneOnly && sc.hasReachableNestedClipOrMask() {
+		sc.hasStaticSceneOnly = true
+	}
 	if sc.icon.usesCurrentColor {
 		sc.usesCurrentColor = true
 	}
@@ -185,6 +197,104 @@ func (b *sceneBuilder) finish(animBuilder svganim.Builder) *scene {
 		sc.icon.usesCurrentColor = true
 	}
 	return sc
+}
+
+// hasReachableNestedClipOrMask reports whether any <clipPath> or <mask>
+// reachable from rendered content contains a descendant with its own
+// clip-path, mask, or <use> reference. Unreferenced resources in <defs> are
+// ignored so plain documents keep their binary form.
+func (sc *scene) hasReachableNestedClipOrMask() bool {
+	if len(sc.clips) == 0 {
+		return false
+	}
+	var nestedDefs map[svganim.ElemID]bool
+	var hasNestedContent func(eid svganim.ElemID) bool
+	hasNestedContent = func(eid svganim.ElemID) bool {
+		e := &sc.elems[eid]
+		if sp := e.spec; sp != nil && sp.extra != nil &&
+			((sp.bits&pbClipPath != 0 && sp.extra.clipID != "") || (sp.bits&pbMask != 0 && sp.extra.maskID != "")) {
+			return true
+		}
+		if e.geom != nil && e.geom.kind == geomUse {
+			return true
+		}
+		for _, cid := range e.children {
+			if hasNestedContent(cid) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, defID := range sc.clips {
+		for _, cid := range sc.elems[defID].children {
+			if hasNestedContent(cid) {
+				if nestedDefs == nil {
+					nestedDefs = make(map[svganim.ElemID]bool, 4)
+				}
+				nestedDefs[defID] = true
+				break
+			}
+		}
+	}
+	if len(nestedDefs) == 0 {
+		return false
+	}
+
+	// Traverse reachable elements from roots, visiting each ElemID at most once.
+	visited := make([]bool, len(sc.elems))
+	var queue []svganim.ElemID
+	enqueue := func(id svganim.ElemID) {
+		if id >= 0 && int(id) < len(sc.elems) && !visited[id] {
+			visited[id] = true
+			queue = append(queue, id)
+		}
+	}
+	for _, rid := range sc.roots {
+		enqueue(rid)
+	}
+	for len(queue) > 0 {
+		eid := queue[0]
+		queue = queue[1:]
+		if nestedDefs[eid] {
+			return true
+		}
+		e := &sc.elems[eid]
+		if sp := e.spec; sp != nil && sp.extra != nil {
+			ex := sp.extra
+			if sp.bits&pbClipPath != 0 && ex.clipID != "" {
+				if cElem, ok := sc.clips[ex.clipID]; ok {
+					enqueue(cElem)
+				}
+			}
+			if sp.bits&pbMask != 0 && ex.maskID != "" {
+				if mElem, ok := sc.clips[ex.maskID]; ok {
+					enqueue(mElem)
+				}
+			}
+			for _, mid := range ex.markers {
+				if mid != "" {
+					if mElem, ok := sc.markers[mid]; ok {
+						enqueue(mElem)
+					}
+				}
+			}
+		}
+		if e.geom != nil && e.geom.kind == geomUse && strings.HasPrefix(e.geom.href, "#") {
+			if targets := sc.byID[e.geom.href[1:]]; len(targets) > 0 {
+				enqueue(targets[0])
+			}
+		}
+		for _, cid := range e.children {
+			c := &sc.elems[cid]
+			if c.kind == kindRendered || e.kind == kindDefs || e.kind == kindClipContent ||
+				e.kind == kindMaskContent || e.kind == kindMarkerContent {
+				if c.tag != "defs" && c.tag != "clipPath" && c.tag != "mask" && c.tag != "marker" {
+					enqueue(cid)
+				}
+			}
+		}
+	}
+	return false
 }
 
 func hasOverlappingClassDecls(classes map[string][]svganim.Decl) bool {

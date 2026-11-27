@@ -57,17 +57,28 @@ const (
 type stylePatch struct {
 	bits patchBits
 
-	fill         paint
-	fillGradID   string
-	stroke       paint
-	strokeGradID string
-	color        color.Color
+	fill        paint
+	stroke      paint
+	opacity     float64
+	strokeWidth float64
 
-	opacity       float64
+	nonZeroFill bool
+	nonZeroClip bool
+	displayNone bool
+	hidden      bool
+
+	// extra holds less frequently set properties behind a pointer so common
+	// elements (plain fills/strokes or empty groups) pay minimal memory.
+	extra *stylePatchExtra
+}
+
+type stylePatchExtra struct {
+	fillGradID    string
+	strokeGradID  string
+	color         color.Color
 	fillOpacity   float64
 	strokeOpacity float64
 
-	strokeWidth float64
 	dash        []float64
 	dashOffset  float64
 	lineCap     rasterx.CapFunc
@@ -75,11 +86,6 @@ type stylePatch struct {
 	lineGap     rasterx.GapFunc
 	lineJoin    rasterx.JoinMode
 	miterLimit  float64
-
-	nonZeroFill bool
-	nonZeroClip bool
-	displayNone bool
-	hidden      bool
 
 	clipID  string
 	maskID  string
@@ -91,6 +97,13 @@ type stylePatch struct {
 	xformHasPct bool
 	origin      [2]svganim.OriginAxis
 	tbox        transformBoxKind
+}
+
+func (p *stylePatch) ensureExtra() *stylePatchExtra {
+	if p.extra == nil {
+		p.extra = &stylePatchExtra{}
+	}
+	return p.extra
 }
 
 func resolveElementStylePatch(sc *scene, eid svganim.ElemID, fallbackClasses map[string][]svganim.Decl) {
@@ -171,13 +184,16 @@ func resolveElementStylePatch(sc *scene, eid svganim.ElemID, fallbackClasses map
 	// Track whether static scene-only features are active.
 	if (p.bits&pbDisplay != 0 && p.displayNone) ||
 		(p.bits&pbVisibility != 0 && p.hidden) ||
-		(p.bits&pbTransformOrigin != 0 && (p.origin[0].Val != 0 || p.origin[1].Val != 0)) ||
-		(p.bits&pbTransformBox != 0 && p.tbox != tbViewBox) ||
-		p.xformHasPct {
+		(p.extra != nil && ((p.bits&pbTransformOrigin != 0 && (p.extra.origin[0].Val != 0 || p.extra.origin[1].Val != 0)) ||
+			(p.bits&pbTransformBox != 0 && p.extra.tbox != tbViewBox) ||
+			p.extra.xformHasPct)) {
 		sc.hasStaticSceneOnly = true
 	}
 
-	e.spec = p
+	if p.bits != 0 {
+		cp := p
+		e.spec = &cp
+	}
 }
 
 func parseInlineDecls(raw string) []svganim.Decl {
@@ -227,25 +243,31 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 		case "inherit":
 			p.bits = (p.bits &^ pbFill) | pbFillInherit
 			p.fill = paint{}
-			p.fillGradID = ""
+			if p.extra != nil {
+				p.extra.fillGradID = ""
+			}
 		case "currentcolor":
 			p.bits = (p.bits &^ pbFillInherit) | pbFill
 			p.fill = paint{current: true}
-			p.fillGradID = ""
+			if p.extra != nil {
+				p.extra.fillGradID = ""
+			}
 			sc.usesCurrentColor = true
 		default:
 			if id := urlID(v); id != "" {
 				if _, ok := sc.grads[id]; ok {
 					p.bits = (p.bits &^ pbFillInherit) | pbFill
 					p.fill = paint{}
-					p.fillGradID = id
+					p.ensureExtra().fillGradID = id
 					return
 				}
 			}
 			if col, err := parseColorFlexible(v); err == nil {
 				p.bits = (p.bits &^ pbFillInherit) | pbFill
 				p.fill = paint{color: col}
-				p.fillGradID = ""
+				if p.extra != nil {
+					p.extra.fillGradID = ""
+				}
 			}
 		}
 	case "stroke":
@@ -254,37 +276,45 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 		case "inherit":
 			p.bits = (p.bits &^ pbStroke) | pbStrokeInherit
 			p.stroke = paint{}
-			p.strokeGradID = ""
+			if p.extra != nil {
+				p.extra.strokeGradID = ""
+			}
 		case "currentcolor":
 			p.bits = (p.bits &^ pbStrokeInherit) | pbStroke
 			p.stroke = paint{current: true}
-			p.strokeGradID = ""
+			if p.extra != nil {
+				p.extra.strokeGradID = ""
+			}
 			sc.usesCurrentColor = true
 		default:
 			if id := urlID(v); id != "" {
 				if _, ok := sc.grads[id]; ok {
 					p.bits = (p.bits &^ pbStrokeInherit) | pbStroke
 					p.stroke = paint{}
-					p.strokeGradID = id
+					p.ensureExtra().strokeGradID = id
 					return
 				}
 			}
 			if col, err := parseColorFlexible(v); err == nil {
 				p.bits = (p.bits &^ pbStrokeInherit) | pbStroke
 				p.stroke = paint{color: col}
-				p.strokeGradID = ""
+				if p.extra != nil {
+					p.extra.strokeGradID = ""
+				}
 			}
 		}
 	case "color":
 		lv := strings.ToLower(v)
 		if lv == "inherit" || lv == "currentcolor" {
 			p.bits &^= pbColor
-			p.color = nil
+			if p.extra != nil {
+				p.extra.color = nil
+			}
 			return
 		}
 		if col, err := parseColorFlexible(v); err == nil && col != nil {
 			p.bits |= pbColor
-			p.color = col
+			p.ensureExtra().color = col
 		}
 	case "fill-rule":
 		switch strings.ToLower(v) {
@@ -312,40 +342,40 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 		switch strings.ToLower(v) {
 		case "flat":
 			p.bits |= pbLineGap
-			p.lineGap = rasterx.FlatGap
+			p.ensureExtra().lineGap = rasterx.FlatGap
 		case "round":
 			p.bits |= pbLineGap
-			p.lineGap = rasterx.RoundGap
+			p.ensureExtra().lineGap = rasterx.RoundGap
 		case "cubic":
 			p.bits |= pbLineGap
-			p.lineGap = rasterx.CubicGap
+			p.ensureExtra().lineGap = rasterx.CubicGap
 		case "quadratic":
 			p.bits |= pbLineGap
-			p.lineGap = rasterx.QuadraticGap
+			p.ensureExtra().lineGap = rasterx.QuadraticGap
 		}
 	case "stroke-leadlinecap":
 		if capFn := parseCapFunc(v); capFn != nil {
 			p.bits |= pbLeadLineCap
-			p.leadLineCap = capFn
+			p.ensureExtra().leadLineCap = capFn
 		}
 	case "stroke-linecap":
 		if strings.EqualFold(v, "inherit") {
 			p.bits &^= pbLineCap
 		} else if capFn := parseCapFunc(v); capFn != nil {
 			p.bits |= pbLineCap
-			p.lineCap = capFn
+			p.ensureExtra().lineCap = capFn
 		}
 	case "stroke-linejoin":
 		if strings.EqualFold(v, "inherit") {
 			p.bits &^= pbLineJoin
 		} else if jm, ok := parseJoinMode(v); ok {
 			p.bits |= pbLineJoin
-			p.lineJoin = jm
+			p.ensureExtra().lineJoin = jm
 		}
 	case "stroke-miterlimit":
 		if ml, err := parseFloat(v, 64); err == nil {
 			p.bits |= pbMiterLimit
-			p.miterLimit = ml
+			p.ensureExtra().miterLimit = ml
 		}
 	case "stroke-width":
 		if w, err := parseFloat(v, 64); err == nil {
@@ -355,7 +385,7 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 	case "stroke-dashoffset":
 		if off, err := parseFloat(v, 64); err == nil {
 			p.bits |= pbDashOffset
-			p.dashOffset = off
+			p.ensureExtra().dashOffset = off
 		}
 	case "stroke-dasharray":
 		if strings.EqualFold(v, "inherit") {
@@ -364,7 +394,7 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 		}
 		if strings.EqualFold(v, "none") {
 			p.bits |= pbDash
-			p.dash = nil
+			p.ensureExtra().dash = nil
 			return
 		}
 		parts := splitOnCommaOrSpace(v)
@@ -377,7 +407,7 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 			dList = append(dList, d)
 		}
 		p.bits |= pbDash
-		p.dash = dList
+		p.ensureExtra().dash = dList
 	case "opacity":
 		if op, err := parseOpacityVal(v); err == nil {
 			p.bits |= pbOpacity
@@ -386,12 +416,12 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 	case "fill-opacity":
 		if op, err := parseOpacityVal(v); err == nil {
 			p.bits |= pbFillOpacity
-			p.fillOpacity = op
+			p.ensureExtra().fillOpacity = op
 		}
 	case "stroke-opacity":
 		if op, err := parseOpacityVal(v); err == nil {
 			p.bits |= pbStrokeOpacity
-			p.strokeOpacity = op
+			p.ensureExtra().strokeOpacity = op
 		}
 	case "display":
 		p.bits |= pbDisplay
@@ -410,10 +440,11 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 	case "transform":
 		if strings.EqualFold(v, "none") {
 			p.bits |= pbTransform
-			p.xform = rasterx.Identity
-			p.xformVal = svganim.Value{}
-			p.hasXformVal = false
-			p.xformHasPct = false
+			ex := p.ensureExtra()
+			ex.xform = rasterx.Identity
+			ex.xformVal = svganim.Value{}
+			ex.hasXformVal = false
+			ex.xformHasPct = false
 			return
 		}
 		syn1, syn2 := svganim.SyntaxSVGAttr, svganim.SyntaxCSS
@@ -426,67 +457,73 @@ func applyStyleDecl(p *stylePatch, sc *scene, k, v string, fromCSS bool) {
 		}
 		if err == nil && sv.Kind == svganim.ValTransformList {
 			p.bits |= pbTransform
-			p.xformVal = sv
-			p.hasXformVal = true
-			p.xformHasPct = transformHasPercent(sv)
-			if p.xformHasPct {
+			ex := p.ensureExtra()
+			ex.xformVal = sv
+			ex.hasXformVal = true
+			ex.xformHasPct = transformHasPercent(sv)
+			if ex.xformHasPct {
 				// Defer %-dependent resolution until element children and transform-box are finalized.
-				p.xform = rasterx.Identity
+				ex.xform = rasterx.Identity
 			} else {
 				ctx := svganim.EvalCtx{
 					Viewport: svganim.Rect{X: 0, Y: 0, W: sc.icon.ViewBox.W, H: sc.icon.ViewBox.H},
 					FontSize: 16,
 				}
-				p.xform = sv.ToMatrix(&ctx)
+				ex.xform = sv.ToMatrix(&ctx)
 			}
 			return
 		}
 		if m, err := parseTransformCSSRef(v, sc.icon.ViewBox.W, sc.icon.ViewBox.H); err == nil {
 			p.bits |= pbTransform
-			p.xform = m
-			p.xformVal = svganim.Value{}
-			p.hasXformVal = false
-			p.xformHasPct = false
+			ex := p.ensureExtra()
+			ex.xform = m
+			ex.xformVal = svganim.Value{}
+			ex.hasXformVal = false
+			ex.xformHasPct = false
 		}
 	case "transform-origin":
 		if orig, ok := parseTransformOrigin(v); ok {
 			p.bits |= pbTransformOrigin
-			p.origin = orig
+			p.ensureExtra().origin = orig
 		}
 	case "transform-box":
 		if tb, ok := parseTransformBox(v); ok {
 			p.bits |= pbTransformBox
-			p.tbox = tb
+			p.ensureExtra().tbox = tb
 		}
 	case "clip-path":
 		if strings.EqualFold(v, "none") {
 			p.bits &^= pbClipPath
-			p.clipID = ""
+			if p.extra != nil {
+				p.extra.clipID = ""
+			}
 		} else if id := urlID(v); id != "" {
 			p.bits |= pbClipPath
-			p.clipID = id
+			p.ensureExtra().clipID = id
 		}
 	case "mask":
 		if strings.EqualFold(v, "none") {
 			p.bits &^= pbMask
-			p.maskID = ""
+			if p.extra != nil {
+				p.extra.maskID = ""
+			}
 		} else if id := urlID(v); id != "" {
 			p.bits |= pbMask
-			p.maskID = id
+			p.ensureExtra().maskID = id
 		}
 	case "marker-start":
 		p.bits |= pbMarkerStart
-		p.markers[0] = urlID(v)
+		p.ensureExtra().markers[0] = urlID(v)
 	case "marker-mid":
 		p.bits |= pbMarkerMid
-		p.markers[1] = urlID(v)
+		p.ensureExtra().markers[1] = urlID(v)
 	case "marker-end":
 		p.bits |= pbMarkerEnd
-		p.markers[2] = urlID(v)
+		p.ensureExtra().markers[2] = urlID(v)
 	case "marker":
 		id := urlID(v)
 		p.bits |= pbMarkerStart | pbMarkerMid | pbMarkerEnd
-		p.markers = [3]string{id, id, id}
+		p.ensureExtra().markers = [3]string{id, id, id}
 	}
 }
 

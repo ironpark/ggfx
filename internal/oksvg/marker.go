@@ -5,6 +5,7 @@ package oksvg
 
 import (
 	"encoding/xml"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -25,9 +26,9 @@ var markerShapes = map[string]bool{"path": true, "line": true, "polyline": true,
 
 // addMarkers draws, after the shape tag drew as p in style, the markers
 // the style names.
-func (c *iconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) {
+func (c *iconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) error {
 	if style.markers == [3]string{} || !markerShapes[tag] {
-		return
+		return nil
 	}
 	vs := vertices(p)
 	for i, v := range vs {
@@ -44,7 +45,10 @@ func (c *iconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) {
 		}
 		start := len(c.icon.SVGPaths)
 		if _, err := c.expandCaptured(def, markerAt(def, v, first, style), true); err != nil {
-			return
+			if errors.Is(err, ErrExpansionLimit) || errors.Is(err, ErrNestingDepth) {
+				return err
+			}
+			return nil
 		}
 		if style.clip != nil {
 			for j := start; j < len(c.icon.SVGPaths); j++ {
@@ -52,64 +56,110 @@ func (c *iconCursor) addMarkers(tag string, p rasterx.Path, style PathStyle) {
 			}
 		}
 	}
+	return nil
 }
 
-// markerAt is where def's shapes go for the vertex v of a shape drawn in
-// style: the shape's user space, moved to v, turned, and scaled.
-func markerAt(def *captured, v vertex, first bool, style PathStyle) rasterx.Matrix2D {
-	return markerPlace(style.mAdder.M, def.attrs, v, first, style.LineWidth)
+type markerOrientKind uint8
+
+const (
+	markerOrientFixed markerOrientKind = iota
+	markerOrientAuto
+	markerOrientAutoStartReverse
+)
+
+// parsedMarker caches the parsed geometric attributes of a <marker> element
+// so placement at each vertex only performs matrix math.
+type parsedMarker struct {
+	refX, refY  float64
+	sx, sy      float64
+	strokeUnits bool
+	orientKind  markerOrientKind
+	angleRad    float64
 }
 
-func markerPlace(shapeWorld rasterx.Matrix2D, attrs []xml.Attr, v vertex, first bool, lineWidth float64) rasterx.Matrix2D {
+func parseMarkerAttrs(attrs []xml.Attr) parsedMarker {
 	refX, refY, w, h := 0.0, 0.0, 3.0, 3.0
 	orient, strokeUnits := "0", true
-	var box []float64
+	var box [4]float64
+	boxN := 0
 	for _, a := range attrs {
-		n, _ := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(a.Value), "px"), 64)
 		switch a.Name.Local {
 		case "refX":
-			refX = n
+			refX, _ = strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(a.Value), "px"), 64)
 		case "refY":
-			refY = n
+			refY, _ = strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(a.Value), "px"), 64)
 		case "markerWidth":
-			w = n
+			w, _ = strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(a.Value), "px"), 64)
 		case "markerHeight":
-			h = n
+			h, _ = strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(a.Value), "px"), 64)
 		case "orient":
 			orient = strings.TrimSpace(a.Value)
 		case "markerUnits":
 			strokeUnits = a.Value != "userSpaceOnUse"
 		case "viewBox":
+			boxN = 0
 			for _, f := range splitOnCommaOrSpace(a.Value) {
 				if n, err := strconv.ParseFloat(f, 64); err == nil {
-					box = append(box, n)
+					if boxN < 4 {
+						box[boxN] = n
+					}
+					boxN++
 				}
 			}
 		}
 	}
 	sx, sy := 1.0, 1.0
-	if len(box) == 4 && box[2] > 0 && box[3] > 0 {
+	if boxN == 4 && box[2] > 0 && box[3] > 0 {
 		// Meet: the box's shape kept, its larger side filling the marker.
 		// refX and refY are already in the marker's viewBox coordinate system (SVG 1.1 §11.6.2).
 		s := min(w/box[2], h/box[3])
 		sx, sy = s, s
 	}
-	if strokeUnits {
+	pm := parsedMarker{
+		refX:        refX,
+		refY:        refY,
+		sx:          sx,
+		sy:          sy,
+		strokeUnits: strokeUnits,
+	}
+	switch orient {
+	case "auto":
+		pm.orientKind = markerOrientAuto
+	case "auto-start-reverse":
+		pm.orientKind = markerOrientAutoStartReverse
+	default:
+		pm.orientKind = markerOrientFixed
+		deg, _ := strconv.ParseFloat(strings.TrimSuffix(orient, "deg"), 64)
+		pm.angleRad = deg * math.Pi / 180
+	}
+	return pm
+}
+
+func (pm *parsedMarker) place(shapeWorld rasterx.Matrix2D, v vertex, first bool, lineWidth float64) rasterx.Matrix2D {
+	sx, sy := pm.sx, pm.sy
+	if pm.strokeUnits {
 		sx *= lineWidth
 		sy *= lineWidth
 	}
-	angle := v.angle
-	switch orient {
-	case "auto":
-	case "auto-start-reverse":
+	var angle float64
+	switch pm.orientKind {
+	case markerOrientAuto:
+		angle = v.angle
+	case markerOrientAutoStartReverse:
+		angle = v.angle
 		if first {
 			angle += math.Pi
 		}
 	default:
-		deg, _ := strconv.ParseFloat(strings.TrimSuffix(orient, "deg"), 64)
-		angle = deg * math.Pi / 180
+		angle = pm.angleRad
 	}
-	return shapeWorld.Translate(v.x, v.y).Rotate(angle).Scale(sx, sy).Translate(-refX, -refY)
+	return shapeWorld.Translate(v.x, v.y).Rotate(angle).Scale(sx, sy).Translate(-pm.refX, -pm.refY)
+}
+
+// markerAt is where def's shapes go for the vertex v of a shape drawn in
+// style: the shape's user space, moved to v, turned, and scaled.
+func markerAt(def *captured, v vertex, first bool, style PathStyle) rasterx.Matrix2D {
+	return def.marker.place(style.m, v, first, style.LineWidth)
 }
 
 // vertex is where a marker goes, and the way the shape runs there, in

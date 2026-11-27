@@ -16,9 +16,10 @@ import (
 // drawn, or a marker, drawn at a shape's vertices. Its elements are kept as
 // a definition's are, for expandDefs.
 type captured struct {
-	mask  bool       // a mask, not a clipPath; for a marker, false
-	attrs []xml.Attr // the element's own
-	defs  []definition
+	mask   bool       // a mask, not a clipPath; for a marker, false
+	attrs  []xml.Attr // the element's own
+	defs   []definition
+	marker parsedMarker // pre-parsed marker attributes (for <marker> elements)
 }
 
 // capturing reports whether se is kept rather than drawn: inside a
@@ -47,7 +48,7 @@ func (c *iconCursor) capturing(se xml.StartElement) bool {
 			c.icon.clips[id] = c.capture
 		}
 	case "marker":
-		c.capture = &captured{attrs: se.Attr}
+		c.capture = &captured{attrs: se.Attr, marker: parseMarkerAttrs(se.Attr)}
 		if id != "" {
 			c.icon.markers[id] = c.capture
 		}
@@ -95,6 +96,11 @@ func urlID(v string) string {
 // or mask covers, or a marker's shapes. A marker's are added to the
 // document's paths too, as add says; a clip's are returned.
 func (c *iconCursor) expandCaptured(def *captured, m rasterx.Matrix2D, add bool) ([]SvgPath, error) {
+	c.depth++
+	if c.depth > MaxNestingDepth {
+		c.depth--
+		return nil, ErrNestingDepth
+	}
 	start := len(c.icon.SVGPaths)
 	stack := c.StyleStack
 	inDefs := c.inDefs
@@ -102,9 +108,10 @@ func (c *iconCursor) expandCaptured(def *captured, m rasterx.Matrix2D, add bool)
 	defer func() {
 		c.inDefs = inDefs
 		c.StyleStack = stack
+		c.depth--
 	}()
 	base := defaultStyle
-	base.mAdder.M = m
+	base.m = m
 	c.StyleStack = []PathStyle{base}
 	// The element's own transform, as a clipPath's, places what it holds,
 	// and its rules are its shapes'.

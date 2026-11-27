@@ -96,23 +96,24 @@ func getColor(clr paint) color.Color {
 }
 
 func localizeGradIfStopClrNil(g *rasterx.Gradient, defaultColor paint) *rasterx.Gradient {
+	hasNil := false
+	for _, s := range g.Stops {
+		if s.StopColor == nil {
+			hasNil = true
+			break
+		}
+	}
+	if !hasNil {
+		return g
+	}
 	grad := *g
-	for _, s := range grad.Stops {
-		if s.StopColor == nil { // This means we need copy the gradient's Stop slice
-			// and fill in the default color
-
-			// Copy the stops
-			stops := make([]rasterx.GradStop, len(grad.Stops))
-			copy(stops, grad.Stops)
-			grad.Stops = stops
-			// Use the background color when a stop color is nil
-			clr := getColor(defaultColor)
-			for i, s := range stops {
-				if s.StopColor == nil {
-					grad.Stops[i].StopColor = clr
-				}
-			}
-			break // Only need to do this once
+	stops := make([]rasterx.GradStop, len(grad.Stops))
+	copy(stops, grad.Stops)
+	grad.Stops = stops
+	clr := getColor(defaultColor)
+	for i, s := range stops {
+		if s.StopColor == nil {
+			grad.Stops[i].StopColor = clr
 		}
 	}
 	return &grad

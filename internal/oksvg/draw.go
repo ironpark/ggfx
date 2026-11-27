@@ -7,6 +7,7 @@ package oksvg
 import (
 	"encoding/xml"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/ironpark/ggfx/internal/rasterx"
@@ -310,18 +311,26 @@ var (
 			}
 		}
 		// Translate the Style adder matrix by use's x and y
-		c.StyleStack[len(c.StyleStack)-1].mAdder.M =
-			c.StyleStack[len(c.StyleStack)-1].mAdder.M.Translate(x, y)
+		c.StyleStack[len(c.StyleStack)-1].m =
+			c.StyleStack[len(c.StyleStack)-1].m.Translate(x, y)
 		if href == "" {
 			return errors.New("only use tags with href is supported")
 		}
 		if !strings.HasPrefix(href, "#") {
 			return errors.New("only the ID CSS selector is supported")
 		}
-		defs, ok := c.icon.Defs[href[1:]]
+		id := href[1:]
+		if slices.Contains(c.useStack, id) {
+			return nil // cyclic <use>
+		}
+		defs, ok := c.icon.Defs[id]
 		if !ok {
 			return errors.New("href ID in use statement was not found in saved defs")
 		}
+		c.useStack = append(c.useStack, id)
+		defer func() {
+			c.useStack = c.useStack[:len(c.useStack)-1]
+		}()
 		return c.expandDefs(defs)
 	}
 )
@@ -331,14 +340,11 @@ var (
 // stack. The expansion is bounded: a cyclic reference recurses until the
 // stack overflows, and nested uses expand exponentially.
 func (c *iconCursor) expandDefs(defs []definition) error {
-	const maxUseExpansions = 10000
-	c.useExpansions += len(defs)
-	if c.useExpansions > maxUseExpansions {
-		return errors.New("too many elements expanded by use tags")
-	}
 	stackLen := len(c.StyleStack)
+	baseDepth := c.depth
 	defer func() {
 		c.StyleStack = c.StyleStack[:stackLen]
+		c.depth = baseDepth
 	}()
 	for _, def := range defs {
 		if def.Tag == "endg" {
@@ -346,7 +352,14 @@ func (c *iconCursor) expandDefs(defs []definition) error {
 			if len(c.StyleStack) > stackLen {
 				c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
 			}
+			if c.depth > baseDepth {
+				c.depth--
+			}
 			continue
+		}
+		c.depth++
+		if c.depth > MaxNestingDepth {
+			return ErrNestingDepth
 		}
 		if err := c.PushStyle(def.Attrs); err != nil {
 			return err
@@ -355,13 +368,22 @@ func (c *iconCursor) expandDefs(defs []definition) error {
 		if !ok {
 			return errors.New("Cannot process svg element " + def.Tag)
 		}
-		if err := df(c, def.Attrs); err != nil {
-			return err
+		if !c.StyleStack[len(c.StyleStack)-1].displayNone {
+			c.useExpansions++
+			if c.useExpansions > MaxExpandedElements {
+				return ErrExpansionLimit
+			}
+			if err := df(c, def.Attrs); err != nil {
+				return err
+			}
+			if err := c.addPath(def.Tag); err != nil {
+				return err
+			}
 		}
-		c.addPath(def.Tag)
 		if def.Tag != "g" {
 			// pop style
 			c.StyleStack = c.StyleStack[:len(c.StyleStack)-1]
+			c.depth--
 		}
 	}
 	return nil

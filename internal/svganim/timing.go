@@ -382,9 +382,18 @@ const maxSyncIntervals = 10000
 
 // resolveSMILTimings resolves intervals for all SMIL tracks, including syncbase
 // dependencies and cyclic chains (e.g. begin="0;b.end") with 10k bound & period detection.
+const (
+	maxSyncPops  = maxSyncIntervals * 16
+	maxSyncQueue = maxSyncIntervals * 16
+)
+
 func resolveSMILTimings(timings []*trackTiming) {
+	_, _ = resolveSMILTimingsWithLimit(timings, maxSyncQueue)
+}
+
+func resolveSMILTimingsWithLimit(timings []*trackTiming, queueLimit int) (peakQueue, refused int) {
 	if len(timings) == 0 {
-		return
+		return 0, 0
 	}
 
 	type depTarget struct {
@@ -410,14 +419,26 @@ func resolveSMILTimings(timings []*trackTiming) {
 	maxStaticTime := math.Inf(-1)
 	hasAnySync := false
 
+	const checkBatch = 64
+
 	var pq syncEventHeap
 	seq := 0
+	pushEvent := func(t float64, trackIdx int) {
+		if pq.Len() >= queueLimit {
+			refused++
+			return
+		}
+		heap.Push(&pq, syncEvent{t: t, trackIdx: trackIdx, seq: seq})
+		seq++
+		if pq.Len() > peakQueue {
+			peakQueue = pq.Len()
+		}
+	}
 	for i, tm := range timings {
 		for _, b := range tm.begins {
 			switch b.kind {
 			case beginOffset:
-				heap.Push(&pq, syncEvent{t: b.offset, trackIdx: i, seq: seq})
-				seq++
+				pushEvent(b.offset, i)
 				if b.offset > maxStaticTime {
 					maxStaticTime = b.offset
 				}
@@ -482,8 +503,7 @@ func resolveSMILTimings(timings []*trackTiming) {
 								// Defer or avoid infinite recursion; handled via queue if needed.
 								continue
 							}
-							heap.Push(&pq, syncEvent{t: newEnd + d.offset, trackIdx: d.trackIdx, seq: seq})
-							seq++
+							pushEvent(newEnd+d.offset, d.trackIdx)
 						}
 					}
 				}
@@ -492,10 +512,11 @@ func resolveSMILTimings(timings []*trackTiming) {
 	}
 
 	totalGenerated := 0
-	const checkBatch = 64
+	totalPops := 0
 
-	for pq.Len() > 0 && totalGenerated < maxSyncIntervals {
+	for pq.Len() > 0 && totalGenerated < maxSyncIntervals && totalPops < maxSyncPops {
 		ev := heap.Pop(&pq).(syncEvent)
+		totalPops++
 		idx := ev.trackIdx
 		tm := timings[idx]
 
@@ -545,8 +566,7 @@ func resolveSMILTimings(timings []*trackTiming) {
 			if d.isEnd {
 				insertEndTime(d.trackIdx, ev.t+d.offset)
 			} else {
-				heap.Push(&pq, syncEvent{t: ev.t + d.offset, trackIdx: d.trackIdx, seq: seq})
-				seq++
+				pushEvent(ev.t+d.offset, d.trackIdx)
 			}
 		}
 		if !math.IsInf(end, 1) {
@@ -554,8 +574,7 @@ func resolveSMILTimings(timings []*trackTiming) {
 				if d.isEnd {
 					insertEndTime(d.trackIdx, end+d.offset)
 				} else {
-					heap.Push(&pq, syncEvent{t: end + d.offset, trackIdx: d.trackIdx, seq: seq})
-					seq++
+					pushEvent(end+d.offset, d.trackIdx)
 				}
 			}
 		}
@@ -572,6 +591,7 @@ func resolveSMILTimings(timings []*trackTiming) {
 	if hasAnySync && pq.Len() > 0 {
 		detectSyncPeriods(timings, pq, beginAdj)
 	}
+	return peakQueue, refused
 }
 
 // detectSyncPeriods checks whether every track reachable from pending events in pq is periodic.
@@ -693,19 +713,25 @@ func detectSyncPeriods(timings []*trackTiming, pq syncEventHeap, beginAdj [][]in
 
 // latestIntervalAt returns the latest interval with begin <= t, and whether one exists.
 func (tm *trackTiming) latestIntervalAt(t float64) (timeInterval, bool) {
-	if tm.periodic && t >= tm.periodStart-1e-12 && len(tm.periodPattern) > 0 {
+	if tm.periodic && tm.periodDur > 0 && t >= tm.periodStart-1e-12 && len(tm.periodPattern) > 0 {
 		rel := t - tm.periodStart
 		cycle := math.Floor(rel / tm.periodDur)
-		// Check current cycle and previous cycle (in case an interval spans across cycle boundary).
-		for c := cycle; c >= math.Max(0, cycle-1); c-- {
-			base := tm.periodStart + c*tm.periodDur
-			for j := len(tm.periodPattern) - 1; j >= 0; j-- {
-				iv := timeInterval{
-					begin: base + tm.periodPattern[j].begin,
-					end:   base + tm.periodPattern[j].end,
+		if !math.IsNaN(cycle) && !math.IsInf(cycle, 0) {
+			// Check current cycle and previous cycle (in case an interval spans across cycle boundary).
+			for _, delta := range [2]float64{0, -1} {
+				c := cycle + delta
+				if c < 0 || (delta != 0 && c == cycle) {
+					continue
 				}
-				if iv.begin <= t+1e-12 {
-					return iv, true
+				base := tm.periodStart + c*tm.periodDur
+				for j := len(tm.periodPattern) - 1; j >= 0; j-- {
+					iv := timeInterval{
+						begin: base + tm.periodPattern[j].begin,
+						end:   base + tm.periodPattern[j].end,
+					}
+					if iv.begin <= t+1e-12 {
+						return iv, true
+					}
 				}
 			}
 		}
@@ -733,7 +759,7 @@ func (tm *trackTiming) nextIntervalAfter(t float64) (timeInterval, bool) {
 	if idx < len(tm.intervals) {
 		return tm.intervals[idx], true
 	}
-	if tm.periodic && len(tm.periodPattern) > 0 {
+	if tm.periodic && tm.periodDur > 0 && len(tm.periodPattern) > 0 {
 		if t < tm.periodStart-1e-12 {
 			return timeInterval{
 				begin: tm.periodStart + tm.periodPattern[0].begin,
@@ -742,12 +768,18 @@ func (tm *trackTiming) nextIntervalAfter(t float64) (timeInterval, bool) {
 		}
 		rel := t - tm.periodStart
 		cycle := math.Floor(rel / tm.periodDur)
-		for c := cycle; c <= cycle+1; c++ {
-			base := tm.periodStart + c*tm.periodDur
-			for _, p := range tm.periodPattern {
-				b := base + p.begin
-				if b > t+1e-12 {
-					return timeInterval{begin: b, end: base + p.end}, true
+		if !math.IsNaN(cycle) && !math.IsInf(cycle, 0) {
+			for _, delta := range [2]float64{0, 1} {
+				c := cycle + delta
+				if delta != 0 && c == cycle {
+					continue
+				}
+				base := tm.periodStart + c*tm.periodDur
+				for _, p := range tm.periodPattern {
+					b := base + p.begin
+					if b > t+1e-12 {
+						return timeInterval{begin: b, end: base + p.end}, true
+					}
 				}
 			}
 		}

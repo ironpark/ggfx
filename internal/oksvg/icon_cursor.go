@@ -29,7 +29,12 @@ type iconCursor struct {
 	inGrad, inDefs, inDefsStyle bool
 	defStack                    []defFrame
 	defsDepth                   int
+	depth                       int
+	legacyAbandoned             bool
 	useExpansions               int
+	useStack                    []string
+	compiledClips               map[compiledClipKey][]SvgPath
+	compiledClipUses            map[compiledClipUseKey]*clipUse
 	capture                     *captured // the clip, mask or marker being read
 	captureDepth                int
 }
@@ -79,8 +84,13 @@ func (c *iconCursor) ReadGradAttr(attr xml.Attr) (err error) {
 // direct fill and opacity attributes.
 func (c *iconCursor) PushStyle(attrs []xml.Attr) error {
 	// Make a copy of the top style
-	prevClip := c.StyleStack[len(c.StyleStack)-1].clip
-	curStyle := c.StyleStack[len(c.StyleStack)-1]
+	parentStyle := c.StyleStack[len(c.StyleStack)-1]
+	prevClip := parentStyle.clip
+	parentHidden := parentStyle.displayNone
+	curStyle := parentStyle
+	// Resolve this element's own display property via the cascade first,
+	// then combine with the inherited hidden state below.
+	curStyle.displayNone = false
 
 	var styleAttr string
 	var className string
@@ -105,20 +115,33 @@ func (c *iconCursor) PushStyle(attrs []xml.Attr) error {
 		return err
 	}
 	if styleAttr != "" {
+		var impDecls []xml.Attr
 		for _, d := range parseInlineDecls(styleAttr) {
 			k := strings.ToLower(strings.TrimSpace(d.Name))
 			v := strings.TrimSpace(d.Value)
+			if d.Important {
+				impDecls = append(impDecls, xml.Attr{Name: xml.Name{Local: k}, Value: v})
+				continue
+			}
 			if err := c.readStyleAttr(&curStyle, k, v); err != nil {
 				return err
 			}
 		}
+		for _, d := range impDecls {
+			if err := c.readStyleAttr(&curStyle, d.Name.Local, d.Value); err != nil {
+				return err
+			}
+		}
 	}
+	curStyle.displayNone = parentHidden || curStyle.displayNone
 	// Any clip or mask named here is placed in the element's user space, its
 	// own transform read with the rest of its style.
-	for u := curStyle.clip; u != nil && u != prevClip; u = u.parent {
-		if err := c.compileClip(u, curStyle.mAdder.M); err != nil {
+	if curStyle.clip != prevClip && !curStyle.displayNone {
+		compiled, err := c.compileClipChain(curStyle.clip, prevClip, curStyle.m)
+		if err != nil {
 			return err
 		}
+		curStyle.clip = compiled
 	}
 	c.StyleStack = append(c.StyleStack, curStyle) // Push style onto stack
 	return nil
@@ -373,20 +396,22 @@ func (c *iconCursor) readStyleAttr(curStyle *PathStyle, k, v string) error {
 			curStyle.LineOpacity *= op
 		}
 	case "transform":
-		m, err := c.parseTransformFrom(curStyle.mAdder.M, v)
+		m, err := c.parseTransformFrom(curStyle.m, v)
 		if err != nil {
 			// Fallback to CSS transform parser (supports deg/rad/grad/turn/px/%/3d/none).
 			if lm, err2 := parseTransformCSSRef(v, c.icon.ViewBox.W, c.icon.ViewBox.H); err2 == nil {
-				curStyle.mAdder.M = curStyle.mAdder.M.Mult(lm)
+				curStyle.m = curStyle.m.Mult(lm)
 				return nil
 			}
 			return err
 		}
-		curStyle.mAdder.M = m
+		curStyle.m = m
 	case "clip-path", "mask":
 		if def := c.icon.clips[urlID(v)]; def != nil && def.mask == (k == "mask") {
 			curStyle.clip = &clipUse{def: def, parent: curStyle.clip}
 		}
+	case "display":
+		curStyle.displayNone = strings.EqualFold(v, "none")
 	case "marker-start":
 		curStyle.markers[0] = urlID(v)
 	case "marker-mid":
@@ -441,19 +466,24 @@ func (c *iconCursor) readStartElement(se xml.StartElement) error {
 	if !ok {
 		return errors.New("Cannot process svg element " + se.Name.Local)
 	}
-	// An element that fails to draw is skipped, not an error, as the
-	// original had it: it built an error there in strict mode but then
-	// discarded it.
-	_ = df(c, se.Attr)
-	c.addPath(se.Name.Local)
-	return nil
+	if c.StyleStack[len(c.StyleStack)-1].displayNone && !skipDef && se.Name.Local != "defs" {
+		return nil
+	}
+	// An element that fails to draw is skipped, except resource limits
+	// which must fail Parse rather than truncate silently.
+	if err := df(c, se.Attr); err != nil {
+		if errors.Is(err, ErrExpansionLimit) || errors.Is(err, ErrNestingDepth) {
+			return err
+		}
+	}
+	return c.addPath(se.Name.Local)
 }
 
 // addPath keeps the path the element tag drew, if it drew one, under the
 // style on top of the stack, and the markers the style puts on it.
-func (c *iconCursor) addPath(tag string) {
+func (c *iconCursor) addPath(tag string) error {
 	if len(c.Path) == 0 {
-		return
+		return nil
 	}
 	pathCopy := make(rasterx.Path, len(c.Path))
 	copy(pathCopy, c.Path)
@@ -470,7 +500,7 @@ func (c *iconCursor) addPath(tag string) {
 	}
 	c.icon.SVGPaths = append(c.icon.SVGPaths, SvgPath{style, pathCopy})
 	c.Path = c.Path[:0]
-	c.addMarkers(tag, pathCopy, style)
+	return c.addMarkers(tag, pathCopy, style)
 }
 
 func (c *iconCursor) adaptClasses(pathStyle *PathStyle, className string) error {

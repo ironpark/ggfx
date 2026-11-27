@@ -39,6 +39,16 @@ func Parse(r io.Reader) (*Document, error) {
 // ErrNoBinaryForm is why MarshalBinary has nothing to return for a document.
 var ErrNoBinaryForm = oksvg.ErrNoBinaryForm
 
+// ErrNestingDepth is returned by Parse, DrawErr, DrawWithErr, and Renderer.DrawErr
+// when element nesting or <use> chaining exceeds the allowed maximum depth.
+var ErrNestingDepth = oksvg.ErrNestingDepth
+
+// ErrExpansionLimit is returned by Parse, DrawErr, DrawWithErr, and Renderer.DrawErr
+// when amplified elements produced by <use>, <clipPath>, <mask>, or <marker>
+// expansion exceed the expansion budget. Work proportional to direct source
+// size, target pixel area, or CSS matching is not covered by this limit.
+var ErrExpansionLimit = oksvg.ErrExpansionLimit
+
 // MarshalBinary returns what parsing arrived at, for a document known ahead
 // of time, an icon of a library say, to be kept without its source and read
 // back by UnmarshalBinary without parsing it. It holds a document of shapes
@@ -83,19 +93,28 @@ func (d *Document) ViewBox() (x, y, width, height float64) {
 }
 
 // Draw draws the document over dst, with geoM mapping its user space to
-// dst's pixels.
+// dst's pixels. It discards any draw-time limit error; use DrawErr to observe
+// ErrNestingDepth or ErrExpansionLimit.
 func (d *Document) Draw(dst *image.RGBA, geoM ggfx.GeoM) {
+	_ = d.DrawErr(dst, geoM)
+}
+
+// DrawErr draws the document over dst, with geoM mapping its user space to
+// dst's pixels. If evaluation exceeds the nesting or expansion limit (returning
+// ErrNestingDepth or ErrExpansionLimit), dst is left untouched, Bounds reports
+// false for that state, and subsequent under-budget frames render normally.
+func (d *Document) DrawErr(dst *image.RGBA, geoM ggfx.GeoM) error {
 	if d == nil || d.icon == nil || dst == nil {
-		return
+		return nil
 	}
 	b := dst.Bounds()
 	if b.Empty() {
-		return
+		return nil
 	}
 	p := painters.Get()
 	p.Scanner.Dest, p.Scanner.Targ = dst, b
 	p.Dasher.SetBounds(b.Dx(), b.Dy())
-	d.icon.DrawTransformed(p, 1, rasterx.Matrix2D{
+	err := d.icon.DrawTransformedErr(p, 1, rasterx.Matrix2D{
 		A: geoM.Element(0, 0), C: geoM.Element(0, 1), E: geoM.Element(0, 2),
 		B: geoM.Element(1, 0), D: geoM.Element(1, 1), F: geoM.Element(1, 2),
 	})
@@ -103,6 +122,10 @@ func (d *Document) Draw(dst *image.RGBA, geoM ggfx.GeoM) {
 	// the painter is kept.
 	p.Release()
 	painters.Put(p)
+	if err != nil {
+		return fmt.Errorf("svg: %w", err)
+	}
+	return nil
 }
 
 // painters are rasterizers and their buffers, kept between drawings,

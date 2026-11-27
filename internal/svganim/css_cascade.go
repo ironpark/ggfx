@@ -9,12 +9,155 @@ import (
 	"strings"
 )
 
+// buildIndex partitions every selector by its rightmost simple selector
+// (ID, class, tag, or universal) so DeclsFor tests only candidate rules.
+func (ss *stylesheetImpl) buildIndex() {
+	if ss.indexed {
+		return
+	}
+	ss.indexed = true
+	for ri := range ss.rules {
+		sels := ss.rules[ri].selectors
+		for si := range sels {
+			parts := sels[si].parts
+			if len(parts) == 0 {
+				continue
+			}
+			rc := parts[len(parts)-1].comp
+			ref := selectorRef{ruleIdx: int32(ri), selIdx: int32(si)}
+			switch {
+			case rc.id != "":
+				if ss.byID == nil {
+					ss.byID = make(map[string][]selectorRef)
+				}
+				ss.byID[rc.id] = append(ss.byID[rc.id], ref)
+			case len(rc.classes) > 0:
+				if ss.byClass == nil {
+					ss.byClass = make(map[string][]selectorRef)
+				}
+				ss.byClass[rc.classes[0]] = append(ss.byClass[rc.classes[0]], ref)
+			case rc.tag != "":
+				if ss.byTag == nil {
+					ss.byTag = make(map[string][]selectorRef)
+				}
+				key := strings.ToLower(rc.tag)
+				ss.byTag[key] = append(ss.byTag[key], ref)
+			default:
+				ss.universal = append(ss.universal, ref)
+			}
+		}
+	}
+}
+
 func declsForImpl(s *Stylesheet, sv SceneView, e ElemID) []Decl {
 	if s == nil || s.impl == nil || sv == nil || e < 0 {
 		return nil
 	}
 	ss, ok := s.impl.(*stylesheetImpl)
 	if !ok || len(ss.rules) == 0 {
+		return nil
+	}
+
+	type ruleHit struct {
+		ruleIdx int32
+		spec    specificity
+	}
+	var hitBuf [8]ruleHit
+	hits := hitBuf[:0]
+	var hitMap map[int32]int
+
+	record := func(ruleIdx int32, spec specificity) {
+		if hitMap != nil {
+			if pos, exists := hitMap[ruleIdx]; exists {
+				if hits[pos].spec.less(spec) {
+					hits[pos].spec = spec
+				}
+				return
+			}
+			hitMap[ruleIdx] = len(hits)
+			hits = append(hits, ruleHit{ruleIdx: ruleIdx, spec: spec})
+			return
+		}
+		for i := range hits {
+			if hits[i].ruleIdx == ruleIdx {
+				if hits[i].spec.less(spec) {
+					hits[i].spec = spec
+				}
+				return
+			}
+		}
+		hits = append(hits, ruleHit{ruleIdx: ruleIdx, spec: spec})
+		if len(hits) == 16 {
+			hitMap = make(map[int32]int, 32)
+			for i, h := range hits {
+				hitMap[h.ruleIdx] = i
+			}
+		}
+	}
+
+	testRefs := func(refs []selectorRef) {
+		for _, ref := range refs {
+			sel := ss.rules[ref.ruleIdx].selectors[ref.selIdx]
+			if matchSelector(sel, sv, e) {
+				record(ref.ruleIdx, sel.spec)
+			}
+		}
+	}
+
+	if ss.indexed {
+		if len(ss.byID) > 0 {
+			if id := sv.ID(e); id != "" {
+				if refs := ss.byID[id]; len(refs) > 0 {
+					testRefs(refs)
+				}
+			}
+		}
+		if len(ss.byClass) > 0 {
+			elemClasses := sv.Classes(e)
+			if len(elemClasses) <= 8 {
+				for i, cls := range elemClasses {
+					if i > 0 && slices.Contains(elemClasses[:i], cls) {
+						continue
+					}
+					if refs := ss.byClass[cls]; len(refs) > 0 {
+						testRefs(refs)
+					}
+				}
+			} else {
+				seen := make(map[string]struct{}, len(elemClasses))
+				for _, cls := range elemClasses {
+					if _, dup := seen[cls]; dup {
+						continue
+					}
+					seen[cls] = struct{}{}
+					if refs := ss.byClass[cls]; len(refs) > 0 {
+						testRefs(refs)
+					}
+				}
+			}
+		}
+		if len(ss.byTag) > 0 {
+			if tag := sv.Tag(e); tag != "" {
+				if refs := ss.byTag[strings.ToLower(tag)]; len(refs) > 0 {
+					testRefs(refs)
+				}
+			}
+		}
+		if len(ss.universal) > 0 {
+			testRefs(ss.universal)
+		}
+	} else {
+		for ri := range ss.rules {
+			rule := &ss.rules[ri]
+			for _, sel := range rule.selectors {
+				if matchSelector(sel, sv, e) {
+					record(int32(ri), sel.spec)
+				}
+			}
+		}
+	}
+
+	if len(hits) == 0 {
 		return nil
 	}
 
@@ -26,32 +169,16 @@ func declsForImpl(s *Stylesheet, sv SceneView, e ElemID) []Decl {
 	}
 
 	var matched []matchedDecl
-	for _, rule := range ss.rules {
-		bestSpec := specificity{-1, -1, -1}
-		hit := false
-		for _, sel := range rule.selectors {
-			if matchSelector(sel, sv, e) {
-				if !hit || bestSpec.less(sel.spec) {
-					bestSpec = sel.spec
-					hit = true
-				}
-			}
-		}
-		if !hit {
-			continue
-		}
+	for _, h := range hits {
+		rule := &ss.rules[h.ruleIdx]
 		for di, d := range rule.decls {
 			matched = append(matched, matchedDecl{
-				spec:      bestSpec,
+				spec:      h.spec,
 				ruleOrder: rule.order,
 				declOrder: di,
 				decl:      d,
 			})
 		}
-	}
-
-	if len(matched) == 0 {
-		return nil
 	}
 
 	// Sort: normal rules before !important, then specificity asc, ruleOrder asc, declOrder asc.

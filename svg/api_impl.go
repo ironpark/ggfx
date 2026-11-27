@@ -4,6 +4,7 @@
 package svg
 
 import (
+	"fmt"
 	"image"
 	"math"
 	"time"
@@ -179,17 +180,21 @@ func docNextChangeImpl(d *Document, t time.Duration) (time.Duration, bool) {
 	return dur, true
 }
 
-func docDrawWithImpl(d *Document, dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) {
+func docDrawWithErrImpl(d *Document, dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) error {
 	b := dst.Bounds()
 	if b.Empty() {
-		return
+		return nil
 	}
 	p := painters.Get()
 	p.Scanner.Dest, p.Scanner.Targ = dst, b
 	p.Dasher.SetBounds(b.Dx(), b.Dy())
-	d.icon.DrawWith(p, geoMToMatrix(geoM), convertEvalOptions(opts))
+	err := d.icon.DrawWithErr(p, geoMToMatrix(geoM), convertEvalOptions(opts))
 	p.Release()
 	painters.Put(p)
+	if err != nil {
+		return fmt.Errorf("svg: %w", err)
+	}
+	return nil
 }
 
 func newRendererImpl(d *Document) any {
@@ -199,13 +204,16 @@ func newRendererImpl(d *Document) any {
 	return d.icon.NewRenderer()
 }
 
-func rendererDrawImpl(r *Renderer, dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) {
+func rendererDrawErrImpl(r *Renderer, dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) error {
 	ir, _ := r.impl.(*oksvg.Renderer)
 	if ir == nil {
 		ir = r.doc.icon.NewRenderer()
 		r.impl = ir
 	}
-	ir.Draw(dst, geoMToMatrix(geoM), convertEvalOptions(opts))
+	if err := ir.DrawErr(dst, geoMToMatrix(geoM), convertEvalOptions(opts)); err != nil {
+		return fmt.Errorf("svg: %w", err)
+	}
+	return nil
 }
 
 func rendererReleaseImpl(r *Renderer) {

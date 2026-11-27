@@ -5,8 +5,6 @@
 package oksvg
 
 import (
-	"image"
-
 	"github.com/ironpark/ggfx/internal/rasterx"
 	"github.com/ironpark/ggfx/internal/svganim"
 )
@@ -36,30 +34,51 @@ func (s *SvgIcon) Draw(p *Painter, opacity float64) {
 // DrawTransformed draws the icon as Draw does, under t in place of its
 // Transform. It changes nothing in s.
 func (s *SvgIcon) DrawTransformed(p *Painter, opacity float64, t rasterx.Matrix2D) {
+	_ = s.DrawTransformedErr(p, opacity, t)
+}
+
+// DrawTransformedErr draws the icon under t, returning any evaluation limit
+// error (ErrNestingDepth or ErrExpansionLimit) without touching p.Scanner.Dest.
+func (s *SvgIcon) DrawTransformedErr(p *Painter, opacity float64, t rasterx.Matrix2D) error {
 	if s.needsSceneForStatic() {
 		fr := framePool.Get().(*frame)
-		s.scene.evaluate(fr, &EvalOptions{Animate: false})
-		renderFrame(p, fr, nil, opacity, t)
+		err := s.scene.evaluate(fr, &EvalOptions{Animate: false})
+		if err == nil {
+			renderFrame(p, fr, nil, opacity, t)
+		}
 		fr.reset()
 		framePool.Put(fr)
-		return
+		return err
 	}
 	s.drawLegacyTransformed(p, opacity, t)
+	return nil
 }
 
 func (s *SvgIcon) drawLegacyTransformed(p *Painter, opacity float64, t rasterx.Matrix2D) {
 	// Each clip or mask is drawn once a drawing, for every shape under it.
-	var masks map[*clipUse]*image.Alpha
+	p.resetAlphaPool()
+	p.Dasher.BeginDraw()
+	defer p.Dasher.EndDraw()
+	usedClips := false
 	for i := range s.SVGPaths {
 		svgp := &s.SVGPaths[i]
 		if svgp.clip == nil {
 			svgp.DrawTransformed(p, opacity, t)
 			continue
 		}
-		if masks == nil {
-			masks = map[*clipUse]*image.Alpha{}
+		if !usedClips {
+			usedClips = true
+			if p.clipMasks == nil {
+				p.clipMasks = make(map[*clipUse]clipResult, 4)
+			} else {
+				clear(p.clipMasks)
+			}
 		}
-		mask := svgp.clip.maskImage(p, t, masks)
-		svgp.drawThrough(p, opacity, t, mask)
+		clip := svgp.clip.maskImage(p, t, p.clipMasks)
+		svgp.drawThrough(p, opacity, t, clip)
+	}
+	if usedClips {
+		clear(p.clipMasks)
+		p.resetAlphaPool()
 	}
 }

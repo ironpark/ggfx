@@ -6,6 +6,7 @@ package oksvg
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"image/color"
 	"io"
@@ -17,6 +18,24 @@ import (
 
 	"github.com/ironpark/ggfx/internal/rasterx"
 	"github.com/ironpark/ggfx/internal/svganim"
+)
+
+const (
+	// MaxNestingDepth is the maximum allowed logical element nesting depth across
+	// XML elements and <use>/<clipPath>/<mask>/<marker> expansion.
+	MaxNestingDepth = 256
+	// MaxExpandedElements bounds amplified elements produced by <use>, <clipPath>,
+	// <mask>, and <marker> expansion in a document or frame. Work proportional to
+	// direct source size, target pixel area, or CSS matching is not covered by
+	// this budget.
+	MaxExpandedElements = 65536
+)
+
+var (
+	// ErrNestingDepth is returned when XML nesting or <use> expansion exceeds MaxNestingDepth.
+	ErrNestingDepth = errors.New("oksvg: element nesting depth limit exceeded")
+	// ErrExpansionLimit is returned when expanding references exceeds MaxExpandedElements.
+	ErrExpansionLimit = errors.New("oksvg: expanded element limit exceeded")
 )
 
 // ReadIconStream reads the Icon from the given io.Reader.
@@ -43,6 +62,10 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 		// Inspect the type of the XML token
 		switch se := t.(type) {
 		case xml.StartElement:
+			cursor.depth++
+			if cursor.depth > MaxNestingDepth {
+				return icon, ErrNestingDepth
+			}
 			// B1 fix: intercept SMIL elements BEFORE PushStyle and before defs/capture,
 			// so attributes like fill="freeze" never collide with SVG paint fill.
 			if smilDepth > 0 {
@@ -59,7 +82,49 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 			}
 
 			// Tee token to scene builder (keeps elements open until EndElement: B2).
-			sb.startElement(se)
+			eid := sb.startElement(se)
+
+			if cursor.legacyAbandoned {
+				// Legacy expansion hit MaxExpandedElements before the full stylesheet
+				// was resolved; keep only document metadata, stylesheets, gradients,
+				// and unsupported-element validation so the scene validator decides.
+				switch se.Name.Local {
+				case "style":
+					cursor.inDefsStyle = true
+				case "linearGradient":
+					if err = linearGradientF(cursor, se.Attr); err != nil {
+						return icon, err
+					}
+				case "radialGradient":
+					if err = radialGradientF(cursor, se.Attr); err != nil {
+						return icon, err
+					}
+				case "stop":
+					if err = stopF(cursor, se.Attr); err != nil {
+						return icon, err
+					}
+				case "svg":
+					if err = svgF(cursor, se.Attr); err != nil {
+						return icon, err
+					}
+				default:
+					if sb.sc.elems[eid].kind == kindRendered {
+						if _, ok := drawFuncs[se.Name.Local]; !ok {
+							return icon, errors.New("Cannot process svg element " + se.Name.Local)
+						}
+					}
+				}
+				continue
+			}
+
+			abandonLegacy := func() {
+				cursor.legacyAbandoned = true
+				icon.SVGPaths = nil
+				cursor.Path = cursor.Path[:0]
+				cursor.compiledClips = nil
+				cursor.compiledClipUses = nil
+				cursor.defStack = nil
+			}
 
 			// Inside <defs> or a captured <clipPath>/<mask>/<marker>, elements are stored
 			// for later expansion (which runs PushStyle), so avoid parsing style attributes
@@ -69,23 +134,34 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 			} else {
 				err = cursor.PushStyle(se.Attr)
 				if err != nil {
+					if errors.Is(err, ErrExpansionLimit) {
+						abandonLegacy()
+						continue
+					}
 					return icon, err
 				}
 			}
 			err = cursor.readStartElement(se)
 			if err != nil {
+				if errors.Is(err, ErrExpansionLimit) {
+					abandonLegacy()
+					continue
+				}
 				return icon, err
 			}
 		case xml.EndElement:
+			cursor.depth--
 			if smilDepth > 0 {
 				smilDepth--
 				continue
 			}
 			sb.endElement(se)
-			// pop style
-			cursor.StyleStack = cursor.StyleStack[:len(cursor.StyleStack)-1]
-			if cursor.endCapture(se) {
-				continue
+			if !cursor.legacyAbandoned {
+				// pop style
+				cursor.StyleStack = cursor.StyleStack[:len(cursor.StyleStack)-1]
+				if cursor.endCapture(se) {
+					continue
+				}
 			}
 			if se.Name.Local == "style" && cursor.inDefsStyle {
 				cssText := classInfo.String()
@@ -93,13 +169,15 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 				cursor.inDefsStyle = false
 				animBuilder.Stylesheet(cssText)
 				sb.addStylesheet(cssText)
-				declsByClass, _ := parseBraceAwareClasses(cssText)
-				if len(declsByClass) > 0 {
-					if icon.classes == nil {
-						icon.classes = make(map[string][]svganim.Decl, len(declsByClass))
-					}
-					for cls, decls := range declsByClass {
-						icon.classes[cls] = append(icon.classes[cls], decls...)
+				if !cursor.legacyAbandoned {
+					declsByClass, _ := parseBraceAwareClasses(cssText)
+					if len(declsByClass) > 0 {
+						if icon.classes == nil {
+							icon.classes = make(map[string][]svganim.Decl, len(declsByClass))
+						}
+						for cls, decls := range declsByClass {
+							icon.classes[cls] = append(icon.classes[cls], decls...)
+						}
 					}
 				}
 				continue
@@ -108,7 +186,7 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 				cursor.inGrad = false
 				continue
 			}
-			if cursor.inDefs && !cursor.inGrad {
+			if !cursor.legacyAbandoned && cursor.inDefs && !cursor.inGrad {
 				if se.Name.Local == "defs" && cursor.defsDepth == 0 {
 					cursor.defStack = cursor.defStack[:0]
 					cursor.inDefs = false
@@ -135,6 +213,13 @@ func ReadIconStream(stream io.Reader) (*SvgIcon, error) {
 		}
 	}
 	icon.scene = sb.finish(animBuilder)
+	if cursor.legacyAbandoned {
+		icon.SVGPaths = nil
+		icon.scene.hasStaticSceneOnly = true
+	}
+	if err := icon.scene.validateLimits(); err != nil {
+		return icon, err
+	}
 	return icon, nil
 }
 
@@ -183,7 +268,7 @@ func ParseSVGColor(colorStr string) (color.Color, error) {
 	default:
 		cn, ok := colornames.Map[v]
 		if ok {
-			return color.NRGBA{cn.R, cn.G, cn.B, cn.A}, nil
+			return color.NRGBA(cn), nil
 		}
 	}
 	if cStr, ok := strings.CutPrefix(v, "rgb("); ok {

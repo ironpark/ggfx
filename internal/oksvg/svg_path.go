@@ -22,34 +22,37 @@ type SvgPath struct {
 
 // DrawTransformed draws the compiled SvgPath with p while applying transform t.
 func (svgp *SvgPath) DrawTransformed(p *Painter, opacity float64, t rasterx.Matrix2D) {
-	svgp.drawThrough(p, opacity, t, nil)
+	svgp.drawThrough(p, opacity, t, clipResult{})
 }
 
-// drawThrough draws the path as DrawTransformed does, its paint let
-// through mask where it is not nil; see clip.go. It leaves svgp as it is,
+// drawThrough draws the path as DrawTransformed does, clipped or masked by
+// clip where it is set; see clip.go. It leaves svgp as it is,
 // so that a document can be drawn from goroutines at once.
-func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D, mask *image.Alpha) {
-	svgp.drawThroughTrim(p, opacity, t, mask, trimSpec{}, nil)
+func (svgp *SvgPath) drawThrough(p *Painter, opacity float64, t rasterx.Matrix2D, clip clipResult) {
+	svgp.drawThroughTrim(p, opacity, t, clip, trimSpec{}, nil)
 }
 
-func (svgp *SvgPath) drawThroughTrim(p *Painter, opacity float64, t rasterx.Matrix2D, mask *image.Alpha, trim trimSpec, lt *lengthTable) {
-	if mask != nil && mask.Rect.Empty() {
+func (svgp *SvgPath) drawThroughTrim(p *Painter, opacity float64, t rasterx.Matrix2D, clip clipResult, trim trimSpec, lt *lengthTable) {
+	if clip.empty {
 		return
 	}
 	r, rf, adder := p.Dasher, &p.Dasher.Filler, &p.adder
-	adder.M = t.Mult(svgp.mAdder.M)
+	adder.M = t.Mult(svgp.m)
 	fill := !svgp.fillerColor.none()
-	if mask != nil {
-		// Outside the mask, nothing is let through: no need to ask.
-		p.Scanner.SetClip(mask.Rect)
-		defer p.Scanner.SetClip(image.ZR)
+	if clip.set {
+		p.Scanner.SetClip(clip.rect)
+		p.Scanner.SetAlphaMask(clip.mask)
+		defer func() {
+			p.Scanner.SetClip(image.Rectangle{})
+			p.Scanner.SetAlphaMask(nil)
+		}()
 	}
 	if fill {
 		r.Clear()
 		adder.Adder = rf
 		svgp.Path.AddTo(adder)
 		rf.SetWinding(svgp.UseNonZeroWinding)
-		rf.SetPaint(through(svgp.fillerColor.paint(p, svgp.Path, svgp.FillOpacity*opacity, adder.M), mask))
+		rf.SetPaint(svgp.fillerColor.paint(p, svgp.Path, svgp.FillOpacity*opacity, adder.M))
 		rf.Draw()
 	}
 	if !svgp.linerColor.none() && svgp.LineWidth > 0 {
@@ -91,8 +94,14 @@ func (svgp *SvgPath) drawThroughTrim(p *Painter, opacity float64, t rasterx.Matr
 		if scale == 0 {
 			return // nothing of the picture is left to see
 		}
+		boundsOnly := p.Scanner.Dest == nil && p.Scanner.DestAlpha == nil
 		dash := svgp.Dash
-		if len(dash) > 0 {
+		if boundsOnly {
+			// Measurement pass uses the undashed stroke envelope so dash
+			// generation and per-draw transition charging happen only once,
+			// during the paint pass.
+			dash = nil
+		} else if len(dash) > 0 {
 			p.dash = p.dash[:0]
 			for _, d := range dash {
 				p.dash = append(p.dash, d*scale)
@@ -122,7 +131,7 @@ func (svgp *SvgPath) drawThroughTrim(p *Painter, opacity float64, t rasterx.Matr
 		} else {
 			svgp.Path.AddTo(adder)
 		}
-		r.SetPaint(through(svgp.linerColor.paint(p, svgp.Path, svgp.LineOpacity*opacity, m), mask))
+		r.SetPaint(svgp.linerColor.paint(p, svgp.Path, svgp.LineOpacity*opacity, m))
 		r.Draw()
 	}
 }
@@ -141,7 +150,8 @@ func (p paint) paint(painter *Painter, path rasterx.Path, opacity float64, m ras
 	if p.grad == nil {
 		return rasterx.ColorPaint(rasterx.ApplyOpacity(p.color, opacity))
 	}
-	g := *painter.resolveGrad(p.grad, painter.currentColor)
+	resolved := painter.resolveGrad(p.grad, painter.currentColor)
+	g := *resolved
 	if g.Units == rasterx.ObjectBoundingBox {
 		minX, minY, maxX, maxY := path.Bounds()
 		if minX >= maxX || minY >= maxY {
@@ -152,5 +162,6 @@ func (p paint) paint(painter *Painter, path rasterx.Path, opacity float64, m ras
 		g.Bounds.X, g.Bounds.Y = minX, minY
 		g.Bounds.W, g.Bounds.H = maxX-minX, maxY-minY
 	}
-	return g.GetColorFunctionUS(opacity, m)
+	table := painter.gradTable(resolved, opacity)
+	return g.FillSpan(&painter.gradSpan, table, opacity, m)
 }

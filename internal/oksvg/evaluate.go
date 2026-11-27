@@ -35,10 +35,18 @@ type clipScope struct {
 	itemCount int32
 }
 
+type clipScopeKey struct {
+	defElem     svganim.ElemID
+	isMask      bool
+	refWorld    rasterx.Matrix2D
+	parentScope int32
+}
+
 type frame struct {
 	items       []drawItem
 	clipItems   []drawItem
 	scopes      []clipScope
+	clipScopes  map[clipScopeKey]int32
 	ancPool     []svganim.ElemID
 	pathScratch rasterx.Path
 	dashScratch []float64
@@ -50,6 +58,7 @@ func (f *frame) reset() {
 	clear(f.clipItems)
 	f.clipItems = f.clipItems[:0]
 	f.scopes = f.scopes[:0]
+	clear(f.clipScopes)
 	f.ancPool = f.ancPool[:0]
 	f.pathScratch = f.pathScratch[:0]
 	f.dashScratch = f.dashScratch[:0]
@@ -84,19 +93,21 @@ func defaultEvalState(world rasterx.Matrix2D, rootColor color.Color, scope int32
 }
 
 type evaluator struct {
-	sc            *scene
-	opts          *EvalOptions
-	fr            *frame
-	destItems     *[]drawItem
-	ancStack      []svganim.ElemID
-	useExpansions int
-	clipDepth     int
-	markerDepth   int
-	inClip        bool
-	inMarker      bool
+	sc          *scene
+	opts        *EvalOptions
+	fr          *frame
+	destItems   *[]drawItem
+	ancStack    []svganim.ElemID
+	depth       int
+	expanded    int
+	err         error
+	clipDepth   int
+	markerDepth int
+	inClip      bool
+	inMarker    bool
 }
 
-func (sc *scene) evaluate(fr *frame, opts *EvalOptions) {
+func (sc *scene) evaluate(fr *frame, opts *EvalOptions) error {
 	fr.reset()
 	if opts == nil {
 		opts = &EvalOptions{}
@@ -114,10 +125,18 @@ func (sc *scene) evaluate(fr *frame, opts *EvalOptions) {
 	rootState := defaultEvalState(rasterx.Identity, rootColor, -1)
 	for _, rid := range sc.roots {
 		ev.evalElem(rid, rootState, false)
+		if ev.err != nil {
+			fr.reset()
+			return ev.err
+		}
 	}
+	return nil
 }
 
 func (ev *evaluator) evalElem(eid svganim.ElemID, parent evalState, forceRender bool) {
+	if ev.err != nil {
+		return
+	}
 	sc := ev.sc
 	if eid < 0 || int(eid) >= len(sc.elems) {
 		return
@@ -134,109 +153,128 @@ func (ev *evaluator) evalElem(eid svganim.ElemID, parent evalState, forceRender 
 			return
 		}
 	}
+	ev.depth++
+	if ev.depth > MaxNestingDepth {
+		ev.depth--
+		ev.err = ErrNestingDepth
+		return
+	}
 
 	ev.ancStack = append(ev.ancStack, eid)
-	defer func() { ev.ancStack = ev.ancStack[:len(ev.ancStack)-1] }()
+	defer func() {
+		ev.ancStack = ev.ancStack[:len(ev.ancStack)-1]
+		ev.depth--
+	}()
 
 	st := parent
-	sp := &e.spec
-
-	// 1. Apply static cascade stylePatch onto inherited state.
-	if sp.bits&pbColor != 0 && sp.color != nil {
-		st.color = sp.color
-	}
-	if sp.bits&pbFill != 0 {
-		if sp.fillGradID != "" {
-			if g, ok := sc.grads[sp.fillGradID]; ok {
-				st.style.fillerColor = paint{grad: localizeGradIfStopClrNil(g, parent.style.fillerColor), gradID: sp.fillGradID}
-			}
-		} else {
-			st.style.fillerColor = sp.fill
-		}
-	}
-	if sp.bits&pbStroke != 0 {
-		if sp.strokeGradID != "" {
-			if g, ok := sc.grads[sp.strokeGradID]; ok {
-				st.style.linerColor = paint{grad: localizeGradIfStopClrNil(g, parent.style.linerColor), gradID: sp.strokeGradID}
-			}
-		} else {
-			st.style.linerColor = sp.stroke
-		}
-	}
-	if sp.bits&pbFillRule != 0 {
-		st.style.UseNonZeroWinding = sp.nonZeroFill
-	}
-	if sp.bits&pbClipRule != 0 {
-		st.style.nonZeroClip = sp.nonZeroClip
-	}
-	if sp.bits&pbLineGap != 0 {
-		st.style.LineGap = sp.lineGap
-	}
-	if sp.bits&pbLeadLineCap != 0 {
-		st.style.LeadLineCap = sp.leadLineCap
-	}
-	if sp.bits&pbLineCap != 0 {
-		st.style.LineCap = sp.lineCap
-	}
-	if sp.bits&pbLineJoin != 0 {
-		st.style.LineJoin = sp.lineJoin
-	}
-	if sp.bits&pbMiterLimit != 0 {
-		st.style.MiterLimit = sp.miterLimit
-	}
-	if sp.bits&pbStrokeWidth != 0 {
-		st.style.LineWidth = sp.strokeWidth
-	}
-	if sp.bits&pbDash != 0 {
-		st.style.Dash = sp.dash
-	}
-	if sp.bits&pbDashOffset != 0 {
-		st.style.DashOffset = sp.dashOffset
-	}
-	// Quirk q1: fill-opacity and stroke-opacity multiply down the tree statically.
-	if sp.bits&pbFillOpacity != 0 {
-		st.fillOpacity *= sp.fillOpacity
-	}
-	if sp.bits&pbStrokeOpacity != 0 {
-		st.strokeOpacity *= sp.strokeOpacity
-	}
-	if sp.bits&pbVisibility != 0 {
-		st.visible = !sp.hidden
-	}
-	if sp.bits&pbMarkerStart != 0 {
-		st.style.markers[0] = sp.markers[0]
-	}
-	if sp.bits&pbMarkerMid != 0 {
-		st.style.markers[1] = sp.markers[1]
-	}
-	if sp.bits&pbMarkerEnd != 0 {
-		st.style.markers[2] = sp.markers[2]
-	}
+	sp := e.spec
 
 	// Non-inherited local properties.
 	elemOpacity := 1.0
-	if sp.bits&pbOpacity != 0 {
-		elemOpacity = sp.opacity
-	}
-	displayNone := sp.bits&pbDisplay != 0 && sp.displayNone
+	displayNone := false
 	localM := rasterx.Identity
-	if sp.bits&pbTransform != 0 && !sp.xformHasPct {
-		localM = sp.xform
-	}
-	origin := sp.origin
-	hasOrigin := sp.bits&pbTransformOrigin != 0
-	tbox := sp.tbox
+	var origin [2]svganim.OriginAxis
+	hasOrigin := false
+	var tbox transformBoxKind
 	clipID := ""
-	if sp.bits&pbClipPath != 0 {
-		clipID = sp.clipID
-	}
 	maskID := ""
-	if sp.bits&pbMask != 0 {
-		maskID = sp.maskID
+
+	// 1. Apply static cascade stylePatch onto inherited state.
+	if sp != nil {
+		ex := sp.extra
+		if ex != nil && sp.bits&pbColor != 0 && ex.color != nil {
+			st.color = ex.color
+		}
+		if sp.bits&pbFill != 0 {
+			if ex != nil && ex.fillGradID != "" {
+				if g, ok := sc.grads[ex.fillGradID]; ok {
+					st.style.fillerColor = paint{grad: localizeGradIfStopClrNil(g, parent.style.fillerColor), gradID: ex.fillGradID}
+				}
+			} else {
+				st.style.fillerColor = sp.fill
+			}
+		}
+		if sp.bits&pbStroke != 0 {
+			if ex != nil && ex.strokeGradID != "" {
+				if g, ok := sc.grads[ex.strokeGradID]; ok {
+					st.style.linerColor = paint{grad: localizeGradIfStopClrNil(g, parent.style.linerColor), gradID: ex.strokeGradID}
+				}
+			} else {
+				st.style.linerColor = sp.stroke
+			}
+		}
+		if sp.bits&pbFillRule != 0 {
+			st.style.UseNonZeroWinding = sp.nonZeroFill
+		}
+		if sp.bits&pbClipRule != 0 {
+			st.style.nonZeroClip = sp.nonZeroClip
+		}
+		if sp.bits&pbStrokeWidth != 0 {
+			st.style.LineWidth = sp.strokeWidth
+		}
+		if sp.bits&pbVisibility != 0 {
+			st.visible = !sp.hidden
+		}
+		if sp.bits&pbOpacity != 0 {
+			elemOpacity = sp.opacity
+		}
+		displayNone = sp.bits&pbDisplay != 0 && sp.displayNone
+
+		if ex != nil {
+			if sp.bits&pbLineGap != 0 {
+				st.style.LineGap = ex.lineGap
+			}
+			if sp.bits&pbLeadLineCap != 0 {
+				st.style.LeadLineCap = ex.leadLineCap
+			}
+			if sp.bits&pbLineCap != 0 {
+				st.style.LineCap = ex.lineCap
+			}
+			if sp.bits&pbLineJoin != 0 {
+				st.style.LineJoin = ex.lineJoin
+			}
+			if sp.bits&pbMiterLimit != 0 {
+				st.style.MiterLimit = ex.miterLimit
+			}
+			if sp.bits&pbDash != 0 {
+				st.style.Dash = ex.dash
+			}
+			if sp.bits&pbDashOffset != 0 {
+				st.style.DashOffset = ex.dashOffset
+			}
+			// Quirk q1: fill-opacity and stroke-opacity multiply down the tree statically.
+			if sp.bits&pbFillOpacity != 0 {
+				st.fillOpacity *= ex.fillOpacity
+			}
+			if sp.bits&pbStrokeOpacity != 0 {
+				st.strokeOpacity *= ex.strokeOpacity
+			}
+			if sp.bits&pbMarkerStart != 0 {
+				st.style.markers[0] = ex.markers[0]
+			}
+			if sp.bits&pbMarkerMid != 0 {
+				st.style.markers[1] = ex.markers[1]
+			}
+			if sp.bits&pbMarkerEnd != 0 {
+				st.style.markers[2] = ex.markers[2]
+			}
+			if sp.bits&pbTransform != 0 && !ex.xformHasPct {
+				localM = ex.xform
+			}
+			origin = ex.origin
+			hasOrigin = sp.bits&pbTransformOrigin != 0
+			tbox = ex.tbox
+			if sp.bits&pbClipPath != 0 {
+				clipID = ex.clipID
+			}
+			if sp.bits&pbMask != 0 {
+				maskID = ex.maskID
+			}
+		}
 	}
 
 	// Track whether geometry or transform was modified by animations.
-	geom := e.geom
+	geom := e.getGeom()
 	geomAnimated := false
 	xformAnimated := false
 
@@ -247,8 +285,8 @@ func (ev *evaluator) evalElem(eid svganim.ElemID, parent evalState, forceRender 
 				&localM, &xformAnimated, &origin, &hasOrigin, &tbox, &geom, &geomAnimated)
 		}
 	}
-	if !xformAnimated && sp.bits&pbTransform != 0 && sp.hasXformVal && sp.xformHasPct {
-		localM = sc.resolveTransformValue(eid, sp.xformVal, tbox)
+	if !xformAnimated && sp != nil && sp.extra != nil && sp.bits&pbTransform != 0 && sp.extra.hasXformVal && sp.extra.xformHasPct {
+		localM = sc.resolveTransformValue(eid, sp.extra.xformVal, tbox)
 	}
 
 	// 3. Apply programmatic NodeOverride (highest precedence).
@@ -262,6 +300,13 @@ func (ev *evaluator) evalElem(eid svganim.ElemID, parent evalState, forceRender 
 
 	if displayNone {
 		return
+	}
+	if forceRender {
+		ev.expanded++
+		if ev.expanded > MaxExpandedElements {
+			ev.err = ErrExpansionLimit
+			return
+		}
 	}
 
 	// 4. Compose transform: M_node = O · T(origin) · M_local · T(-origin).
@@ -308,11 +353,6 @@ func (ev *evaluator) evalElem(eid svganim.ElemID, parent evalState, forceRender 
 		if slices.Contains(ev.ancStack, target) {
 			return // cyclic <use>
 		}
-		const maxSceneUseExpansions = 10000
-		ev.useExpansions++
-		if ev.useExpansions > maxSceneUseExpansions {
-			return
-		}
 		useState := st
 		if geom.x != 0 || geom.y != 0 {
 			useState.world = st.world.Translate(geom.x, geom.y)
@@ -326,15 +366,23 @@ func (ev *evaluator) evalElem(eid svganim.ElemID, parent evalState, forceRender 
 		var path rasterx.Path
 		var lt *lengthTable
 		if geomAnimated {
-			startIdx := len(ev.fr.pathScratch)
-			geom.buildInto(&ev.fr.pathScratch)
-			path = ev.fr.pathScratch[startIdx:]
+			if geom.kind == geomPath {
+				if e.geom != nil && geom.d == e.geom.d {
+					path = e.path
+				} else {
+					path = sc.compiledPath(geom.d)
+				}
+			} else {
+				startIdx := len(ev.fr.pathScratch)
+				geom.buildInto(&ev.fr.pathScratch)
+				path = ev.fr.pathScratch[startIdx:]
+			}
 		} else {
 			path = e.path
 		}
 		if len(path) > 0 {
 			itemStyle := st.style
-			itemStyle.mAdder.M = st.world
+			itemStyle.m = st.world
 			itemStyle.FillOpacity = st.accOpacity * st.fillOpacity
 			itemStyle.LineOpacity = st.accOpacity * st.strokeOpacity
 			itemStyle.color = st.color
@@ -400,13 +448,28 @@ func (ev *evaluator) evalElem(eid svganim.ElemID, parent evalState, forceRender 
 	// 9. Recurse into children.
 	for _, cid := range e.children {
 		ev.evalElem(cid, st, forceRender)
+		if ev.err != nil {
+			return
+		}
 	}
 }
 
 func (ev *evaluator) pushClipScope(defElem svganim.ElemID, isMask bool, refWorld rasterx.Matrix2D, parentScope int32) int32 {
+	if ev.err != nil {
+		return parentScope
+	}
+	key := clipScopeKey{
+		defElem:     defElem,
+		isMask:      isMask,
+		refWorld:    refWorld,
+		parentScope: parentScope,
+	}
+	if idx, ok := ev.fr.clipScopes[key]; ok {
+		return idx
+	}
 	sc := ev.sc
 	def := &sc.elems[defElem]
-	sp := &def.spec
+	sp := def.spec
 
 	scopeIdx := int32(len(ev.fr.scopes))
 	ev.fr.scopes = append(ev.fr.scopes, clipScope{
@@ -414,32 +477,43 @@ func (ev *evaluator) pushClipScope(defElem svganim.ElemID, isMask bool, refWorld
 		isMask:  isMask,
 		parent:  parentScope,
 	})
+	if ev.fr.clipScopes == nil {
+		ev.fr.clipScopes = make(map[clipScopeKey]int32, 4)
+	}
+	ev.fr.clipScopes[key] = scopeIdx
 
 	// Evaluate the clipPath/mask element's own transform, rules, animations, and overrides.
-	displayNone := sp.bits&pbDisplay != 0 && sp.displayNone
+	displayNone := false
 	localM := rasterx.Identity
-	if sp.bits&pbTransform != 0 && !sp.xformHasPct {
-		localM = sp.xform
-	}
-	origin := sp.origin
-	hasOrigin := sp.bits&pbTransformOrigin != 0
-	tbox := sp.tbox
+	var origin [2]svganim.OriginAxis
+	hasOrigin := false
+	var tbox transformBoxKind
 
 	rootColor := ev.opts.CurrentColor
 	if rootColor == nil {
 		rootColor = color.NRGBA{0, 0, 0, 0xff}
 	}
 	clipState := defaultEvalState(refWorld, rootColor, -1)
-	if sp.bits&pbFillRule != 0 {
-		clipState.style.UseNonZeroWinding = sp.nonZeroFill
-	}
-	if sp.bits&pbClipRule != 0 {
-		clipState.style.nonZeroClip = sp.nonZeroClip
-	}
-
 	elemOpacity := 1.0
-	if isMask && sp.bits&pbOpacity != 0 {
-		elemOpacity = sp.opacity
+	if sp != nil {
+		displayNone = sp.bits&pbDisplay != 0 && sp.displayNone
+		if sp.bits&pbFillRule != 0 {
+			clipState.style.UseNonZeroWinding = sp.nonZeroFill
+		}
+		if sp.bits&pbClipRule != 0 {
+			clipState.style.nonZeroClip = sp.nonZeroClip
+		}
+		if isMask && sp.bits&pbOpacity != 0 {
+			elemOpacity = sp.opacity
+		}
+		if ex := sp.extra; ex != nil {
+			if sp.bits&pbTransform != 0 && !ex.xformHasPct {
+				localM = ex.xform
+			}
+			origin = ex.origin
+			hasOrigin = sp.bits&pbTransformOrigin != 0
+			tbox = ex.tbox
+		}
 	}
 
 	var dummyGeom geometry
@@ -452,8 +526,8 @@ func (ev *evaluator) pushClipScope(defElem svganim.ElemID, isMask bool, refWorld
 				&localM, &xformAnimated, &origin, &hasOrigin, &tbox, &dummyGeom, &dummyAnim)
 		}
 	}
-	if !xformAnimated && sp.bits&pbTransform != 0 && sp.hasXformVal && sp.xformHasPct {
-		localM = sc.resolveTransformValue(defElem, sp.xformVal, tbox)
+	if !xformAnimated && sp != nil && sp.extra != nil && sp.bits&pbTransform != 0 && sp.extra.hasXformVal && sp.extra.xformHasPct {
+		localM = sc.resolveTransformValue(defElem, sp.extra.xformVal, tbox)
 	}
 
 	var ov *NodeOverride
@@ -489,24 +563,36 @@ func (ev *evaluator) pushClipScope(defElem svganim.ElemID, isMask bool, refWorld
 	oldDest := ev.destItems
 	oldInClip := ev.inClip
 	oldAnc := ev.ancStack
-	ev.destItems = &ev.fr.clipItems
+	ev.depth++
+	if ev.depth > MaxNestingDepth {
+		ev.depth--
+		ev.err = ErrNestingDepth
+		return scopeIdx
+	}
+	var ownBuf [4]drawItem
+	ownItems := ownBuf[:0]
+	ev.destItems = &ownItems
 	ev.inClip = !isMask
 	ev.clipDepth++
 	ev.ancStack = append(ev.ancStack, defElem)
 
-	start := len(ev.fr.clipItems)
 	for _, cid := range def.children {
 		ev.evalElem(cid, clipState, true)
+		if ev.err != nil {
+			break
+		}
 	}
-	count := len(ev.fr.clipItems) - start
 
 	ev.ancStack = oldAnc
 	ev.clipDepth--
 	ev.inClip = oldInClip
 	ev.destItems = oldDest
+	ev.depth--
 
+	start := len(ev.fr.clipItems)
+	ev.fr.clipItems = append(ev.fr.clipItems, ownItems...)
 	ev.fr.scopes[scopeIdx].itemStart = int32(start)
-	ev.fr.scopes[scopeIdx].itemCount = int32(count)
+	ev.fr.scopes[scopeIdx].itemCount = int32(len(ownItems))
 	return scopeIdx
 }
 
@@ -548,23 +634,32 @@ func (ev *evaluator) emitMarkers(e *element, path rasterx.Path, geomAnimated boo
 			continue
 		}
 		def := &sc.elems[mElem]
-		sp := &def.spec
-		displayNone := sp.bits&pbDisplay != 0 && sp.displayNone
+		sp := def.spec
+		displayNone := false
 		localM := rasterx.Identity
-		if sp.bits&pbTransform != 0 && !sp.xformHasPct {
-			localM = sp.xform
-		}
-		origin := sp.origin
-		hasOrigin := sp.bits&pbTransformOrigin != 0
-		tbox := sp.tbox
+		var origin [2]svganim.OriginAxis
+		hasOrigin := false
+		var tbox transformBoxKind
 
-		mWorld := markerPlace(shapeWorld, def.attrs, v, first, lineWidth)
+		pm := sc.markerSpecs[mElem]
+		mWorld := pm.place(shapeWorld, v, first, lineWidth)
 		mState := defaultEvalState(mWorld, rootColor, shapeScope)
-		if sp.bits&pbFillRule != 0 {
-			mState.style.UseNonZeroWinding = sp.nonZeroFill
-		}
-		if sp.bits&pbClipRule != 0 {
-			mState.style.nonZeroClip = sp.nonZeroClip
+		if sp != nil {
+			displayNone = sp.bits&pbDisplay != 0 && sp.displayNone
+			if sp.bits&pbFillRule != 0 {
+				mState.style.UseNonZeroWinding = sp.nonZeroFill
+			}
+			if sp.bits&pbClipRule != 0 {
+				mState.style.nonZeroClip = sp.nonZeroClip
+			}
+			if ex := sp.extra; ex != nil {
+				if sp.bits&pbTransform != 0 && !ex.xformHasPct {
+					localM = ex.xform
+				}
+				origin = ex.origin
+				hasOrigin = sp.bits&pbTransformOrigin != 0
+				tbox = ex.tbox
+			}
 		}
 
 		elemOpacity := 1.0
@@ -578,8 +673,8 @@ func (ev *evaluator) emitMarkers(e *element, path rasterx.Path, geomAnimated boo
 					&localM, &xformAnimated, &origin, &hasOrigin, &tbox, &dummyGeom, &dummyAnim)
 			}
 		}
-		if !xformAnimated && sp.bits&pbTransform != 0 && sp.hasXformVal && sp.xformHasPct {
-			localM = sc.resolveTransformValue(mElem, sp.xformVal, tbox)
+		if !xformAnimated && sp != nil && sp.extra != nil && sp.bits&pbTransform != 0 && sp.extra.hasXformVal && sp.extra.xformHasPct {
+			localM = sc.resolveTransformValue(mElem, sp.extra.xformVal, tbox)
 		}
 		var ov *NodeOverride
 		if def.id != "" && len(ev.opts.Overrides) > 0 {
@@ -607,12 +702,24 @@ func (ev *evaluator) emitMarkers(e *element, path rasterx.Path, geomAnimated boo
 		}
 		mState.accOpacity = elemOpacity
 
+		ev.depth++
+		if ev.depth > MaxNestingDepth {
+			ev.depth--
+			ev.err = ErrNestingDepth
+			return
+		}
 		oldAnc := ev.ancStack
 		ev.ancStack = append(ev.ancStack, mElem)
 		for _, cid := range def.children {
 			ev.evalElem(cid, mState, true)
+			if ev.err != nil {
+				ev.ancStack = oldAnc
+				ev.depth--
+				return
+			}
 		}
 		ev.ancStack = oldAnc
+		ev.depth--
 	}
 }
 
@@ -938,8 +1045,8 @@ func (ev *evaluator) applyAnimations(
 	}
 	if mask.Has(svganim.PropTransform) {
 		var base svganim.Value
-		if e.spec.hasXformVal {
-			base = e.spec.xformVal
+		if e.spec != nil && e.spec.extra != nil && e.spec.extra.hasXformVal {
+			base = e.spec.extra.xformVal
 		} else if *localM != rasterx.Identity {
 			m := *localM
 			base = svganim.Value{

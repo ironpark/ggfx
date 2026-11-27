@@ -110,7 +110,7 @@ func (s *SvgIcon) AppendBinary(b []byte) ([]byte, error) {
 		if p.UseNonZeroWinding {
 			flags |= binaryNonZero
 		}
-		if p.mAdder.M != rasterx.Identity {
+		if p.m != rasterx.Identity {
 			flags |= binaryMatrix
 		}
 		if i > 0 && sameStyle(p, &s.SVGPaths[i-1]) {
@@ -145,7 +145,7 @@ func (s *SvgIcon) AppendBinary(b []byte) ([]byte, error) {
 			}
 		}
 		if flags&binaryMatrix != 0 {
-			m := p.mAdder.M
+			m := p.m
 			for _, v := range []float64{m.A, m.B, m.C, m.D, m.E, m.F} {
 				b = appendFloat(b, v)
 			}
@@ -173,7 +173,7 @@ func sameStyle(a, b *SvgPath) bool {
 		a.LineWidth == b.LineWidth && a.DashOffset == b.DashOffset && a.MiterLimit == b.MiterLimit &&
 		slices.Equal(a.Dash, b.Dash) && a.UseNonZeroWinding == b.UseNonZeroWinding &&
 		capOf(a.LineCap) == capOf(b.LineCap) && capOf(a.LeadLineCap) == capOf(b.LeadLineCap) &&
-		gapOf(a.LineGap) == gapOf(b.LineGap) && a.LineJoin == b.LineJoin && a.mAdder.M == b.mAdder.M
+		gapOf(a.LineGap) == gapOf(b.LineGap) && a.LineJoin == b.LineJoin && a.m == b.m
 }
 
 // appendFloat appends v in four bytes where a float32 holds it exactly,
@@ -319,7 +319,7 @@ func ReadBinary(data []byte) (*SvgIcon, error) {
 			}
 		}
 		if flags&binaryMatrix != 0 {
-			p.mAdder.M = rasterx.Matrix2D{A: r.float(), B: r.float(), C: r.float(), D: r.float(), E: r.float(), F: r.float()}
+			p.m = rasterx.Matrix2D{A: r.float(), B: r.float(), C: r.float(), D: r.float(), E: r.float(), F: r.float()}
 		}
 		p.Path = r.path()
 		if r.err != nil || !validPath(p.Path) {

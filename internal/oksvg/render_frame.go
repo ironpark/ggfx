@@ -19,43 +19,51 @@ var framePool = sync.Pool{
 	},
 }
 
-func renderFrame(p *Painter, fr *frame, masksBuf *[]*image.Alpha, opacity float64, t rasterx.Matrix2D) {
+func renderFrame(p *Painter, fr *frame, clipsBuf *[]clipResult, opacity float64, t rasterx.Matrix2D) {
+	p.resetAlphaPool()
+	p.Dasher.BeginDraw()
 	nScopes := len(fr.scopes)
-	var masks []*image.Alpha
+	var clips []clipResult
 	if nScopes > 0 {
-		if masksBuf != nil {
-			if cap(*masksBuf) < nScopes {
-				*masksBuf = make([]*image.Alpha, nScopes)
+		if clipsBuf != nil {
+			if cap(*clipsBuf) < nScopes {
+				*clipsBuf = make([]clipResult, nScopes)
 			} else {
-				*masksBuf = (*masksBuf)[:nScopes]
-				clear(*masksBuf)
+				*clipsBuf = (*clipsBuf)[:nScopes]
+				clear(*clipsBuf)
 			}
-			masks = *masksBuf
+			clips = *clipsBuf
 		} else {
-			masks = make([]*image.Alpha, nScopes)
+			clips = make([]clipResult, nScopes)
 		}
 	}
 
 	prevCC := p.currentColor
 	defer func() {
+		p.Dasher.EndDraw()
 		p.currentColor = prevCC
-		if masksBuf != nil && len(*masksBuf) > 0 {
-			clear(*masksBuf)
+		p.resetAlphaPool()
+		if clipsBuf != nil && len(*clipsBuf) > 0 {
+			clear(*clipsBuf)
 		}
 	}()
 
+	targetBounds := p.Scanner.Targ
+	if p.Scanner.Dest != nil {
+		targetBounds = p.Scanner.Dest.Bounds()
+	}
 	for i := range fr.items {
 		it := &fr.items[i]
 		if !it.visible {
 			continue
 		}
-		var mask *image.Alpha
+		var clip clipResult
 		if it.scope >= 0 {
-			mask = scopeMask(p, fr, masks, it.scope, t)
+			clip = scopeClip(p, fr, clips, it.scope, t, targetBounds)
 		}
 		p.currentColor = it.style.color
 		svgp := SvgPath{PathStyle: it.style, Path: it.path}
-		svgp.drawThroughTrim(p, opacity, t, mask, it.trim, it.lens)
+		svgp.drawThroughTrim(p, opacity, t, clip, it.trim, it.lens)
 	}
 }
 
@@ -65,7 +73,7 @@ type Renderer struct {
 	icon    *SvgIcon
 	painter *Painter
 	fr      frame
-	masks   []*image.Alpha
+	clips   []clipResult
 }
 
 // NewRenderer creates a reusable Renderer for s.
@@ -78,12 +86,19 @@ func (s *SvgIcon) NewRenderer() *Renderer {
 
 // Draw draws the icon onto dst with geoM and opts using the renderer's pooled state.
 func (r *Renderer) Draw(dst *image.RGBA, geoM rasterx.Matrix2D, opts *EvalOptions) {
+	_ = r.DrawErr(dst, geoM, opts)
+}
+
+// DrawErr draws the icon onto dst with geoM and opts using the renderer's pooled
+// state, returning any evaluation limit error (ErrNestingDepth or ErrExpansionLimit)
+// without modifying dst.
+func (r *Renderer) DrawErr(dst *image.RGBA, geoM rasterx.Matrix2D, opts *EvalOptions) error {
 	if r == nil || r.icon == nil || dst == nil {
-		return
+		return nil
 	}
 	b := dst.Bounds()
 	if b.Empty() {
-		return
+		return nil
 	}
 	if r.painter == nil {
 		r.painter = NewPainter(0, 0, nil, image.Rectangle{})
@@ -94,17 +109,21 @@ func (r *Renderer) Draw(dst *image.RGBA, geoM rasterx.Matrix2D, opts *EvalOption
 	defer func() {
 		// Drop reference to caller's dst image while keeping caches warm.
 		p.Scanner.Dest = nil
+		p.Scanner.SetCoverageScale(1)
 		p.Scanner.SetPaint(rasterx.Paint{})
+		p.Dasher.EndDraw()
 		p.currentColor = nil
 		if p.clips != nil {
 			p.clips.Scanner.Dest = nil
+			p.clips.Scanner.SetCoverageScale(1)
 			p.clips.Scanner.SetPaint(rasterx.Paint{})
+			p.clips.Dasher.EndDraw()
 			p.clips.currentColor = nil
 		}
 		r.fr.reset()
 	}()
 
-	r.icon.drawWithPainter(p, &r.fr, &r.masks, 1, geoM, opts)
+	return r.icon.drawWithPainter(p, &r.fr, &r.clips, 1, geoM, opts)
 }
 
 // Release drops cached painters and scratch buffers held by r.
@@ -115,19 +134,27 @@ func (r *Renderer) Release() {
 	if r.painter != nil {
 		r.painter.Release()
 		r.painter.gradCache = nil
+		r.painter.gradTables = nil
 		r.painter = nil
 	}
 	r.fr = frame{}
-	r.masks = nil
+	r.clips = nil
 }
 
 // DrawWith draws s using p under transform t with opts. Safe for concurrent calls
 // on the same SvgIcon when each caller passes its own Painter.
 func (s *SvgIcon) DrawWith(p *Painter, t rasterx.Matrix2D, opts *EvalOptions) {
-	s.drawWithPainter(p, nil, nil, 1, t, opts)
+	_ = s.DrawWithErr(p, t, opts)
 }
 
-func (s *SvgIcon) drawWithPainter(p *Painter, fr *frame, masksBuf *[]*image.Alpha, opacity float64, t rasterx.Matrix2D, opts *EvalOptions) {
+// DrawWithErr draws s using p under transform t with opts, returning any
+// evaluation limit error (ErrNestingDepth or ErrExpansionLimit) without
+// modifying p.Scanner.Dest.
+func (s *SvgIcon) DrawWithErr(p *Painter, t rasterx.Matrix2D, opts *EvalOptions) error {
+	return s.drawWithPainter(p, nil, nil, 1, t, opts)
+}
+
+func (s *SvgIcon) drawWithPainter(p *Painter, fr *frame, clipsBuf *[]clipResult, opacity float64, t rasterx.Matrix2D, opts *EvalOptions) error {
 	if s.canUseFastPath(opts) {
 		prevCC := p.currentColor
 		if opts != nil {
@@ -137,7 +164,7 @@ func (s *SvgIcon) drawWithPainter(p *Painter, fr *frame, masksBuf *[]*image.Alph
 		}
 		s.drawLegacyTransformed(p, opacity, t)
 		p.currentColor = prevCC
-		return
+		return nil
 	}
 	if s.scene == nil {
 		// Unmarshaled binary icon has no scene; overrides are no-ops, currentColor works on fast path.
@@ -149,19 +176,22 @@ func (s *SvgIcon) drawWithPainter(p *Painter, fr *frame, masksBuf *[]*image.Alph
 		}
 		s.drawLegacyTransformed(p, opacity, t)
 		p.currentColor = prevCC
-		return
+		return nil
 	}
 	pooled := false
 	if fr == nil {
 		fr = framePool.Get().(*frame)
 		pooled = true
 	}
-	s.scene.evaluate(fr, opts)
-	renderFrame(p, fr, masksBuf, opacity, t)
+	err := s.scene.evaluate(fr, opts)
+	if err == nil {
+		renderFrame(p, fr, clipsBuf, opacity, t)
+	}
 	if pooled {
 		fr.reset()
 		framePool.Put(fr)
 	}
+	return err
 }
 
 // ForceSceneDraw draws s unconditionally through the scene graph in static mode.
@@ -172,8 +202,9 @@ func (s *SvgIcon) ForceSceneDraw(p *Painter, opacity float64, t rasterx.Matrix2D
 		return
 	}
 	fr := framePool.Get().(*frame)
-	s.scene.evaluate(fr, &EvalOptions{Animate: false})
-	renderFrame(p, fr, nil, opacity, t)
+	if err := s.scene.evaluate(fr, &EvalOptions{Animate: false}); err == nil {
+		renderFrame(p, fr, nil, opacity, t)
+	}
 	fr.reset()
 	framePool.Put(fr)
 }
@@ -296,7 +327,9 @@ func (s *SvgIcon) Bounds(id string, opts *EvalOptions) (svganim.Rect, bool) {
 		fr.reset()
 		framePool.Put(fr)
 	}()
-	s.scene.evaluate(fr, opts)
+	if err := s.scene.evaluate(fr, opts); err != nil {
+		return svganim.Rect{}, false
+	}
 
 	minX, minY := math.Inf(1), math.Inf(1)
 	maxX, maxY := math.Inf(-1), math.Inf(-1)

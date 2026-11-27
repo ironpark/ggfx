@@ -114,7 +114,8 @@ func (d *Document) NodeIDs() []string {
 }
 
 // Bounds returns the bounding box of the element with id in document user space
-// evaluated at opts (nil means static base state).
+// evaluated at opts (nil means static base state). It returns (Rect{}, false) if
+// id is not rendered or if evaluation exceeds ErrNestingDepth or ErrExpansionLimit.
 func (d *Document) Bounds(id string, opts *DrawOptions) (Rect, bool) {
 	if d == nil || d.icon == nil || id == "" {
 		return Rect{}, false
@@ -145,16 +146,25 @@ type DrawOptions struct {
 }
 
 // DrawWith draws d over dst with geoM and opts. It mutates nothing in d and is
-// safe to call concurrently from multiple goroutines.
+// safe to call concurrently from multiple goroutines. It discards any draw-time
+// limit error; use DrawWithErr to observe ErrNestingDepth or ErrExpansionLimit.
 func (d *Document) DrawWith(dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) {
+	_ = d.DrawWithErr(dst, geoM, opts)
+}
+
+// DrawWithErr draws d over dst with geoM and opts. It mutates nothing in d and
+// is safe to call concurrently from multiple goroutines. If evaluation exceeds
+// the nesting or expansion limit (returning ErrNestingDepth or ErrExpansionLimit),
+// dst is left untouched, Bounds reports false for that state, and subsequent
+// under-budget frames render normally.
+func (d *Document) DrawWithErr(dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) error {
 	if d == nil || d.icon == nil || dst == nil {
-		return
+		return nil
 	}
 	if opts == nil {
-		d.Draw(dst, geoM)
-		return
+		return d.DrawErr(dst, geoM)
 	}
-	docDrawWithImpl(d, dst, geoM, opts)
+	return docDrawWithErrImpl(d, dst, geoM, opts)
 }
 
 // Renderer is a reusable, stateful renderer bound to a single Document.
@@ -172,16 +182,25 @@ func (d *Document) NewRenderer() *Renderer {
 	return &Renderer{doc: d, impl: newRendererImpl(d)}
 }
 
-// Draw draws the renderer's document over dst with geoM and opts.
+// Draw draws the renderer's document over dst with geoM and opts. It discards
+// any draw-time limit error; use DrawErr to observe ErrNestingDepth or
+// ErrExpansionLimit.
 func (r *Renderer) Draw(dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) {
+	_ = r.DrawErr(dst, geoM, opts)
+}
+
+// DrawErr draws the renderer's document over dst with geoM and opts. If
+// evaluation exceeds the nesting or expansion limit (returning ErrNestingDepth
+// or ErrExpansionLimit), dst is left untouched, Bounds reports false for that
+// state, and subsequent under-budget frames render normally.
+func (r *Renderer) DrawErr(dst *image.RGBA, geoM ggfx.GeoM, opts *DrawOptions) error {
 	if r == nil || r.doc == nil || r.doc.icon == nil || dst == nil {
-		return
+		return nil
 	}
 	if opts == nil {
-		r.doc.Draw(dst, geoM)
-		return
+		return r.doc.DrawErr(dst, geoM)
 	}
-	rendererDrawImpl(r, dst, geoM, opts)
+	return rendererDrawErrImpl(r, dst, geoM, opts)
 }
 
 // Release frees cached painters and scratch buffers held by r.

@@ -55,6 +55,7 @@ type (
 	Filler struct {
 		Scanner
 		a, first fixed.Point26_6
+		bounds   image.Point
 	}
 )
 
@@ -265,6 +266,7 @@ func (r *Filler) SetBounds(width, height int) {
 	if height < 0 {
 		height = 0
 	}
+	r.bounds = image.Point{X: width, Y: height}
 	r.Scanner.SetBounds(width, height)
 	r.Clear()
 }

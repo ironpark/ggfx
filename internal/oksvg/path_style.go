@@ -17,12 +17,13 @@ type PathStyle struct {
 	Dash                              []float64
 	UseNonZeroWinding                 bool
 	nonZeroClip                       bool // clip-rule: nonzero, for a clipPath's shapes
+	displayNone                       bool // element or ancestor has display:none
 	fillerColor, linerColor           paint
 	LineGap                           rasterx.GapFunc
 	LeadLineCap                       rasterx.CapFunc // This is used if different than LineCap
 	LineCap                           rasterx.CapFunc
 	LineJoin                          rasterx.JoinMode
-	mAdder                            rasterx.MatrixAdder // current transform
+	m                                 rasterx.Matrix2D // current transform
 	// clip is the clip or mask the shapes are drawn through, inherited by
 	// a group's; nil for none. See clip.go.
 	clip *clipUse
@@ -58,5 +59,5 @@ var currentColorMark color.Color = currentColorSentinel{}
 var defaultStyle = PathStyle{
 	FillOpacity: 1.0, LineOpacity: 1.0, LineWidth: 2.0, MiterLimit: 4.0,
 	UseNonZeroWinding: true, nonZeroClip: true, fillerColor: paint{color: color.NRGBA{0x00, 0x00, 0x00, 0xff}},
-	LineCap: rasterx.ButtCap, LineJoin: rasterx.Bevel, mAdder: rasterx.MatrixAdder{M: rasterx.Identity},
+	LineCap: rasterx.ButtCap, LineJoin: rasterx.Bevel, m: rasterx.Identity,
 }

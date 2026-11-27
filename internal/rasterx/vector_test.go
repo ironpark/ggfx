@@ -106,7 +106,7 @@ func TestScannerDrawsAsVector(t *testing.T) {
 					s.Dest = part
 					s.SetClip(clip)
 					s.Draw()
-					s.SetClip(image.ZR)
+					s.SetClip(image.Rectangle{})
 					for y := 0; y < size.Y; y++ {
 						for x := 0; x < size.X; x++ {
 							w := bg.RGBAAt(x, y)

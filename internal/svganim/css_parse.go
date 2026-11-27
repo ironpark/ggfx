@@ -81,11 +81,22 @@ type mediaBlock struct {
 	keyframes map[string]*cssKeyframesRule
 }
 
+type selectorRef struct {
+	ruleIdx int32
+	selIdx  int32
+}
+
 type stylesheetImpl struct {
 	rules       []cssRule
 	keyframes   map[string]*cssKeyframesRule
 	mediaBlocks []mediaBlock
 	nextOrder   int
+
+	indexed   bool
+	byID      map[string][]selectorRef
+	byClass   map[string][]selectorRef
+	byTag     map[string][]selectorRef
+	universal []selectorRef
 }
 
 func newStylesheetImpl() *stylesheetImpl {
@@ -175,9 +186,21 @@ func findMatchingBrace(src string, openIdx int) int {
 	return n
 }
 
+const maxCSSNestingDepth = 32
+
 // parseCSSInto parses a CSS text block into rules, keyframes, and stored @media blocks.
 func (ss *stylesheetImpl) parseCSSInto(raw string, rulesDst *[]cssRule, kfDst map[string]*cssKeyframesRule, diags *[]Diag) {
 	src := stripCSSComments(raw)
+	ss.parseStrippedCSSInto(src, rulesDst, kfDst, diags, 0)
+}
+
+func (ss *stylesheetImpl) parseStrippedCSSInto(src string, rulesDst *[]cssRule, kfDst map[string]*cssKeyframesRule, diags *[]Diag, depth int) {
+	if depth > maxCSSNestingDepth {
+		if diags != nil {
+			*diags = append(*diags, Diag{Elem: -1, Message: "CSS @media nesting depth limit exceeded"})
+		}
+		return
+	}
 	n := len(src)
 	i := 0
 
@@ -244,13 +267,17 @@ func (ss *stylesheetImpl) parseCSSInto(raw string, rulesDst *[]cssRule, kfDst ma
 					kfDst[kf.name] = kf
 				}
 			case "media":
-				if kind, val, ok := parseStoredMediaQuery(prelude); ok {
+				if depth >= maxCSSNestingDepth {
+					if diags != nil {
+						*diags = append(*diags, Diag{Elem: -1, Message: "CSS @media nesting depth limit exceeded"})
+					}
+				} else if kind, val, ok := parseStoredMediaQuery(prelude); ok {
 					mb := mediaBlock{
 						kind:      kind,
 						value:     val,
 						keyframes: make(map[string]*cssKeyframesRule),
 					}
-					ss.parseCSSInto(body, &mb.rules, mb.keyframes, diags)
+					ss.parseStrippedCSSInto(body, &mb.rules, mb.keyframes, diags, depth+1)
 					ss.mediaBlocks = append(ss.mediaBlocks, mb)
 				}
 				// Other @media blocks are skipped leniently.
@@ -370,12 +397,15 @@ func parseKeyframesBlock(prelude, body string) *cssKeyframesRule {
 		return nil
 	}
 
-	// Map offset -> merged declaration map (preserving order).
+	// Bucket stops by 2e-9 intervals (floor(off*5e8)); any stop within 1e-9 of off
+	// lies in bucket b-1, b, or b+1, and each bucket holds at most two stops.
 	type stopAccum struct {
-		offset float64
-		decls  []Decl
+		offset  float64
+		decls   []Decl
+		declIdx map[string]int
 	}
 	var stops []stopAccum
+	buckets := make(map[int64][]int)
 
 	n := len(body)
 	i := 0
@@ -426,16 +456,24 @@ func parseKeyframesBlock(prelude, body string) *cssKeyframesRule {
 		}
 
 		for _, off := range offsets {
-			found := false
-			for idx := range stops {
-				if math.Abs(stops[idx].offset-off) < 1e-9 {
-					stops[idx].decls = mergeKeyframeDecls(stops[idx].decls, filtered)
-					found = true
-					break
+			b := int64(math.Floor(off * 5e8))
+			matchIdx := -1
+			for nb := b - 1; nb <= b+1; nb++ {
+				for _, idx := range buckets[nb] {
+					if math.Abs(stops[idx].offset-off) < 1e-9 {
+						if matchIdx < 0 || idx < matchIdx {
+							matchIdx = idx
+						}
+					}
 				}
 			}
-			if !found {
-				stops = append(stops, stopAccum{offset: off, decls: mergeKeyframeDecls(nil, filtered)})
+			if matchIdx >= 0 {
+				stops[matchIdx].decls, stops[matchIdx].declIdx = mergeKeyframeDecls(stops[matchIdx].decls, stops[matchIdx].declIdx, filtered)
+			} else {
+				decls, declIdx := mergeKeyframeDecls(nil, nil, filtered)
+				idx := len(stops)
+				buckets[b] = append(buckets[b], idx)
+				stops = append(stops, stopAccum{offset: off, decls: decls, declIdx: declIdx})
 			}
 		}
 	}
@@ -445,12 +483,29 @@ func parseKeyframesBlock(prelude, body string) *cssKeyframesRule {
 	})
 	out := make([]rawKeyframeStop, len(stops))
 	for i, s := range stops {
-		out[i] = rawKeyframeStop(s)
+		out[i] = rawKeyframeStop{offset: s.offset, decls: s.decls}
 	}
 	return &cssKeyframesRule{name: name, stops: out}
 }
 
-func mergeKeyframeDecls(base, add []Decl) []Decl {
+func mergeKeyframeDecls(base []Decl, idxMap map[string]int, add []Decl) ([]Decl, map[string]int) {
+	if idxMap == nil && len(base)+len(add) > 8 {
+		idxMap = make(map[string]int, len(base)+len(add))
+		for i, d := range base {
+			idxMap[d.Name] = i
+		}
+	}
+	if idxMap != nil {
+		for _, d := range add {
+			if pos, ok := idxMap[d.Name]; ok {
+				base[pos] = d
+			} else {
+				idxMap[d.Name] = len(base)
+				base = append(base, d)
+			}
+		}
+		return base, idxMap
+	}
 	for _, d := range add {
 		replaced := false
 		for i := range base {
@@ -464,7 +519,7 @@ func mergeKeyframeDecls(base, add []Decl) []Decl {
 			base = append(base, d)
 		}
 	}
-	return base
+	return base, nil
 }
 
 func parseKeyframeSelectors(selText string) []float64 {

@@ -45,6 +45,7 @@ func (b *builderImpl) Compile(sv SceneView) (*AnimSet, *Stylesheet, []Diag) {
 	for _, text := range b.styles {
 		ssImpl.parseCSSInto(text, &ssImpl.rules, ssImpl.keyframes, &diags)
 	}
+	ssImpl.buildIndex()
 	sheet := &Stylesheet{impl: ssImpl}
 
 	// 2. Compile SMIL animations.

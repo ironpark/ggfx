@@ -15,6 +15,7 @@
 package oksvg_test
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -132,12 +133,9 @@ func TestReadIconStreamNestedUse(t *testing.T) {
 	}
 	fmt.Fprintf(&svg, `</defs><use href="#g%d"/></svg>`, n)
 
-	icon, err := oksvg.ReadIconStream(strings.NewReader(svg.String()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := len(icon.SVGPaths), 1<<n; got >= want {
-		t.Errorf("len(icon.SVGPaths): got: %d, want: < %d", got, want)
+	_, err := oksvg.ReadIconStream(strings.NewReader(svg.String()))
+	if !errors.Is(err, oksvg.ErrExpansionLimit) {
+		t.Errorf("ReadIconStream: got err=%v, want %v", err, oksvg.ErrExpansionLimit)
 	}
 }
 

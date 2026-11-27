@@ -15,11 +15,20 @@ import (
 )
 
 type (
-	// Paint is what a path is drawn with: Func's color at each pixel, or
-	// where Func is nil, Color at every one.
+	// SpanPainter blends a horizontal row span of pixels over pix using
+	// coverage alphas in mask (0..0xffff) and an optional per-pixel alpha mask
+	// row in alphaMask (0..0xff, or nil if unmasked). x0 and y are in paint
+	// coordinates.
+	SpanPainter interface {
+		BlendSpan(pix []uint8, mask []uint32, alphaMask []uint8, x0, y int)
+	}
+
+	// Paint is what a path is drawn with: Span if non-nil, else Func's color at
+	// each pixel, or where both are nil, Color at every one.
 	Paint struct {
 		Color color.RGBA64 // alpha-premultiplied, as color.Color.RGBA gives it
 		Func  ColorFunc
+		Span  SpanPainter
 	}
 
 	// ScannerGV rasterizes paths with golang.org/x/image/vector's line
@@ -28,6 +37,9 @@ type (
 	// does. See raster.go.
 	ScannerGV struct {
 		Dest *image.RGBA
+		// DestAlpha, when non-nil and Dest is nil, receives coverage directly
+		// as single-channel alpha (used for clipPath masks).
+		DestAlpha *image.Alpha
 		// Targ is where the mask goes in Dest: its origin at Targ.Min,
 		// as far as Targ.Max. Dest may hold only part of it.
 		Targ image.Rectangle
@@ -41,6 +53,9 @@ type (
 
 		paint                  Paint
 		clip                   image.Rectangle
+		alphaMask              *image.Alpha
+		covScale               uint32
+		covSkip                bool
 		evenOdd                bool
 		size                   image.Point
 		z                      rasterizer
@@ -82,10 +97,42 @@ func (s *ScannerGV) SetPaint(p Paint) {
 }
 
 // SetClip sets an optional clipping rectangle to restrict rendering only to
-// that region -- if size is 0 then ignored (set to image.ZR to clear). It
-// is in the coordinates Paint.Func is given.
+// that region -- if size is 0 then ignored (set to image.Rectangle{} to clear).
+// It is in the coordinates Paint.Func is given.
 func (s *ScannerGV) SetClip(rect image.Rectangle) {
 	s.clip = rect
+}
+
+// SetAlphaMask sets an optional per-pixel alpha mask (in paint coordinates)
+// that modulates every pixel drawn until cleared with SetAlphaMask(nil).
+func (s *ScannerGV) SetAlphaMask(mask *image.Alpha) {
+	s.alphaMask = mask
+}
+
+// SetCoverageScale scales subsequent Draw coverage by scale in [0, 1].
+// Values >= 1 disable scaling; values <= 0 skip drawing.
+func (s *ScannerGV) SetCoverageScale(scale float64) {
+	if scale <= 0 || math.IsNaN(scale) {
+		s.covSkip = true
+		s.covScale = 0
+		return
+	}
+	s.covSkip = false
+	if scale >= 1 {
+		s.covScale = 0
+		return
+	}
+	v := uint32(math.Round(scale * 0xffff))
+	if v == 0 {
+		s.covSkip = true
+		s.covScale = 0
+		return
+	}
+	if v >= 0xffff {
+		s.covScale = 0
+		return
+	}
+	s.covScale = v
 }
 
 func (s *ScannerGV) set(a fixed.Point26_6) {
@@ -117,21 +164,30 @@ func (s *ScannerGV) Line(b fixed.Point26_6) {
 
 // Draw renders the accumulate scan to the desination
 func (s *ScannerGV) Draw() {
-	if len(s.pts) == 0 {
+	if len(s.pts) == 0 || s.covSkip {
 		return
 	}
 	r := s.window().Intersect(image.Rectangle{Max: s.Targ.Size()})
-	if s.clip != image.ZR {
+	if s.clip != (image.Rectangle{}) {
 		r = r.Intersect(s.clip.Sub(s.Offset))
+	}
+	if s.alphaMask != nil {
+		r = r.Intersect(s.alphaMask.Rect.Sub(s.Offset))
 	}
 	if s.Dest != nil {
 		r = r.Intersect(s.Dest.Rect.Sub(s.Targ.Min))
+	} else if s.DestAlpha != nil {
+		r = r.Intersect(s.DestAlpha.Rect.Sub(s.Targ.Min))
 	}
 	if r.Empty() {
 		return
 	}
 	s.Touched = s.Touched.Union(r.Add(s.Targ.Min))
 	if s.Dest == nil {
+		if s.DestAlpha != nil {
+			s.rasterize(r)
+			s.drawAlpha(s.DestAlpha)
+		}
 		return
 	}
 	s.rasterize(r)
@@ -179,20 +235,115 @@ func (s *ScannerGV) rasterize(win image.Rectangle) {
 func (s *ScannerGV) drawRGBA(dst *image.RGBA) {
 	z := &s.z
 	r := z.win
+	span := s.paint.Span
 	f := s.paint.Func
+	am := s.alphaMask
+	x0 := s.Offset.X + r.Min.X
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		mask := z.rowAlphas(y)
+		if s.covScale != 0 {
+			sc := s.covScale
+			for i, ma := range mask {
+				if ma != 0 {
+					mask[i] = (ma*sc + 0x7fff) / 0xffff
+				}
+			}
+		}
 		pix := dst.Pix[dst.PixOffset(s.Targ.Min.X+r.Min.X, s.Targ.Min.Y+y):]
-		if f == nil {
-			blend(pix, mask, s.paint.Color)
+		var amRow []uint8
+		if am != nil {
+			off := am.PixOffset(x0, s.Offset.Y+y)
+			amRow = am.Pix[off : off+len(mask) : off+len(mask)]
+		}
+		if span != nil {
+			span.BlendSpan(pix, mask, amRow, x0, s.Offset.Y+y)
 			continue
 		}
-		for i, ma := range mask {
-			if ma != 0 {
-				blend(pix[4*i:], mask[i:i+1], f(s.Offset.X+r.Min.X+i, s.Offset.Y+y))
+		if f == nil {
+			if amRow == nil {
+				blend(pix, mask, s.paint.Color)
+			} else {
+				blendMasked(pix, mask, amRow, s.paint.Color)
+			}
+			continue
+		}
+		py := s.Offset.Y + y
+		if amRow == nil {
+			for i, ma := range mask {
+				if ma != 0 {
+					blendOne(pix[4*i:4*i+4:4*i+4], ma, f(x0+i, py))
+				}
+			}
+		} else {
+			for i, ma := range mask {
+				if ma == 0 {
+					continue
+				}
+				a := uint32(amRow[i])
+				if a == 0 {
+					continue
+				}
+				c := f(x0+i, py)
+				if a < 255 {
+					c = color.RGBA64{
+						R: uint16(uint32(c.R) * a / 255),
+						G: uint16(uint32(c.G) * a / 255),
+						B: uint16(uint32(c.B) * a / 255),
+						A: uint16(uint32(c.A) * a / 255),
+					}
+				}
+				blendOne(pix[4*i:4*i+4:4*i+4], ma, c)
 			}
 		}
 	}
+}
+
+// drawAlpha composites opaque coverage directly into a single-channel alpha
+// image, matching opaque white drawn into an RGBA buffer bit for bit.
+func (s *ScannerGV) drawAlpha(dst *image.Alpha) {
+	z := &s.z
+	r := z.win
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		mask := z.rowAlphas(y)
+		if s.covScale != 0 {
+			sc := s.covScale
+			for i, ma := range mask {
+				if ma != 0 {
+					mask[i] = (ma*sc + 0x7fff) / 0xffff
+				}
+			}
+		}
+		pix := dst.Pix[dst.PixOffset(s.Targ.Min.X+r.Min.X, s.Targ.Min.Y+y):]
+		for i, ma := range mask {
+			if ma == 0 {
+				continue
+			}
+			if ma == 0xffff {
+				pix[i] = 0xff
+				continue
+			}
+			d := uint32(pix[i])
+			if d == 0 {
+				pix[i] = uint8(ma >> 8)
+				continue
+			}
+			a := 0xffff - ma
+			pix[i] = uint8(uint16((d*0x101*a+0xffff*ma)/0xffff) >> 8)
+		}
+	}
+}
+
+func blendOne(q []uint8, ma uint32, c color.RGBA64) {
+	sr, sg, sb, sa := uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
+	if ma == 0xffff && sa == 0xffff {
+		q[0], q[1], q[2], q[3] = uint8(sr>>8), uint8(sg>>8), uint8(sb>>8), 0xff
+		return
+	}
+	a := 0xffff - (sa * ma / 0xffff)
+	q[0] = uint8(uint16((uint32(q[0])*0x101*a+sr*ma)/0xffff) >> 8)
+	q[1] = uint8(uint16((uint32(q[1])*0x101*a+sg*ma)/0xffff) >> 8)
+	q[2] = uint8(uint16((uint32(q[2])*0x101*a+sb*ma)/0xffff) >> 8)
+	q[3] = uint8(uint16((uint32(q[3])*0x101*a+sa*ma)/0xffff) >> 8)
 }
 
 // blend draws c through the mask's alphas over the pixels p, four bytes
@@ -208,6 +359,43 @@ func blend(p []uint8, mask []uint32, c color.RGBA64) {
 			q[0], q[1], q[2], q[3] = uint8(sr>>8), uint8(sg>>8), uint8(sb>>8), 0xff
 			continue
 		}
+		a := 0xffff - (sa * ma / 0xffff)
+		q[0] = uint8(uint16((uint32(q[0])*0x101*a+sr*ma)/0xffff) >> 8)
+		q[1] = uint8(uint16((uint32(q[1])*0x101*a+sg*ma)/0xffff) >> 8)
+		q[2] = uint8(uint16((uint32(q[2])*0x101*a+sb*ma)/0xffff) >> 8)
+		q[3] = uint8(uint16((uint32(q[3])*0x101*a+sa*ma)/0xffff) >> 8)
+	}
+}
+
+// blendMasked draws c through mask modulated by alphaMask over pixels p.
+func blendMasked(p []uint8, mask []uint32, alphaMask []uint8, c color.RGBA64) {
+	cr, cg, cb, ca := uint32(c.R), uint32(c.G), uint32(c.B), uint32(c.A)
+	cr8, cg8, cb8 := uint8(cr>>8), uint8(cg>>8), uint8(cb>>8)
+	for i, ma := range mask {
+		if ma == 0 {
+			continue
+		}
+		am := uint32(alphaMask[i])
+		if am == 0 {
+			continue
+		}
+		q := p[4*i : 4*i+4 : 4*i+4]
+		if am == 255 {
+			if ma == 0xffff && ca == 0xffff {
+				q[0], q[1], q[2], q[3] = cr8, cg8, cb8, 0xff
+				continue
+			}
+			a := 0xffff - (ca * ma / 0xffff)
+			q[0] = uint8(uint16((uint32(q[0])*0x101*a+cr*ma)/0xffff) >> 8)
+			q[1] = uint8(uint16((uint32(q[1])*0x101*a+cg*ma)/0xffff) >> 8)
+			q[2] = uint8(uint16((uint32(q[2])*0x101*a+cb*ma)/0xffff) >> 8)
+			q[3] = uint8(uint16((uint32(q[3])*0x101*a+ca*ma)/0xffff) >> 8)
+			continue
+		}
+		sr := cr * am / 255
+		sg := cg * am / 255
+		sb := cb * am / 255
+		sa := ca * am / 255
 		a := 0xffff - (sa * ma / 0xffff)
 		q[0] = uint8(uint16((uint32(q[0])*0x101*a+sr*ma)/0xffff) >> 8)
 		q[1] = uint8(uint16((uint32(q[1])*0x101*a+sg*ma)/0xffff) >> 8)
