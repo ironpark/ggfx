@@ -24,16 +24,10 @@ import (
 )
 
 const (
-	_VER_BUILDNUMBER      = 0x00000004
-	_VER_GREATER_EQUAL    = 3
-	_VER_MAJORVERSION     = 0x00000002
-	_VER_MINORVERSION     = 0x00000001
-	_VER_SERVICEPACKMAJOR = 0x00000020
-	_WIN32_WINNT_VISTA    = 0x0600
-	_WIN32_WINNT_WIN7     = 0x0601
-	_WIN32_WINNT_WIN8     = 0x0602
-	_WIN32_WINNT_WINBLUE  = 0x0603
-	_WIN32_WINNT_WINXP    = 0x0501
+	_VER_BUILDNUMBER   = 0x00000004
+	_VER_GREATER_EQUAL = 3
+	_VER_MAJORVERSION  = 0x00000002
+	_VER_MINORVERSION  = 0x00000001
 )
 
 type _OSVERSIONINFOEXW struct {
@@ -49,14 +43,6 @@ type _OSVERSIONINFOEXW struct {
 	wSuiteMask          uint16
 	wProductType        byte
 	wReserved           byte
-}
-
-func _HIBYTE(wValue uint16) byte {
-	return byte(wValue >> 8)
-}
-
-func _LOBYTE(wValue uint16) byte {
-	return byte(wValue)
 }
 
 var (

@@ -39,10 +39,14 @@ func init() {
 	}
 }
 
-// maxDrawsPerFrame is how many draws a frame records before it waits for the GPU to reuse the
-// descriptors. A draw takes numConstantBufferAndSourceTextures descriptors, so the heap holds
-// frameCount * maxDrawsPerFrame * 6 of them, well within the 1,000,000 of resource binding tier 1.
-const maxDrawsPerFrame = 4096
+// maxDrawsPerFrame is the worst-case number of draws that rewrite both CBV and SRV tables before
+// waiting for the GPU to reuse the frame's descriptors. Each draw uses at most
+// numConstantBufferAndSourceTextures descriptors (2 CBVs and 4 SRVs), so the heap holds
+// frameCount * maxDescriptorsPerFrame descriptors, well within the 1,000,000 of resource binding tier 1.
+const (
+	maxDrawsPerFrame       = 4096
+	maxDescriptorsPerFrame = maxDrawsPerFrame * numConstantBufferAndSourceTextures
+)
 
 type pipelineStates struct {
 	rootSignature *_ID3D12RootSignature
@@ -83,8 +87,8 @@ type frameUniforms12 struct {
 	lastUserGPU         _D3D12_GPU_VIRTUAL_ADDRESS
 	lastUserSize        uint32
 
-	// draws is how many draws took a descriptor table from the frame's share of the heap.
-	draws int
+	// descriptors is how many descriptors have been taken from this frame's share of the heap.
+	descriptors int
 }
 
 // minUniformRingSize is the initial size of a frame's uniform ring in bytes: 128 draws without a
@@ -136,7 +140,7 @@ func (f *frameUniforms12) reset() {
 	}
 	f.retired = f.retired[:0]
 	f.offset = 0
-	f.draws = 0
+	f.descriptors = 0
 	f.lastInternalVersion = 0
 	f.lastInternalGPU = 0
 	f.lastInternalSize = 0
@@ -171,13 +175,11 @@ func alignUpConstantBuffer(x uint32) uint32 {
 }
 
 func (p *pipelineStates) initialize(device *_ID3D12Device) (ferr error) {
-	// Create a CBV/SRV/UAV descriptor heap. Each draw takes a table of
-	// numConstantBufferAndSourceTextures descriptors from its frame's share:
-	//   6n+0, 6n+1:  the internal and the user's uniform blocks
-	//   6n+2..6n+5:  the source textures
+	// Create a CBV/SRV/UAV descriptor heap. Each frame owns maxDescriptorsPerFrame contiguous
+	// descriptors, allocated linearly as 2-descriptor CBV tables and 4-descriptor SRV tables.
 	shaderH, err := device.CreateDescriptorHeap(&_D3D12_DESCRIPTOR_HEAP_DESC{
 		Type:           _D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-		NumDescriptors: frameCount * maxDrawsPerFrame * numConstantBufferAndSourceTextures,
+		NumDescriptors: frameCount * maxDescriptorsPerFrame,
 		Flags:          _D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
 		NodeMask:       0,
 	})
@@ -201,8 +203,8 @@ func (p *pipelineStates) initialize(device *_ID3D12Device) (ferr error) {
 	return nil
 }
 
-// release releases the objects created by initialize and the uniform rings. The caller must make
-// sure that the GPU no longer uses them.
+// release releases the objects created by initialize, the root signature, and the uniform rings.
+// The caller must make sure that the GPU no longer uses them.
 func (p *pipelineStates) release() {
 	for i := range p.frames {
 		p.frames[i].release()
@@ -211,14 +213,19 @@ func (p *pipelineStates) release() {
 		p.shaderDescriptorHeap.Release()
 		p.shaderDescriptorHeap = nil
 	}
+	if p.rootSignature != nil {
+		p.rootSignature.Release()
+		p.rootSignature = nil
+	}
 	p.shaderDescriptorSize = 0
 	p.shaderDescriptorCPUStart = _D3D12_CPU_DESCRIPTOR_HANDLE{}
 	p.shaderDescriptorGPUStart = _D3D12_GPU_DESCRIPTOR_HANDLE{}
 }
 
-// hasRoom reports whether the frame has a descriptor table left for a draw.
+// hasRoom reports whether the frame has enough descriptors left for a draw that updates both
+// descriptor tables.
 func (p *pipelineStates) hasRoom(frameIndex int) bool {
-	return p.frames[frameIndex].draws < maxDrawsPerFrame
+	return p.frames[frameIndex].descriptors+numConstantBufferAndSourceTextures <= maxDescriptorsPerFrame
 }
 
 // resetFrame makes the frame's uniform ring and descriptors available again. The caller must make
@@ -243,6 +250,23 @@ type drawListState12 struct {
 	pipelineState *_ID3D12PipelineState
 	scissor       _D3D12_RECT
 	scissorValid  bool
+
+	// Cached CBV and SRV descriptor table bindings for the current command list. Cleared whenever
+	// the command list or descriptor heap is reset.
+	cbvValid       bool
+	cbvInternalGPU _D3D12_GPU_VIRTUAL_ADDRESS
+	cbvInternalSz  uint32
+	cbvUserGPU     _D3D12_GPU_VIRTUAL_ADDRESS
+	cbvUserSz      uint32
+
+	srvValid     bool
+	srvResources [graphics.ShaderSrcImageCount]*_ID3D12Resource
+	srvFormats   [graphics.ShaderSrcImageCount]graphicsdriver.PixelFormat
+}
+
+func (d *drawListState12) resetDescriptorBindings() {
+	d.cbvValid = false
+	d.srvValid = false
 }
 
 // nullShaderResourceViewDesc describes the view in a source texture's slot that a draw does not use,
@@ -260,7 +284,7 @@ var nullShaderResourceViewDesc = _D3D12_SHADER_RESOURCE_VIEW_DESC{
 // The caller must make sure that hasRoom(frameIndex) holds.
 func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D12GraphicsCommandList, listState *drawListState12, frameIndex int, rtvFormat _DXGI_FORMAT, srcs [graphics.ShaderSrcImageCount]*image12, shader *shader12, dstRegions []graphicsdriver.DstRegion, internal, user []uint32, versions graphicsdriver.UniformVersions, blend graphicsdriver.Blend, indexOffset int) error {
 	f := &p.frames[frameIndex]
-	if f.draws >= maxDrawsPerFrame {
+	if f.descriptors+numConstantBufferAndSourceTextures > maxDescriptorsPerFrame {
 		return fmt.Errorf("directx: too many draws in a frame")
 	}
 
@@ -324,30 +348,6 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		f.lastUserSize = userSize
 	}
 
-	offset := int32(numConstantBufferAndSourceTextures * (frameIndex*maxDrawsPerFrame + f.draws))
-	f.draws++
-
-	h := p.shaderDescriptorCPUStart
-	h.Offset(offset, p.shaderDescriptorSize)
-	device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
-		BufferLocation: internalGPU,
-		SizeInBytes:    internalSize,
-	}, h)
-	h.Offset(1, p.shaderDescriptorSize)
-	device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
-		BufferLocation: userGPU,
-		SizeInBytes:    userSize,
-	}, h)
-	for _, src := range srcs {
-		h.Offset(1, p.shaderDescriptorSize)
-		if src == nil {
-			device.CreateShaderResourceView(nil, &nullShaderResourceViewDesc, h)
-			continue
-		}
-		desc := src.shaderResourceViewDesc()
-		device.CreateShaderResourceView(src.resource(), &desc, h)
-	}
-
 	if !listState.invariantsSet {
 		commandList.SetGraphicsRootSignature(rs)
 		commandList.SetDescriptorHeaps([]*_ID3D12DescriptorHeap{
@@ -357,11 +357,76 @@ func (p *pipelineStates) drawTriangles(device *_ID3D12Device, commandList *_ID3D
 		listState.invariantsSet = true
 	}
 
-	// Match the indices with rootParams in graphicsPipelineState.
-	gh := p.shaderDescriptorGPUStart
-	gh.Offset(offset, p.shaderDescriptorSize)
-	commandList.SetGraphicsRootDescriptorTable(0, gh)
-	commandList.SetGraphicsRootDescriptorTable(1, gh)
+	// Only write and bind the CBV table when the uniform buffers or sizes differ from the previous
+	// draw on this command list.
+	if !listState.cbvValid ||
+		listState.cbvInternalGPU != internalGPU ||
+		listState.cbvInternalSz != internalSize ||
+		listState.cbvUserGPU != userGPU ||
+		listState.cbvUserSz != userSize {
+		cbvOffset := int32(frameIndex*maxDescriptorsPerFrame + f.descriptors)
+		f.descriptors += numConstantBuffers
+
+		h := p.shaderDescriptorCPUStart
+		h.Offset(cbvOffset, p.shaderDescriptorSize)
+		device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
+			BufferLocation: internalGPU,
+			SizeInBytes:    internalSize,
+		}, h)
+		h.Offset(1, p.shaderDescriptorSize)
+		device.CreateConstantBufferView(&_D3D12_CONSTANT_BUFFER_VIEW_DESC{
+			BufferLocation: userGPU,
+			SizeInBytes:    userSize,
+		}, h)
+
+		gh := p.shaderDescriptorGPUStart
+		gh.Offset(cbvOffset, p.shaderDescriptorSize)
+		commandList.SetGraphicsRootDescriptorTable(0, gh)
+
+		listState.cbvValid = true
+		listState.cbvInternalGPU = internalGPU
+		listState.cbvInternalSz = internalSize
+		listState.cbvUserGPU = userGPU
+		listState.cbvUserSz = userSize
+	}
+
+	// Only write and bind the SRV table when the source textures or formats differ from the
+	// previous draw on this command list. Disposed images are not released until the frame
+	// completes, so resource pointers remain unique for the life of the command list.
+	var srvResources [graphics.ShaderSrcImageCount]*_ID3D12Resource
+	var srvFormats [graphics.ShaderSrcImageCount]graphicsdriver.PixelFormat
+	for i, src := range srcs {
+		if src != nil {
+			srvResources[i] = src.resource()
+			srvFormats[i] = src.format
+		}
+	}
+	if !listState.srvValid || listState.srvResources != srvResources || listState.srvFormats != srvFormats {
+		srvOffset := int32(frameIndex*maxDescriptorsPerFrame + f.descriptors)
+		f.descriptors += graphics.ShaderSrcImageCount
+
+		h := p.shaderDescriptorCPUStart
+		h.Offset(srvOffset, p.shaderDescriptorSize)
+		for i, src := range srcs {
+			if i > 0 {
+				h.Offset(1, p.shaderDescriptorSize)
+			}
+			if src == nil {
+				device.CreateShaderResourceView(nil, &nullShaderResourceViewDesc, h)
+				continue
+			}
+			desc := src.shaderResourceViewDesc()
+			device.CreateShaderResourceView(srvResources[i], &desc, h)
+		}
+
+		gh := p.shaderDescriptorGPUStart
+		gh.Offset(srvOffset, p.shaderDescriptorSize)
+		commandList.SetGraphicsRootDescriptorTable(1, gh)
+
+		listState.srvValid = true
+		listState.srvResources = srvResources
+		listState.srvFormats = srvFormats
+	}
 
 	if listState.pipelineState != ps {
 		commandList.SetPipelineState(ps)
@@ -405,7 +470,7 @@ func (p *pipelineStates) ensureRootSignature(device *_ID3D12Device) (*_ID3D12Roo
 		NumDescriptors:                    graphics.ShaderSrcImageCount,
 		BaseShaderRegister:                0,
 		RegisterSpace:                     0,
-		OffsetInDescriptorsFromTableStart: numConstantBuffers,
+		OffsetInDescriptorsFromTableStart: 0,
 	}
 
 	rootParams := [...]_D3D12_ROOT_PARAMETER{

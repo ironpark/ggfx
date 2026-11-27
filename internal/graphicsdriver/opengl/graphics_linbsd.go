@@ -23,8 +23,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
 )
 
-type graphicsPlatform struct{}
-
 // NewGraphics creates an implementation of graphicsdriver.Graphics for OpenGL.
 // The returned graphics value is nil iff the error is not nil.
 func NewGraphics() (graphicsdriver.Graphics, error) {

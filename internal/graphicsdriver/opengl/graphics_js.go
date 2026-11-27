@@ -23,7 +23,8 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl/gl"
 )
 
-type graphicsPlatform struct {
+type jsGraphics struct {
+	*Graphics
 	glContext js.Value
 }
 
@@ -35,7 +36,6 @@ func NewGraphics(canvas js.Value, colorSpace color.ColorSpace) (graphicsdriver.G
 	attr := js.Global().Get("Object").New()
 	attr.Set("alpha", true)
 	attr.Set("premultipliedAlpha", true)
-	attr.Set("stencil", true)
 
 	glContext = canvas.Call("getContext", "webgl2", attr)
 
@@ -57,14 +57,15 @@ func NewGraphics(canvas js.Value, colorSpace color.ColorSpace) (graphicsdriver.G
 		return nil, err
 	}
 
-	g := newGraphics(ctx, colorSpace)
-	g.glContext = glContext
-	return g, nil
+	return &jsGraphics{
+		Graphics:  newGraphics(ctx, colorSpace),
+		glContext: glContext,
+	}, nil
 }
 
 // ScreenFramebufferSize returns the size of the drawing buffer the screen is rendered into, in
 // pixels. A browser can allocate a buffer smaller than the canvas it was asked for.
-func (g *Graphics) ScreenFramebufferSize() (int, int) {
+func (g *jsGraphics) ScreenFramebufferSize() (int, int) {
 	return g.glContext.Get("drawingBufferWidth").Int(), g.glContext.Get("drawingBufferHeight").Int()
 }
 

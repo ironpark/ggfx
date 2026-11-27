@@ -41,6 +41,117 @@ func (r *resourceWithSize) release() {
 	r.sizeInBytes = 0
 }
 
+const (
+	// minUploadArenaSize is the initial upload arena size per frame slot: enough for typical
+	// glyph and sprite-region uploads without growing.
+	minUploadArenaSize = 256 * 1024
+
+	// maxUploadArenaSize bounds each frame slot's persistently mapped upload arena (and any
+	// retained backing buffer after reset). 16 MiB fits a full 2048x2048 RGBA8 atlas page in
+	// one frame slot (32 MiB across frameCount=2 slots) while staying well within 32-bit
+	// (GOARCH=386) virtual address space limits. Transfers larger than this budget use an
+	// exact-size one-off upload buffer released on the next fence completion.
+	maxUploadArenaSize = 16 * 1024 * 1024
+
+	// minReadbackBufferSize and maxReadbackBufferSize bound the retained readback buffer reused
+	// across ReadPixels calls. ReadPixels calls larger than maxReadbackBufferSize use a one-off
+	// readback buffer released immediately before ReadPixels returns.
+	minReadbackBufferSize = 64 * 1024
+	maxReadbackBufferSize = 16 * 1024 * 1024
+)
+
+func createMappedUploadBuffer(device *_ID3D12Device, size uint64) (*_ID3D12Resource, uintptr, error) {
+	b, err := createBuffer(device, size, _D3D12_HEAP_TYPE_UPLOAD)
+	if err != nil {
+		return nil, 0, err
+	}
+	// An upload heap resource can stay mapped while the GPU reads it; the CPU only writes it.
+	m, err := b.Map(0, &_D3D12_RANGE{Begin: 0, End: 0})
+	if err != nil {
+		b.Release()
+		return nil, 0, err
+	}
+	if m == 0 {
+		b.Release()
+		return nil, 0, fmt.Errorf("directx: ID3D12Resource::Map failed")
+	}
+	return b, m, nil
+}
+
+// uploadArena12 is one frame slot's bounded upload buffer pool for WritePixels copies.
+//
+// Fence and reuse invariant:
+//   - Bytes in buffer[0:offset] and every buffer in retired may be referenced by
+//     CopyTextureRegion commands recorded on drawCommandList or already submitted via an
+//     earlier End(FlushModeIntermediate) during this frameIndex.
+//   - No byte in buffer[0:offset] is overwritten, and no buffer in retired is unmapped or
+//     released, until reset() runs.
+//   - reset() is called only after the GPU has completed all commands previously submitted for
+//     this frameIndex: either moveToNextFrame() waited for
+//     fences[frameIndex] >= fenceValues[frameIndex], or waitForCommandQueue() signaled a new
+//     fence value on fences[frameIndex] and waited for it on the FIFO DIRECT command queue
+//     (covering both the just-submitted drawCommandList and any prior intermediate submissions).
+//   - Therefore, once reset() returns, zero GPU commands reference any prior byte of this slot.
+//
+// Memory bound invariant:
+//   - Ordinary arena storage (buffer plus any outgrown arena buffers in retired) never exceeds
+//     maxUploadArenaSize (16 MiB) per slot, plus at most one oversized one-off buffer.
+//   - When an ordinary allocation (size <= maxUploadArenaSize) does not fit in buffer and growing
+//     would exceed maxUploadArenaSize (including any pending retired bytes), graphics12 drains the
+//     command queue (even if drawCommandList is empty due to an intermediate submission) and
+//     recycles the slot from offset 0.
+//   - Oversized transfers (size > maxUploadArenaSize) use an exact-size one-off buffer stored in
+//     retired and never folded into buffer; if retired already holds bytes, the slot is drained
+//     first so at most one oversized one-off buffer is live per slot (a subsequent small upload
+//     may still be served from existing free room in buffer while that single one-off is pending).
+//   - On frame-end reset(use), buffer is released to shrink once recent.Peak ages out (60–120
+//     frame-clock ticks with recent.ShrinkFactor hysteresis), returning temporary growth.
+type uploadArena12 struct {
+	buffer  *_ID3D12Resource
+	data    uintptr
+	size    uint64
+	offset  uint64
+	peakUse uint64
+
+	// retired holds previous arena buffers outgrown within the budget and exact-size one-off
+	// buffers for transfers larger than maxUploadArenaSize. All are unmapped and released on reset.
+	retired      []*_ID3D12Resource
+	retiredBytes uint64
+}
+
+func (a *uploadArena12) reset(use *recent.Peak) {
+	for i, b := range a.retired {
+		b.Unmap(0, nil)
+		b.Release()
+		a.retired[i] = nil
+	}
+	a.retired = a.retired[:0]
+	a.retiredBytes = 0
+	a.offset = 0
+
+	if use != nil {
+		peak := a.peakUse
+		a.peakUse = 0
+		if a.buffer != nil {
+			want := min(uint64(use.Capacity(int(a.size), int(peak), minUploadArenaSize)), maxUploadArenaSize)
+			if want < a.size {
+				a.buffer.Unmap(0, nil)
+				a.buffer.Release()
+				a.buffer, a.data, a.size = nil, 0, 0
+			}
+		}
+	}
+}
+
+func (a *uploadArena12) release() {
+	a.reset(nil)
+	if a.buffer != nil {
+		a.buffer.Unmap(0, nil)
+		a.buffer.Release()
+	}
+	*a = uploadArena12{}
+}
+
 type graphics12 struct {
 	debug             *_ID3D12Debug
 	dredEnabled       bool
@@ -52,15 +163,11 @@ type graphics12 struct {
 	fenceValues    [frameCount]uint64
 	fenceWaitEvent windows.Handle
 
-	// drawCommandAllocators are command allocators for a 3D engine (DrawIndexedInstanced).
-	// For the word 'engine', see https://docs.microsoft.com/en-us/windows/win32/direct3d12/user-mode-heap-synchronization.
-	// The term 'draw' is used instead of '3D' in this package.
+	// drawCommandAllocators are command allocators for the DIRECT command list, which records both
+	// draws and texture copies with resource barriers between them.
 	drawCommandAllocators [frameCount]*_ID3D12CommandAllocator
 
-	// copyCommandAllocators are command allocators for a copy engine (CopyTextureRegion).
-	copyCommandAllocators [frameCount]*_ID3D12CommandAllocator
-
-	// drawCommandList is a command list for a 3D engine (DrawIndexedInstanced).
+	// drawCommandList is the DIRECT command list for draws and copies.
 	drawCommandList          *_ID3D12GraphicsCommandList
 	drawCommandListOpen      bool
 	needFlushDrawCommandList bool
@@ -68,12 +175,19 @@ type graphics12 struct {
 	// drawListState is the state set on drawCommandList since its last Reset.
 	drawListState drawListState12
 
-	// copyCommandList is a command list for a copy engine (CopyTextureRegion).
-	copyCommandList          *_ID3D12GraphicsCommandList
-	copyCommandListOpen      bool
-	needFlushCopyCommandList bool
+	// uploadArenas hold per-frame bounded upload buffers for WritePixels, reset when the frame
+	// completes and shrunk via uploadArenaUse.
+	uploadArenas   [frameCount]uploadArena12
+	uploadArenaUse recent.Peak
 
-	// drawCommandList and copyCommandList are exclusive: if one is not empty, the other must be empty.
+	// readbackBuffer is a bounded readback buffer reused across ReadPixels calls and shrunk via
+	// readbackBufferUse. Transfers larger than maxReadbackBufferSize use a one-off buffer.
+	// pendingReadbacks holds any readback buffer whose copy submission returned an error before
+	// GPU completion was confirmed, so it is not released while a copy may still be in flight.
+	readbackBuffer     *_ID3D12Resource
+	readbackBufferSize uint64
+	readbackBufferUse  recent.Peak
+	pendingReadbacks   [frameCount][]*_ID3D12Resource
 
 	vertices [frameCount][]*resourceWithSize
 	indices  [frameCount][]*resourceWithSize
@@ -100,11 +214,7 @@ type graphics12 struct {
 	frameIndex          int
 	prevBeginFrameIndex int
 
-	// images are the images not disposed, whose staging buffers are released when the copy command
-	// list is reset.
-	images         map[*image12]struct{}
-	disposedImages [frameCount][]*image12
-
+	disposedImages  [frameCount][]*image12
 	disposedShaders [frameCount][]*shader12
 
 	pipelineStates
@@ -278,12 +388,6 @@ func (g *graphics12) initializeMembers() (ferr error) {
 			return err
 		}
 		g.drawCommandAllocators[i] = dca
-
-		cca, err := g.device.CreateCommandAllocator(_D3D12_COMMAND_LIST_TYPE_DIRECT)
-		if err != nil {
-			return err
-		}
-		g.copyCommandAllocators[i] = cca
 	}
 
 	// Create a frame fence.
@@ -295,24 +399,15 @@ func (g *graphics12) initializeMembers() (ferr error) {
 		g.fences[i] = f
 	}
 
-	// Create command lists.
+	// Create command list.
 	dcl, err := g.device.CreateCommandList(0, _D3D12_COMMAND_LIST_TYPE_DIRECT, g.drawCommandAllocators[0], nil)
 	if err != nil {
 		return err
 	}
 	g.drawCommandList = dcl
 
-	ccl, err := g.device.CreateCommandList(0, _D3D12_COMMAND_LIST_TYPE_DIRECT, g.copyCommandAllocators[0], nil)
-	if err != nil {
-		return err
-	}
-	g.copyCommandList = ccl
-
 	// Close the command list once as this is immediately Reset at Begin.
 	if err := g.drawCommandList.Close(); err != nil {
-		return err
-	}
-	if err := g.copyCommandList.Close(); err != nil {
 		return err
 	}
 
@@ -330,12 +425,20 @@ func (g *graphics12) initializeMembers() (ferr error) {
 func (g *graphics12) releaseMembers() {
 	g.pipelineStates.release()
 
+	for i := range g.uploadArenas {
+		g.uploadArenas[i].release()
+	}
+	if g.readbackBuffer != nil {
+		g.readbackBuffer.Release()
+		g.readbackBuffer = nil
+		g.readbackBufferSize = 0
+	}
+	for i := range g.pendingReadbacks {
+		g.releasePendingReadbacks(i)
+	}
+
 	g.rtvDescriptorSize = 0
 
-	if g.copyCommandList != nil {
-		g.copyCommandList.Release()
-		g.copyCommandList = nil
-	}
 	if g.drawCommandList != nil {
 		g.drawCommandList.Release()
 		g.drawCommandList = nil
@@ -345,10 +448,6 @@ func (g *graphics12) releaseMembers() {
 		if g.fences[i] != nil {
 			g.fences[i].Release()
 			g.fences[i] = nil
-		}
-		if g.copyCommandAllocators[i] != nil {
-			g.copyCommandAllocators[i].Release()
-			g.copyCommandAllocators[i] = nil
 		}
 		if g.drawCommandAllocators[i] != nil {
 			g.drawCommandAllocators[i].Release()
@@ -403,6 +502,143 @@ func createBuffer(device *_ID3D12Device, bufferSize uint64, heapType _D3D12_HEAP
 		return nil, err
 	}
 	return r, nil
+}
+
+// allocUpload returns a persistently mapped upload buffer, a 512-byte-aligned offset into it,
+// and the corresponding writable byte slice of length size.
+func (g *graphics12) allocUpload(size uint64) (*_ID3D12Resource, uint64, []byte, error) {
+	a := &g.uploadArenas[g.frameIndex]
+
+	// Oversized transfers get an exact-size one-off upload buffer rather than growing the arena.
+	// Drain first if the slot already holds retired/one-off buffers so repeated oversized
+	// WritePixels (even across FlushModeIntermediate calls) never pile up more than one buffer.
+	if size > maxUploadArenaSize {
+		if a.retiredBytes > 0 {
+			if err := g.drainCurrentFrame(); err != nil {
+				return nil, 0, nil, err
+			}
+		}
+		b, m, err := createMappedUploadBuffer(g.device, size)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		a.retired = append(a.retired, b)
+		a.retiredBytes += size
+		return b, 0, unsafe.Slice((*byte)(unsafe.Pointer(m)), size), nil
+	}
+
+	// Fast path: serve from existing free room in a.buffer (even if a single oversized one-off
+	// buffer is pending in a.retired; growth/overflow paths below drain if retiredBytes+size
+	// exceeds the budget).
+	alignedOff := (a.offset + textureDataPlacementAlignment - 1) &^ (textureDataPlacementAlignment - 1)
+	if a.buffer != nil && alignedOff >= a.offset && size <= a.size && alignedOff <= a.size-size {
+		a.offset = alignedOff + size
+		a.peakUse = max(a.peakUse, a.offset)
+		return a.buffer, alignedOff, unsafe.Slice((*byte)(unsafe.Pointer(a.data+uintptr(alignedOff))), size), nil
+	}
+
+	newSize := max(a.size*2, size, minUploadArenaSize)
+	if newSize > maxUploadArenaSize || newSize < a.size {
+		newSize = maxUploadArenaSize
+	}
+
+	if a.buffer != nil && (a.size >= maxUploadArenaSize || a.retiredBytes+a.size+newSize > maxUploadArenaSize) {
+		if err := g.drainCurrentFrame(); err != nil {
+			return nil, 0, nil, err
+		}
+		if size <= a.size {
+			a.offset = size
+			a.peakUse = max(a.peakUse, a.offset)
+			return a.buffer, 0, unsafe.Slice((*byte)(unsafe.Pointer(a.data)), size), nil
+		}
+		// The GPU is idle for this slot, so the smaller arena buffer can be released immediately.
+		a.buffer.Unmap(0, nil)
+		a.buffer.Release()
+		a.buffer, a.data, a.size = nil, 0, 0
+	} else if a.buffer != nil {
+		a.retired = append(a.retired, a.buffer)
+		a.retiredBytes += a.size
+		a.buffer, a.data, a.size, a.offset = nil, 0, 0, 0
+	} else if a.retiredBytes+newSize > maxUploadArenaSize {
+		if err := g.drainCurrentFrame(); err != nil {
+			return nil, 0, nil, err
+		}
+	}
+
+	b, m, err := createMappedUploadBuffer(g.device, newSize)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	a.buffer = b
+	a.data = m
+	a.size = newSize
+	a.offset = size
+	a.peakUse = max(a.peakUse, a.offset)
+	return a.buffer, 0, unsafe.Slice((*byte)(unsafe.Pointer(a.data)), size), nil
+}
+
+// acquireReadbackBuffer returns a readback buffer of at least size bytes. If oneOff is true, the
+// transfer exceeded maxReadbackBufferSize and the caller must release the returned buffer after
+// ReadPixels finishes.
+func (g *graphics12) acquireReadbackBuffer(size uint64) (*_ID3D12Resource, bool, error) {
+	if size > maxReadbackBufferSize {
+		b, err := createBuffer(g.device, size, _D3D12_HEAP_TYPE_READBACK)
+		if err != nil {
+			return nil, false, err
+		}
+		return b, true, nil
+	}
+	want := min(uint64(g.readbackBufferUse.Capacity(int(g.readbackBufferSize), int(size), minReadbackBufferSize)), maxReadbackBufferSize)
+	if g.readbackBuffer != nil && g.readbackBufferSize == want {
+		return g.readbackBuffer, false, nil
+	}
+	if g.readbackBuffer != nil {
+		g.readbackBuffer.Release()
+		g.readbackBuffer = nil
+		g.readbackBufferSize = 0
+	}
+	b, err := createBuffer(g.device, want, _D3D12_HEAP_TYPE_READBACK)
+	if err != nil {
+		return nil, false, err
+	}
+	g.readbackBuffer = b
+	g.readbackBufferSize = want
+	return b, false, nil
+}
+
+// trimReadbackBuffer releases the retained readback buffer once recent ReadPixels calls no longer
+// need its size.
+func (g *graphics12) trimReadbackBuffer() {
+	if g.readbackBuffer == nil {
+		return
+	}
+	want := min(uint64(g.readbackBufferUse.Capacity(int(g.readbackBufferSize), 0, minReadbackBufferSize)), maxReadbackBufferSize)
+	if want < g.readbackBufferSize {
+		g.readbackBuffer.Release()
+		g.readbackBuffer = nil
+		g.readbackBufferSize = 0
+	}
+}
+
+// retireInFlightReadback keeps buf alive in the current frame slot until a subsequent fence
+// confirms GPU completion. If buf is the shared readbackBuffer, it is detached so future calls
+// cannot reuse or release it while the copy may still be in flight.
+func (g *graphics12) retireInFlightReadback(buf *_ID3D12Resource) {
+	if buf == g.readbackBuffer {
+		g.readbackBuffer = nil
+		g.readbackBufferSize = 0
+	}
+	g.pendingReadbacks[g.frameIndex] = append(g.pendingReadbacks[g.frameIndex], buf)
+}
+
+// releasePendingReadbacks releases readback buffers retired during frameIndex once GPU completion
+// of that frame slot has been confirmed.
+func (g *graphics12) releasePendingReadbacks(frameIndex int) {
+	for i, b := range g.pendingReadbacks[frameIndex] {
+		b.Release()
+		g.pendingReadbacks[frameIndex][i] = nil
+	}
+	g.pendingReadbacks[frameIndex] = g.pendingReadbacks[frameIndex][:0]
 }
 
 // surface12 is the swap chain on one window.
@@ -467,6 +703,10 @@ func (s *surface12) Dispose() {
 		return
 	}
 
+	if s.screenImage != nil {
+		s.screenImage.surface = nil
+		s.screenImage = nil
+	}
 	s.releaseRenderTargets()
 	if s.rtvDescriptorHeap != nil {
 		s.rtvDescriptorHeap.Release()
@@ -479,13 +719,10 @@ func (s *surface12) Dispose() {
 }
 
 // waitForGPUIdle executes the commands recorded so far and waits for all the commands submitted to
-// the command queue to complete. This must be called between Begin and End, while the command lists
-// are open, and keeps them open.
+// the command queue to complete. This must be called between Begin and End, while the command list
+// is open, and keeps it open.
 func (g *graphics12) waitForGPUIdle() error {
-	if err := g.flushCommandList(g.copyCommandList); err != nil {
-		return err
-	}
-	if err := g.flushCommandList(g.drawCommandList); err != nil {
+	if err := g.flushDrawCommandList(); err != nil {
 		return err
 	}
 	// Signaling the command queue and waiting for it makes the GPU idle, since the queue executes
@@ -553,6 +790,7 @@ func (g *graphics12) initSwapChainDesktop(s *surface12, width, height int) (ferr
 	s.swapChain = sc
 	defer func() {
 		if ferr != nil {
+			s.releaseRenderTargets()
 			s.swapChain.release()
 			s.swapChain = nil
 		}
@@ -573,25 +811,17 @@ func (g *graphics12) initSwapChainDesktop(s *surface12, width, height int) (ferr
 }
 
 // resizeSwapChainDesktop resizes the surface's swap chain in the middle of a frame, before the frame
-// renders the screen. This must be called between Begin and End, while the command lists are open.
+// renders the screen. This must be called between Begin and End, while the command list is open.
 func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) error {
-	// Execute the commands recorded so far this frame, then close the command lists. ResizeBuffers
+	// Execute the commands recorded so far this frame, then close the command list. ResizeBuffers
 	// requires all references to the swap chain's buffers released, all the GPU work referencing them
-	// finished, and the command lists not recording.
-	if err := g.flushCommandList(g.copyCommandList); err != nil {
+	// finished, and the command list not recording.
+	if err := g.flushDrawCommandList(); err != nil {
 		return err
-	}
-	if err := g.flushCommandList(g.drawCommandList); err != nil {
-		return err
-	}
-	if g.copyCommandListOpen {
-		g.copyCommandListOpen = false
-		if err := g.copyCommandList.Close(); err != nil {
-			return g.withDeviceRemovedReason(err)
-		}
 	}
 	if g.drawCommandListOpen {
 		g.drawCommandListOpen = false
+		g.needFlushDrawCommandList = false
 		if err := g.drawCommandList.Close(); err != nil {
 			return g.withDeviceRemovedReason(err)
 		}
@@ -604,6 +834,8 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 	}
 	g.releaseResources(g.frameIndex)
 	g.pipelineStates.resetFrame(g.frameIndex)
+	g.uploadArenas[g.frameIndex].reset(nil)
+	g.releasePendingReadbacks(g.frameIndex)
 
 	// Only this surface's render targets are released. The other surfaces' swap chains are not
 	// affected by ResizeBuffers.
@@ -628,12 +860,9 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 	s.backBufferIndex = idx
 	s.states = [frameCount]_D3D12_RESOURCE_STATES{}
 
-	// Re-open the command lists so the rest of the frame can keep recording. The GPU is already idle,
-	// so resetting the allocators is safe.
+	// Re-open the command list so the rest of the frame can keep recording. The GPU is already idle,
+	// so resetting the allocator is safe.
 	if err := g.drawCommandAllocators[g.frameIndex].Reset(); err != nil {
-		return err
-	}
-	if err := g.copyCommandAllocators[g.frameIndex].Reset(); err != nil {
 		return err
 	}
 	if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
@@ -641,10 +870,6 @@ func (g *graphics12) resizeSwapChainDesktop(s *surface12, width, height int) err
 	}
 	g.drawCommandListOpen = true
 	g.drawListState = drawListState12{}
-	if err := g.copyCommandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
-		return err
-	}
-	g.copyCommandListOpen = true
 
 	return nil
 }
@@ -695,20 +920,12 @@ func (g *graphics12) Begin() error {
 	if g.prevBeginFrameIndex != g.frameIndex {
 		if g.drawCommandListOpen {
 			g.drawCommandListOpen = false
+			g.needFlushDrawCommandList = false
 			if err := g.drawCommandList.Close(); err != nil {
 				return g.withDeviceRemovedReason(err)
 			}
 		}
-		if g.copyCommandListOpen {
-			g.copyCommandListOpen = false
-			if err := g.copyCommandList.Close(); err != nil {
-				return g.withDeviceRemovedReason(err)
-			}
-		}
 		if err := g.drawCommandAllocators[g.frameIndex].Reset(); err != nil {
-			return err
-		}
-		if err := g.copyCommandAllocators[g.frameIndex].Reset(); err != nil {
 			return err
 		}
 	}
@@ -721,12 +938,6 @@ func (g *graphics12) Begin() error {
 		g.drawCommandListOpen = true
 		g.drawListState = drawListState12{}
 	}
-	if !g.copyCommandListOpen {
-		if err := g.copyCommandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
-			return err
-		}
-		g.copyCommandListOpen = true
-	}
 	return nil
 }
 
@@ -738,17 +949,6 @@ func (g *graphics12) IsOccluded() bool {
 
 func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 	// The swap chain might still be nil when Begin-End is invoked not by a frame (e.g., Image.At).
-
-	// As copyCommandList and drawCommandList are exclusive, the order should not matter here.
-	if err := g.flushCommandList(g.copyCommandList); err != nil {
-		return err
-	}
-	if g.copyCommandListOpen {
-		g.copyCommandListOpen = false
-		if err := g.copyCommandList.Close(); err != nil {
-			return g.withDeviceRemovedReason(err)
-		}
-	}
 
 	if g.drawCommandListOpen {
 		// Transition the back buffers to present. There might be no surfaces in tests.
@@ -764,6 +964,7 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 		}
 
 		g.drawCommandListOpen = false
+		g.needFlushDrawCommandList = false
 		if err := g.drawCommandList.Close(); err != nil {
 			return g.withDeviceRemovedReason(err)
 		}
@@ -780,10 +981,12 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 		g.releaseResources(g.frameIndex)
 		g.resetVerticesAndIndices(g.frameIndex, true)
 		g.pipelineStates.resetFrame(g.frameIndex)
+		g.uploadArenas[g.frameIndex].reset(nil)
+		g.releasePendingReadbacks(g.frameIndex)
 	}
 
-	// An intermediate flush does not wait for the GPU, so the frame's uniform ring and descriptors
-	// stay taken until the frame completes below or a flush waits for the GPU.
+	// An intermediate flush does not wait for the GPU, so the frame's uniform ring, upload arena,
+	// and descriptors stay taken until the frame completes below or a flush waits for the GPU.
 
 	if mode == graphicsdriver.FlushModePresent {
 		if err := g.presentDesktop(); err != nil {
@@ -802,12 +1005,15 @@ func (g *graphics12) End(mode graphicsdriver.FlushMode) error {
 				return err
 			}
 		}
-		// Reset the command allocators when the next frame begins, even if the back buffer did not change.
+		// Reset the command allocator when the next frame begins, even if the back buffer did not change.
 		g.prevBeginFrameIndex = -1
 
 		g.releaseResources(g.frameIndex)
 		g.resetVerticesAndIndices(g.frameIndex, false)
 		g.pipelineStates.resetFrame(g.frameIndex)
+		g.uploadArenas[g.frameIndex].reset(&g.uploadArenaUse)
+		g.releasePendingReadbacks(g.frameIndex)
+		g.trimReadbackBuffer()
 	}
 
 	return nil
@@ -913,77 +1119,82 @@ func (g *graphics12) resetVerticesAndIndices(frameIndex int, release bool) {
 		}
 	}
 	if release {
-		for i := range g.vertices[frameIndex] {
-			g.vertices[frameIndex][i].release()
-			g.vertices[frameIndex][i] = nil
+		for _, bs := range [][]*resourceWithSize{g.vertices[frameIndex], g.indices[frameIndex]} {
+			bs = bs[:cap(bs)]
+			for i := range bs {
+				if bs[i] != nil {
+					bs[i].release()
+					bs[i] = nil
+				}
+			}
 		}
 	}
 	g.vertices[frameIndex] = g.vertices[frameIndex][:0]
-
-	if release {
-		for i := range g.indices[frameIndex] {
-			g.indices[frameIndex][i].release()
-			g.indices[frameIndex][i] = nil
-		}
-	}
 	g.indices[frameIndex] = g.indices[frameIndex][:0]
 }
 
-// flushCommandList executes commands in the command list and waits for its completion.
-//
-// TODO: This is not efficient. Is it possible to make two command lists work in parallel?
-func (g *graphics12) flushCommandList(commandList *_ID3D12GraphicsCommandList) error {
-	switch commandList {
-	case g.drawCommandList:
-		if !g.needFlushDrawCommandList || !g.drawCommandListOpen {
-			return nil
-		}
-		g.needFlushDrawCommandList = false
-		g.drawCommandListOpen = false
-	case g.copyCommandList:
-		if !g.needFlushCopyCommandList || !g.copyCommandListOpen {
-			return nil
-		}
-		g.needFlushCopyCommandList = false
-		g.copyCommandListOpen = false
+// flushDrawCommandList executes commands recorded on drawCommandList and waits for completion.
+func (g *graphics12) flushDrawCommandList() error {
+	if !g.needFlushDrawCommandList || !g.drawCommandListOpen {
+		return nil
 	}
+	g.needFlushDrawCommandList = false
+	g.drawCommandListOpen = false
 
-	if err := commandList.Close(); err != nil {
+	if err := g.drawCommandList.Close(); err != nil {
 		return g.withDeviceRemovedReason(err)
 	}
 
-	g.commandQueue.ExecuteCommandLists([]*_ID3D12GraphicsCommandList{commandList})
+	g.commandQueue.ExecuteCommandLists([]*_ID3D12GraphicsCommandList{g.drawCommandList})
 
 	if err := g.waitForCommandQueue(); err != nil {
 		return err
 	}
 
-	switch commandList {
-	case g.drawCommandList:
+	if err := g.drawCommandAllocators[g.frameIndex].Reset(); err != nil {
+		return err
+	}
+	if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
+		return err
+	}
+	g.drawCommandListOpen = true
+	g.drawListState = drawListState12{}
+	// The GPU is idle, so the frame's uniform ring, upload arena, and descriptors can be reused.
+	g.pipelineStates.resetFrame(g.frameIndex)
+	g.uploadArenas[g.frameIndex].reset(nil)
+	g.releasePendingReadbacks(g.frameIndex)
+
+	return nil
+}
+
+// drainCurrentFrame executes any recorded commands on drawCommandList, waits for the command queue
+// to complete (including any earlier FlushModeIntermediate submissions), and resets the current
+// frame slot's transient arenas and descriptors.
+func (g *graphics12) drainCurrentFrame() error {
+	if g.needFlushDrawCommandList && g.drawCommandListOpen {
+		return g.flushDrawCommandList()
+	}
+	if err := g.waitForCommandQueue(); err != nil {
+		return err
+	}
+	if g.drawCommandListOpen {
+		g.drawCommandListOpen = false
+		if err := g.drawCommandList.Close(); err != nil {
+			return g.withDeviceRemovedReason(err)
+		}
 		if err := g.drawCommandAllocators[g.frameIndex].Reset(); err != nil {
 			return err
 		}
-		if err := commandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
+		if err := g.drawCommandList.Reset(g.drawCommandAllocators[g.frameIndex], nil); err != nil {
 			return err
 		}
 		g.drawCommandListOpen = true
 		g.drawListState = drawListState12{}
-		// The GPU is idle, so the frame's uniform ring and descriptors can be reused.
-		g.pipelineStates.resetFrame(g.frameIndex)
-	case g.copyCommandList:
-		if err := g.copyCommandAllocators[g.frameIndex].Reset(); err != nil {
-			return err
-		}
-		if err := commandList.Reset(g.copyCommandAllocators[g.frameIndex], nil); err != nil {
-			return err
-		}
-		g.copyCommandListOpen = true
-
-		for img := range g.images {
-			img.releaseUploadingStagingBuffers()
-		}
 	}
-
+	g.pipelineStates.resetFrame(g.frameIndex)
+	g.drawListState.resetDescriptorBindings()
+	g.uploadArenas[g.frameIndex].reset(nil)
+	g.releasePendingReadbacks(g.frameIndex)
 	return nil
 }
 
@@ -1183,7 +1394,6 @@ func (g *graphics12) NewImage(width, height int, format graphicsdriver.PixelForm
 		texture:  t,
 		resState: state,
 	}
-	g.addImage(i)
 	return i, nil
 }
 
@@ -1206,20 +1416,11 @@ func (g *graphics12) newScreenImage(s *surface12, width, height int) (graphicsdr
 		screen:   true,
 		surface:  s,
 	}
-	g.addImage(i)
 	s.screenImage = i
 	return i, nil
 }
 
-func (g *graphics12) addImage(img *image12) {
-	if g.images == nil {
-		g.images = map[*image12]struct{}{}
-	}
-	g.images[img] = struct{}{}
-}
-
 func (g *graphics12) removeImage(img *image12) {
-	delete(g.images, img)
 	g.disposedImages[g.frameIndex] = append(g.disposedImages[g.frameIndex], img)
 }
 
@@ -1265,22 +1466,11 @@ func (g *graphics12) DrawTriangles(dstImage graphicsdriver.Image, srcs [graphics
 		return fmt.Errorf("directx: shader is nil")
 	}
 
-	if err := g.flushCommandList(g.copyCommandList); err != nil {
-		return err
-	}
-
 	// When the frame's descriptors run out, wait for the GPU to finish the draws so far, which frees
 	// them.
 	if !g.pipelineStates.hasRoom(g.frameIndex) {
-		if err := g.flushCommandList(g.drawCommandList); err != nil {
+		if err := g.drainCurrentFrame(); err != nil {
 			return err
-		}
-		if !g.pipelineStates.hasRoom(g.frameIndex) {
-			// The draws were submitted by an intermediate flush and are not waited for yet.
-			if err := g.waitForCommandQueue(); err != nil {
-				return err
-			}
-			g.pipelineStates.resetFrame(g.frameIndex)
 		}
 	}
 

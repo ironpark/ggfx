@@ -60,8 +60,6 @@ type Graphics struct {
 
 	// a8Supported reports whether images can be PixelFormatA8. It is decided at Initialize.
 	a8Supported bool
-
-	graphicsPlatform
 }
 
 func newGraphics(ctx gl.Context, colorSpace color.ColorSpace) *Graphics {

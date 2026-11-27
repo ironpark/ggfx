@@ -128,6 +128,7 @@ func _D3DCompile(srcData []byte, sourceName string, pDefines []_D3D_SHADER_MACRO
 		uintptr(defs), uintptr(unsafe.Pointer(pInclude)), uintptr(unsafe.Pointer(&entryPointBytes[0])),
 		uintptr(unsafe.Pointer(&targetBytes[0])), uintptr(flags1), uintptr(flags2),
 		uintptr(unsafe.Pointer(&code)), uintptr(unsafe.Pointer(&errorMsgs)))
+	runtime.KeepAlive(srcData)
 	runtime.KeepAlive(pDefines)
 	runtime.KeepAlive(pInclude)
 	runtime.KeepAlive(sourceNameBytes)

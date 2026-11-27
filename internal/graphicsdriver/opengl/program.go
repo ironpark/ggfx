@@ -89,6 +89,8 @@ func (s *openGLState) reset(context *context) error {
 
 	s.lastProgram = 0
 	context.ctx.UseProgram(0)
+	s.lastActiveTexture = 0
+	context.ctx.ActiveTexture(gl.TEXTURE0)
 	s.resetLastUniforms()
 
 	// reset runs at the initialization, when there are no vertex shaders, and after a context loss,
@@ -121,11 +123,11 @@ func (s *openGLState) reset(context *context) error {
 	return nil
 }
 
-// orphanVertexBuffers reports whether the vertex and the index buffer are orphaned, given new
-// storage of the same size, before they are written. Writing a buffer the GPU may still read from
-// a previous draw otherwise waits for that draw. WebGL has no such wait to avoid, and would clear
-// the new storage.
-const orphanVertexBuffers = runtime.GOOS != "js"
+// orphanBuffers reports whether dynamic buffers (vertex, index, and uniform) are orphaned, given
+// new storage of the same size, before they are written. Writing a buffer the GPU may still read
+// from a previous draw otherwise waits for that draw. WebGL has no such wait to avoid, and would
+// clear the new storage.
+const orphanBuffers = runtime.GOOS != "js"
 
 func (s *openGLState) setVertices(context *context, vertices []float32, indices []uint32) {
 	if s.vertexArray == 0 {
@@ -145,7 +147,7 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 
 		// Reenable the array buffer layout explicitly after resetting the array buffer.
 		enableVertexAttributes(context)
-	} else if orphanVertexBuffers {
+	} else if orphanBuffers {
 		context.ctx.BufferInit(gl.ARRAY_BUFFER, s.arrayBufferSizeInBytes, gl.DYNAMIC_DRAW)
 	}
 
@@ -158,7 +160,7 @@ func (s *openGLState) setVertices(context *context, vertices []float32, indices 
 		// newElementArrayBuffer calls BindBuffer.
 		s.elementArrayBuffer = context.newElementArrayBuffer(c)
 		s.elementArrayBufferSizeInBytes = c
-	} else if orphanVertexBuffers {
+	} else if orphanBuffers {
 		context.ctx.BufferInit(gl.ELEMENT_ARRAY_BUFFER, s.elementArrayBufferSizeInBytes, gl.DYNAMIC_DRAW)
 	}
 
@@ -191,6 +193,7 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32, versions 
 			continue
 		}
 		size := len(block) * int(unsafe.Sizeof(block[0]))
+		var created bool
 		if s.uniformBufferSizesInBytes[i] < size {
 			if s.uniformBuffers[i] != 0 {
 				context.ctx.DeleteBuffer(uint32(s.uniformBuffers[i]))
@@ -203,6 +206,7 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32, versions 
 			s.uniformVersions[i] = 0
 			s.boundUniformBuffers[i] = 0
 			s.boundUniformBuffer = s.uniformBuffers[i]
+			created = true
 		}
 		b := s.uniformBuffers[i]
 		if s.boundUniformBuffers[i] != b {
@@ -211,12 +215,15 @@ func (s *openGLState) setUniforms(context *context, uniforms []uint32, versions 
 			s.boundUniformBuffers[i] = b
 			s.boundUniformBuffer = b
 		}
-		if s.uniformVersions[i] == blockVersions[i] {
+		if blockVersions[i] != 0 && s.uniformVersions[i] == blockVersions[i] {
 			continue
 		}
 		if s.boundUniformBuffer != b {
 			context.ctx.BindBuffer(gl.UNIFORM_BUFFER, uint32(b))
 			s.boundUniformBuffer = b
+		}
+		if !created && orphanBuffers {
+			context.ctx.BufferInit(gl.UNIFORM_BUFFER, s.uniformBufferSizesInBytes[i], gl.DYNAMIC_DRAW)
 		}
 		bs := unsafe.Slice((*byte)(unsafe.Pointer(&block[0])), size)
 		context.ctx.BufferSubData(gl.UNIFORM_BUFFER, 0, bs)
@@ -247,11 +254,7 @@ func (g *Graphics) useProgram(s *Shader, uniforms []uint32, versions graphicsdri
 	program := s.p
 	if g.state.lastProgram != program {
 		g.context.ctx.UseProgram(uint32(program))
-
 		g.state.lastProgram = program
-		g.state.lastActiveTexture = 0
-		g.context.ctx.ActiveTexture(gl.TEXTURE0)
-		g.context.lastTexture = 0 // Make sure next bindTexture call actually does something.
 	}
 
 	g.state.setUniforms(&g.context, uniforms, versions)
@@ -287,7 +290,6 @@ loop:
 			g.context.lastTexture = 0 // Make sure next bindTexture call actually does something.
 		}
 
-		// Apparently, a texture must be bound every time. The cache is not used here.
 		g.context.bindTexture(t.native)
 
 		idx++

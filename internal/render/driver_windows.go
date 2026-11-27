@@ -20,7 +20,6 @@ import (
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/directx"
 	"github.com/ironpark/ggfx/internal/graphicsdriver/opengl"
-	"github.com/ironpark/ggfx/internal/winver"
 )
 
 func newGraphicsDriverFor(lib GraphicsLibrary, o *Options) (graphicsdriver.Graphics, error) {
@@ -34,12 +33,7 @@ func newGraphicsDriverFor(lib GraphicsLibrary, o *Options) (graphicsdriver.Graph
 }
 
 func newAutoGraphicsDriver(o *Options) (graphicsdriver.Graphics, GraphicsLibrary, error) {
-	// Creating a swap chain on an older machine than Windows 10 might fail (#2613), so prefer
-	// OpenGL to DirectX there. Initializing OpenGL can fail too, though this is pretty rare.
 	libs := []GraphicsLibrary{GraphicsLibraryDirectX, GraphicsLibraryOpenGL}
-	if !winver.IsWindows10OrGreater() {
-		libs[0], libs[1] = libs[1], libs[0]
-	}
 	var errs [2]error
 	for i, lib := range libs {
 		g, err := newGraphicsDriverFor(lib, o)
