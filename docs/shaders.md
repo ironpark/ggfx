@@ -64,6 +64,32 @@ variable's name.
 `bool` is not a host-shareable WGSL type; use `i32` or `u32` and pass a Go
 bool, which becomes 0 or 1.
 
+### Size and nesting limits
+
+Local shaders compiled with `NewShader` (`shader.Compile`) enforce generous
+anti-pathological bounds so valid hardware shaders keep working:
+
+- User uniform block: at most 1 MiB (padded to a 16-byte multiple). Note that
+  for portability across all graphics APIs, OpenGL 3.3 / OpenGL ES 3.0 /
+  WebGL 2 / Vulkan guarantee only 16 KiB uniform blocks (`GL_MAX_UNIFORM_BLOCK_SIZE`
+  / `maxUniformBufferRange`), and Direct3D 11/12 constant buffers are capped at
+  64 KiB.
+- Constant-sized aggregates (`var<private>` globals, function locals, arguments,
+  return values, constants, and composite/zero-value expressions): at most
+  16 MiB per aggregate and 64 MiB combined across a module.
+- Composite struct/array nesting depth: at most 32 (pointer types do not count
+  toward composite nesting depth).
+
+Untrusted shaders (such as remote streams compiled via `shader.CompileUntrusted`)
+enforce strict portability and codegen limits:
+
+- User uniform block: at most 16 KiB (16,384 bytes, or 1,024 `vec4f`, padded to
+  a 16-byte multiple).
+- Constant-sized aggregates: at most 64 KiB (and 65,536 scalar elements) per
+  aggregate, and at most 1 MiB (and 1,048,576 scalar elements) combined across a
+  module.
+- Composite struct/array nesting depth: at most 32.
+
 ### Uniform blocks
 
 A draw repeated every frame can fill a `Uniforms` block instead of a map.
@@ -122,9 +148,14 @@ custom shader can do the same.
 ## Translation
 
 The prelude binds the internal uniform block at `@group(0) @binding(0)` and
-the source textures at `@group(0) @binding(1..4)`. Each driver maps these
-onto its API: Metal buffers 1 and 2 and textures 0..3, HLSL registers `b0`,
-`b1` and `t0`..`t3`, and GLSL uniform blocks and samplers looked up by name.
+the source textures at `@group(0) @binding(1..4)`. User shaders may only bind
+at most one uniform variable at `@group(1) @binding(0)` and may not have
+reachable extra textures, samplers, storage buffers, or other resource bindings
+(only unbound `var<private>` globals are allowed in addition to the uniform
+block; unused globals are compacted away before validation).
+Each driver maps these onto its API: Metal buffers 1 and 2 and textures 0..3,
+HLSL registers `b0`, `b1` and `t0`..`t3`, and GLSL uniform blocks and samplers
+looked up by name.
 Uniform values are laid out on the host following WGSL's uniform address
 space rules, which every backend honors, so no driver reorders them.
 

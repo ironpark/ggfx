@@ -177,6 +177,6 @@ func adjustDestinationPixel(x float32) float32 {
 	case frac < 13.0/16.0:
 		return ix + 11.0/16.0
 	default:
-		return ix + 16.0/16.0
+		return ix + 1
 	}
 }

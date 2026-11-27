@@ -29,3 +29,20 @@ func InternalImageSize(x int) int {
 	}
 	return (x + grain - 1) / grain * grain
 }
+
+// UnmanagedInternalImageSize returns the internal backing texture dimension for one side of an
+// off-atlas (unmanaged) image of logical size x on a device with maximum texture dimension maxSize.
+//
+// An off-atlas image keeps one empty edge texel past its right and bottom edges so linear filtering
+// at the boundary reads transparent zero rather than out-of-bounds texels (clamped to maxSize when
+// maxSize > 0), and the driver then rounds each side up via InternalImageSize.
+func UnmanagedInternalImageSize(x, maxSize int) int {
+	if x <= 0 {
+		panic("graphics: x must be positive")
+	}
+	w := x + 1
+	if maxSize > 0 && w > maxSize {
+		w = maxSize
+	}
+	return InternalImageSize(w)
+}

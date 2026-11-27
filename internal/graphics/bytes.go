@@ -38,18 +38,6 @@ func (m *ManagedBytes) Len() int {
 	return len(m.bytes)
 }
 
-// Read reads the byte slice's content to dst.
-func (m *ManagedBytes) Read(dst []byte, from, to int) {
-	copy(dst, m.bytes[from:to])
-}
-
-// Clone creates a new ManagedBytes with the same content.
-func (m *ManagedBytes) Clone() *ManagedBytes {
-	return NewManagedBytes(len(m.bytes), func(bs []byte) {
-		copy(bs, m.bytes)
-	})
-}
-
 // Take returns the raw byte slice. Give it back with PutBytes when you can ensure that the slice
 // is no longer used, e.g. when a graphics command using this slice is sent and executed.
 //
@@ -268,4 +256,11 @@ func (b *bytesPool) advanceFrame() {
 	b.taken = 0
 	b.use.ObserveNow(b.frameTaken)
 	b.trim(min(maxPooledBytes, b.use.Max()))
+}
+
+// BytesPoolBytes returns the total capacity in bytes currently retained in the upload byte pool.
+func BytesPoolBytes() int64 {
+	theBytesPool.m.Lock()
+	defer theBytesPool.m.Unlock()
+	return int64(theBytesPool.total)
 }

@@ -15,6 +15,8 @@
 package shader_test
 
 import (
+	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -171,5 +173,452 @@ func TestPreludeTextureCount(t *testing.T) {
 	}
 	if _, err := shader.Compile([]byte(`fn fragment(v: Vertex) -> vec4f { return src2_at(v.src_pos); }`), 2); err == nil {
 		t.Error("src2_at must not exist with 2 textures")
+	}
+}
+
+func TestUniformBlockLimits(t *testing.T) {
+	// Exactly at the untrusted 16 KiB limit (1024 vec4f) must compile under CompileUntrusted.
+	exactArr := fmt.Sprintf(`
+@group(1) @binding(0) var<uniform> entries: array<vec4f, %d>;
+fn fragment(v: Vertex) -> vec4f { return entries[0]; }
+`, shader.MaxUntrustedUserUniformBytes/16)
+	p, err := shader.CompileUntrusted([]byte(exactArr), 4)
+	if err != nil {
+		t.Fatalf("exact-limit array failed CompileUntrusted: %v", err)
+	}
+	if got, want := p.UniformDwordCount, shader.MaxUntrustedUserUniformDwords; got != want {
+		t.Errorf("exact-limit UniformDwordCount = %d, want %d", got, want)
+	}
+	if len(p.Uniforms) != 1 || len(p.Uniforms[0].Slots) != shader.MaxUntrustedUserUniformDwords {
+		t.Errorf("exact-limit slots = %d, want %d", len(p.Uniforms[0].Slots), shader.MaxUntrustedUserUniformDwords)
+	}
+
+	exactStruct := fmt.Sprintf(`
+struct Uniforms {
+	a: array<vec4f, %d>,
+	b: vec4f,
+}
+@group(1) @binding(0) var<uniform> u: Uniforms;
+fn fragment(v: Vertex) -> vec4f { return u.a[0] + u.b; }
+`, shader.MaxUntrustedUserUniformBytes/16-1)
+	p, err = shader.CompileUntrusted([]byte(exactStruct), 4)
+	if err != nil {
+		t.Fatalf("exact-limit struct failed CompileUntrusted: %v", err)
+	}
+	if got, want := p.UniformDwordCount, shader.MaxUntrustedUserUniformDwords; got != want {
+		t.Errorf("exact-limit struct UniformDwordCount = %d, want %d", got, want)
+	}
+
+	// HEAD-accepted local case (16,400 bytes = 1025 vec4f): compiles locally via Compile,
+	// rejected by CompileUntrusted.
+	localOver16K := fmt.Sprintf(`
+@group(1) @binding(0) var<uniform> entries: array<vec4f, %d>;
+fn fragment(v: Vertex) -> vec4f { return entries[0]; }
+`, shader.MaxUntrustedUserUniformBytes/16+1)
+	if _, err := shader.Compile([]byte(localOver16K), 4); err != nil {
+		t.Fatalf("16,400-byte uniform block must compile locally: %v", err)
+	}
+	if _, err := shader.CompileUntrusted([]byte(localOver16K), 4); err == nil || !strings.Contains(err.Error(), "maximum size") {
+		t.Fatalf("16,400-byte uniform block under CompileUntrusted = %v, want maximum size error", err)
+	}
+
+	// Build a deeply nested array of 40 levels of array<..., 1>.
+	var nested strings.Builder
+	for range 40 {
+		nested.WriteString("array<")
+	}
+	nested.WriteString("vec4f")
+	for range 40 {
+		nested.WriteString(", 1>")
+	}
+	deepNestedSrc := fmt.Sprintf(`
+@group(1) @binding(0) var<uniform> u: %s;
+fn fragment(v: Vertex) -> vec4f { return vec4f(1.0); }
+`, nested.String())
+
+	// Build an exponential struct DAG (2^24 leaves) to verify O(|Types|) reflection.
+	var dag strings.Builder
+	dag.WriteString("struct S0 { a: vec4f, b: vec4f }\n")
+	for i := 1; i <= 24; i++ {
+		fmt.Fprintf(&dag, "struct S%d { a: S%d, b: S%d }\n", i, i-1, i-1)
+	}
+	dag.WriteString("@group(1) @binding(0) var<uniform> u: S24;\n")
+	dag.WriteString("fn fragment(v: Vertex) -> vec4f { return vec4f(1.0); }\n")
+
+	for _, tc := range []struct {
+		name      string
+		src       string
+		want      string
+		untrusted bool
+	}{
+		{
+			name:      "one vec4 over untrusted limit",
+			src:       localOver16K,
+			want:      "maximum size",
+			untrusted: true,
+		},
+		{
+			name: "struct over untrusted limit",
+			src: fmt.Sprintf(`
+struct Uniforms {
+	a: array<vec4f, %d>,
+	b: f32,
+}
+@group(1) @binding(0) var<uniform> u: Uniforms;
+fn fragment(v: Vertex) -> vec4f { return u.a[0] * u.b; }`, shader.MaxUntrustedUserUniformBytes/16),
+			want:      "maximum size",
+			untrusted: true,
+		},
+		{
+			name: "one vec4 over local limit",
+			src: fmt.Sprintf(`
+@group(1) @binding(0) var<uniform> entries: array<vec4f, %d>;
+fn fragment(v: Vertex) -> vec4f { return entries[0]; }`, shader.MaxUserUniformBytes/16+1),
+			want: "maximum size",
+		},
+		{
+			name: "huge 1D array",
+			src: `
+@group(1) @binding(0) var<uniform> entries: array<vec4f, 100000000>;
+fn fragment(v: Vertex) -> vec4f { return entries[0]; }`,
+			want: "maximum size",
+		},
+		{
+			name: "huge nested array",
+			src: `
+@group(1) @binding(0) var<uniform> entries: array<array<vec4f, 10000>, 10000>;
+fn fragment(v: Vertex) -> vec4f { return entries[0][0]; }`,
+			want: "maximum size",
+		},
+		{
+			name: "deeply nested single-element array",
+			src:  deepNestedSrc,
+			want: "maximum depth",
+		},
+		{
+			name: "exponential struct DAG",
+			src:  dag.String(),
+			want: "maximum size",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			var err error
+			if tc.untrusted {
+				_, err = shader.CompileUntrusted([]byte(tc.src), 4)
+			} else {
+				_, err = shader.Compile([]byte(tc.src), 4)
+			}
+			runtime.ReadMemStats(&after)
+			if err == nil {
+				t.Fatal("Compile must fail")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q must mention %q", err, tc.want)
+			}
+			// Must reject without allocating proportional to the declared array size.
+			if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 8<<20 {
+				t.Errorf("Compile allocated %d bytes rejecting oversized uniform block, want <= 8 MiB", alloc)
+			}
+		})
+	}
+}
+
+func TestDisallowedShaderGlobals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "extra texture at group 1",
+			src: `
+@group(1) @binding(1) var extra_tex: texture_2d<f32>;
+fn fragment(v: Vertex) -> vec4f { return textureLoad(extra_tex, vec2i(0, 0), 0); }`,
+			want: "disallowed binding",
+		},
+		{
+			name: "extra texture past TextureCount",
+			src: `
+@group(0) @binding(5) var extra_tex: texture_2d<f32>;
+fn fragment(v: Vertex) -> vec4f { return textureLoad(extra_tex, vec2i(0, 0), 0); }`,
+			want: "disallowed binding",
+		},
+		{
+			name: "extra sampler",
+			src: `
+@group(1) @binding(1) var extra_samp: sampler;
+fn fragment(v: Vertex) -> vec4f { return textureSample(ggfx_src0, extra_samp, v.src_pos); }`,
+			want: "disallowed binding",
+		},
+		{
+			name: "sampler aliasing source texture slot",
+			src: `
+@group(0) @binding(1) var extra_samp: sampler;
+fn fragment(v: Vertex) -> vec4f { return textureSample(ggfx_src1, extra_samp, v.src_pos); }`,
+			want: "texture_2d<f32>",
+		},
+		{
+			name: "duplicate texture binding on slot 0",
+			src: `
+@group(0) @binding(1) var dup_tex: texture_2d<f32>;
+fn fragment(v: Vertex) -> vec4f { return src0_at(v.src_pos) + textureLoad(dup_tex, vec2i(0, 0), 0); }`,
+			want: "conflict",
+		},
+		{
+			name: "non-f32 texture aliasing slot 0",
+			src: `
+@group(0) @binding(1) var u32_tex: texture_2d<u32>;
+fn fragment(v: Vertex) -> vec4f { return vec4f(textureLoad(u32_tex, vec2i(0, 0), 0)); }`,
+			want: "texture_2d<f32>",
+		},
+		{
+			name: "arrayed texture aliasing slot 0",
+			src: `
+@group(0) @binding(1) var arr_tex: texture_2d_array<f32>;
+fn fragment(v: Vertex) -> vec4f { return textureLoad(arr_tex, vec2i(0, 0), 0, 0); }`,
+			want: "texture_2d<f32>",
+		},
+		{
+			name: "multisampled texture aliasing slot 0",
+			src: `
+@group(0) @binding(1) var ms_tex: texture_multisampled_2d<f32>;
+fn fragment(v: Vertex) -> vec4f { return textureLoad(ms_tex, vec2i(0, 0), 0); }`,
+			want: "texture_2d<f32>",
+		},
+		{
+			name: "storage buffer",
+			src: `
+@group(1) @binding(1) var<storage, read> buf: array<vec4f>;
+fn fragment(v: Vertex) -> vec4f { return buf[0]; }`,
+			want: "storage",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := shader.Compile([]byte(tc.src), 4)
+			if err == nil {
+				t.Fatal("Compile must fail")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q must mention %q", err, tc.want)
+			}
+		})
+	}
+
+	// Unbound var<private> globals remain valid.
+	if _, err := shader.Compile([]byte(`
+var<private> scratch: vec4f = vec4f(1.0);
+fn fragment(v: Vertex) -> vec4f {
+	scratch = v.color;
+	return scratch;
+}
+`), 4); err != nil {
+		t.Errorf("valid private global failed to compile: %v", err)
+	}
+}
+
+func TestAggregateLimits(t *testing.T) {
+	// Valid local aggregate right at MaxUntrustedAggregateBytes (64 KiB = 4096 vec4f).
+	validUntrustedLocal := fmt.Sprintf(`
+fn fragment(v: Vertex) -> vec4f {
+	var a: array<vec4f, %d>;
+	a[0] = v.color;
+	return a[0];
+}
+`, shader.MaxUntrustedAggregateBytes/16)
+	if _, err := shader.CompileUntrusted([]byte(validUntrustedLocal), 4); err != nil {
+		t.Fatalf("local array at MaxUntrustedAggregateBytes failed CompileUntrusted: %v", err)
+	}
+
+	// HEAD-accepted local case (65,552 bytes = 4097 vec4f): compiles locally via Compile,
+	// rejected by CompileUntrusted.
+	localOver64K := fmt.Sprintf(`
+fn fragment(v: Vertex) -> vec4f {
+	var a: array<vec4f, %d>;
+	a[0] = v.color;
+	return a[0];
+}
+`, shader.MaxUntrustedAggregateBytes/16+1)
+	if _, err := shader.Compile([]byte(localOver64K), 4); err != nil {
+		t.Fatalf("65,552-byte local array must compile locally: %v", err)
+	}
+	if _, err := shader.CompileUntrusted([]byte(localOver64K), 4); err == nil || !strings.Contains(err.Error(), "maximum size") {
+		t.Fatalf("65,552-byte local array under CompileUntrusted = %v, want maximum size error", err)
+	}
+
+	// Exponential struct DAG (2^24 * 16 B = 256 MiB) inside a function local.
+	var localDAG strings.Builder
+	localDAG.WriteString("struct S0 { a: vec4f, b: vec4f }\n")
+	for i := 1; i <= 24; i++ {
+		fmt.Fprintf(&localDAG, "struct S%d { a: S%d, b: S%d }\n", i, i-1, i-1)
+	}
+	localDAG.WriteString("fn fragment(v: Vertex) -> vec4f {\n\tvar x: S24;\n\treturn x.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a;\n}\n")
+
+	// Multiple 64 KiB locals in one module exceeding MaxUntrustedModuleAggregateBytes (1 MiB).
+	var untrustedTotalOverflow strings.Builder
+	untrustedTotalOverflow.WriteString("fn fragment(v: Vertex) -> vec4f {\n\tvar acc = vec4f(0.0);\n")
+	numUntrustedLocals := shader.MaxUntrustedModuleAggregateBytes/shader.MaxUntrustedAggregateBytes + 1
+	for i := range numUntrustedLocals {
+		fmt.Fprintf(&untrustedTotalOverflow, "\tvar a%d: array<vec4f, %d>;\n\tacc += a%d[0];\n", i, shader.MaxUntrustedAggregateBytes/16, i)
+	}
+	untrustedTotalOverflow.WriteString("\treturn acc;\n}\n")
+
+	// Multiple 16 MiB locals exceeding local MaxModuleAggregateBytes (64 MiB).
+	var localTotalOverflow strings.Builder
+	localTotalOverflow.WriteString("fn fragment(v: Vertex) -> vec4f {\n\tvar acc = vec4f(0.0);\n")
+	numLocal := shader.MaxModuleAggregateBytes/shader.MaxAggregateBytes + 1
+	for i := range numLocal {
+		fmt.Fprintf(&localTotalOverflow, "\tvar a%d: array<vec4f, %d>;\n\tacc += a%d[0];\n", i, shader.MaxAggregateBytes/16, i)
+	}
+	localTotalOverflow.WriteString("\treturn acc;\n}\n")
+
+	for _, tc := range []struct {
+		name      string
+		src       string
+		want      string
+		untrusted bool
+	}{
+		{
+			name: "huge local array",
+			src: `
+fn fragment(v: Vertex) -> vec4f {
+	var a: array<vec4f, 100000000>;
+	return a[0];
+}`,
+			want: "maximum size",
+		},
+		{
+			name: "huge private global array",
+			src: `
+var<private> a: array<vec4f, 100000000>;
+fn fragment(v: Vertex) -> vec4f {
+	return a[0];
+}`,
+			want: "maximum size",
+		},
+		{
+			name: "huge local nested array",
+			src: `
+fn fragment(v: Vertex) -> vec4f {
+	var a: array<array<vec4f, 10000>, 10000>;
+	return a[0][0];
+}`,
+			want: "maximum size",
+		},
+		{
+			name: "huge zero-value let aggregate",
+			src: `
+fn fragment(v: Vertex) -> vec4f {
+	let a = array<vec4f, 100000000>();
+	return a[0];
+}`,
+			want: "maximum size",
+		},
+		{
+			name: "local exponential struct DAG",
+			src:  localDAG.String(),
+			want: "maximum size",
+		},
+		{
+			name:      "untrusted module total aggregate bytes exceeded",
+			src:       untrustedTotalOverflow.String(),
+			want:      "total module aggregate",
+			untrusted: true,
+		},
+		{
+			name: "local module total aggregate bytes exceeded",
+			src:  localTotalOverflow.String(),
+			want: "total module aggregate",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			var err error
+			if tc.untrusted {
+				_, err = shader.CompileUntrusted([]byte(tc.src), 4)
+			} else {
+				_, err = shader.Compile([]byte(tc.src), 4)
+			}
+			runtime.ReadMemStats(&after)
+			if err == nil {
+				t.Fatal("Compile must fail")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q must mention %q", err, tc.want)
+			}
+			if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 8<<20 {
+				t.Errorf("Compile allocated %d bytes rejecting oversized aggregate, want <= 8 MiB", alloc)
+			}
+		})
+	}
+}
+
+// TestPointerDoesNotChargeCompositeDepth verifies R6: a 16-byte local nested to the exact
+// maximum depth (32) compiles both by value and when passed through ptr<function, ...>, while
+// 33 levels fail in both forms.
+func TestPointerDoesNotChargeCompositeDepth(t *testing.T) {
+	nestedType := func(levels int) string {
+		var b strings.Builder
+		for range levels {
+			b.WriteString("array<")
+		}
+		b.WriteString("vec4f")
+		for range levels {
+			b.WriteString(", 1>")
+		}
+		return b.String()
+	}
+	indexChain := func(levels int) string {
+		return strings.Repeat("[0]", levels)
+	}
+
+	for _, levels := range []int{32, 33} {
+		ty := nestedType(levels)
+		idx := indexChain(levels)
+		byVal := fmt.Sprintf(`
+fn read_val(a: %s) -> vec4f { return a%s; }
+fn fragment(v: Vertex) -> vec4f {
+	var a: %s;
+	return read_val(a);
+}
+`, ty, idx, ty)
+		byPtr := fmt.Sprintf(`
+fn read_ptr(p: ptr<function, %s>) -> vec4f { return (*p)%s; }
+fn fragment(v: Vertex) -> vec4f {
+	var a: %s;
+	return read_ptr(&a);
+}
+`, ty, idx, ty)
+
+		wantOK := levels == 32
+		for _, mode := range []struct {
+			name string
+			src  string
+		}{
+			{fmt.Sprintf("depth_%d_by_value", levels), byVal},
+			{fmt.Sprintf("depth_%d_by_ptr", levels), byPtr},
+		} {
+			t.Run(mode.name, func(t *testing.T) {
+				_, errLocal := shader.Compile([]byte(mode.src), 4)
+				_, errUntrusted := shader.CompileUntrusted([]byte(mode.src), 4)
+				if wantOK {
+					if errLocal != nil {
+						t.Errorf("Compile(%s) failed: %v", mode.name, errLocal)
+					}
+					if errUntrusted != nil {
+						t.Errorf("CompileUntrusted(%s) failed: %v", mode.name, errUntrusted)
+					}
+				} else {
+					if errLocal == nil || !strings.Contains(errLocal.Error(), "maximum depth") {
+						t.Errorf("Compile(%s) = %v, want maximum depth error", mode.name, errLocal)
+					}
+					if errUntrusted == nil || !strings.Contains(errUntrusted.Error(), "maximum depth") {
+						t.Errorf("CompileUntrusted(%s) = %v, want maximum depth error", mode.name, errUntrusted)
+					}
+				}
+			})
+		}
 	}
 }
