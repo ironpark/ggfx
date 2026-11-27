@@ -30,9 +30,14 @@
 // The viewer keeps a Replayer for each app, and an image of its own for the app's screen, which
 // it shows in its window. Inside a frame of its own:
 //
-//	w, h, err := remote.ScreenSize(batch)
+//	w, h, err := replayer.ScreenSize(batch)
 //	// make screen an unmanaged image of w by h, unless it is one already
 //	result, err := replayer.Replay(batch, screen)
+//
+// Each [host.Flush] automatically advances every live Replayer's retirement epoch by one host
+// frame (see [Replayer.Retire]). Viewers that end or present frames without calling [host.Flush]
+// must call [Replayer.Retire] explicitly after each frame so disposed resources and staged uploads
+// are released from the Replayer's [Limits] budget.
 //
 // The screen image is the viewer's: it keeps the last frame when the app restarts, and a new app
 // draws over it. How the batches travel is the Transport's business; the wire format is
@@ -45,6 +50,8 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"sync"
+	"weak"
 
 	"github.com/ironpark/ggfx"
 	"github.com/ironpark/ggfx/internal/atlas"
@@ -56,6 +63,60 @@ import (
 
 // Version is the version of the wire format.
 const Version = rd.Version
+
+// Default resource limits for a [Replayer].
+const (
+	DefaultMaxImages            = rd.DefaultMaxImages
+	DefaultMaxPixels            = rd.DefaultMaxPixels
+	DefaultMaxShaders           = rd.DefaultMaxShaders
+	DefaultMaxShaderSourceBytes = rd.DefaultMaxShaderSourceBytes
+	DefaultMaxUploadBytes       = rd.DefaultMaxUploadBytes
+	DefaultMaxPipelines         = rd.DefaultMaxPipelines
+)
+
+// Limits bounds the logical budget of resources one [Replayer] may let an app make the viewer hold
+// or stage across a two-epoch retirement window. Any zero or negative field uses the corresponding
+// DefaultMax* value. Exceeding a limit fails [Replayer.Replay] (or [Replayer.ScreenSize] for the
+// screen target) with an error.
+//
+// These limits are a logical budget, not a measured physical GPU or OS memory cap:
+//
+//   - MaxImages: maximum number of live image IDs tracked by the Replayer (both offscreen images
+//     and logical screen image IDs) plus disposed offscreen images awaiting retirement.
+//   - MaxPixels: maximum backing pixel area of the active screen target (counted once, via
+//     unmanaged backing size with edge padding rounded up to 16 in [Replayer.ScreenSize] preflight
+//     and using the target's actual internal backing size in [Replayer.Replay]) plus live and
+//     pending-retirement offscreen images.
+//   - MaxShaders and MaxShaderSourceBytes: live shaders plus disposed shaders awaiting retirement.
+//     MaxShaderSourceBytes (default 1 MiB) is the total WGSL source bytes across all live and
+//     pending-retirement shaders combined, not a per-shader cap; there is no compile-time deadline
+//     on shader compilation.
+//   - MaxPipelines: maximum number of distinct (shader, blend, destination pixel format)
+//     combinations drawn with, as a logical bound on pipeline objects the app can cause the driver
+//     to build (not measured driver pipeline memory), released with the shader after retirement.
+//   - MaxUploadBytes: maximum aggregate payload bytes of explicit WritePixels calls and synthetic
+//     NewImage clears across the active two-epoch retirement window (excluding backend staging
+//     alignment/padding, vertex/index buffer uploads, and uniform uploads).
+//
+// Disposed resources and upload payloads remain charged for a two-flush retirement delay.
+// [host.Flush] advances the retirement epoch automatically for every live Replayer; callers not
+// driving frames through [host.Flush] must call [Replayer.Retire] once after each ended or
+// presented host frame. This two-flush window approximates but does not prove backend GPU
+// reclamation (for example, D3D12 frees a frame slot's deferred objects only when that slot comes
+// round again, and Metal holds unfinished command-buffer generations until the GPU signals
+// completion). Until Retire is called, disposed resources remain charged so a host that never
+// calls Retire fails closed; [Replayer.Dispose] releases all charges immediately.
+//
+// In addition to these limits, a Replayer may lazily allocate at most one internal 16×16 RGBA8
+// placeholder texture to bind for shader source slots left unbound by a draw. This fixed
+// per-Replayer overhead is not counted against MaxImages, MaxPixels, or MaxUploadBytes and is
+// freed on [Replayer.Dispose].
+type Limits = rd.Limits
+
+// DefaultLimits returns the default resource limits for a [Replayer].
+func DefaultLimits() Limits {
+	return rd.DefaultLimits()
+}
 
 // Info is what the viewer's driver answers to the queries the app's driver is asked. Its binary
 // form, which MarshalBinary and UnmarshalBinary make and read, carries the version of the wire
@@ -70,6 +131,43 @@ type Transport = rd.Transport
 
 // Result is what a replayed batch did.
 type Result = rd.Result
+
+var (
+	liveReplayersM sync.Mutex
+	liveReplayers  = map[weak.Pointer[Replayer]]struct{}{}
+)
+
+func init() {
+	render.AddPostFlushHook(retireLiveReplayers)
+}
+
+func registerReplayer(p *Replayer) {
+	wp := weak.Make(p)
+	liveReplayersM.Lock()
+	liveReplayers[wp] = struct{}{}
+	liveReplayersM.Unlock()
+}
+
+func retireLiveReplayers() {
+	liveReplayersM.Lock()
+	if len(liveReplayers) == 0 {
+		liveReplayersM.Unlock()
+		return
+	}
+	var alive []*Replayer
+	for wp := range liveReplayers {
+		if p := wp.Value(); p != nil {
+			alive = append(alive, p)
+		} else {
+			delete(liveReplayers, wp)
+		}
+	}
+	liveReplayersM.Unlock()
+
+	for _, p := range alive {
+		p.syncRetire()
+	}
+}
 
 // Install makes host.Init use the remote driver, which answers its queries as info says and ships
 // its batches through t. It is called before host.Init. The process then opens no GPU device: the
@@ -104,8 +202,12 @@ func LocalInfo() (Info, error) {
 	}, nil
 }
 
-// ScreenSize returns the size of the app's screen as of the end of batch, or 0, 0 when the app
-// has none: the size the image given to Replay must be.
+// ScreenSize parses batch's header and returns the size of the app's screen as of the end of
+// batch, or 0, 0 when the app has none.
+//
+// ScreenSize performs wire-format validation only and does not check the device's maximum image
+// size or a [Replayer]'s pixel budget. A viewer replaying untrusted apps must use
+// [Replayer.ScreenSize] before allocating a screen target.
 func ScreenSize(batch []byte) (width, height int, err error) {
 	h, err := rd.ParseHeader(batch)
 	if err != nil {
@@ -117,12 +219,93 @@ func ScreenSize(batch []byte) (width, height int, err error) {
 // Replayer replays one app's batches on the viewer's driver. The app's images and shaders live on
 // the viewer's side until Dispose, which the viewer calls when the app goes away.
 type Replayer struct {
-	r *rd.Replayer
+	mu               sync.Mutex
+	r                *rd.Replayer
+	lastRetiredFrame uint64
 }
 
-// NewReplayer returns the replayer of a new app.
+// NewReplayer returns the replayer of a new app with [DefaultLimits].
 func NewReplayer() *Replayer {
-	return &Replayer{r: rd.NewReplayer()}
+	p := &Replayer{
+		r:                rd.NewReplayer(),
+		lastRetiredFrame: render.CompletedFrames(),
+	}
+	registerReplayer(p)
+	return p
+}
+
+// syncRetireLocked advances p's retirement epoch once for each confirmed completed host frame
+// since the last observation (capped at 2 epochs, which clears the retirement ring). p.mu must be
+// held (or the caller must hold exclusive access while blocked on the render thread).
+func (p *Replayer) syncRetireLocked() {
+	cur := render.CompletedFrames()
+	if cur <= p.lastRetiredFrame {
+		return
+	}
+	diff := cur - p.lastRetiredFrame
+	p.lastRetiredFrame = cur
+	if diff > 2 {
+		diff = 2
+	}
+	for range diff {
+		p.r.Retire()
+	}
+}
+
+func (p *Replayer) syncRetire() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.syncRetireLocked()
+}
+
+// SetLimits sets the resource limits enforced on subsequent calls to [Replayer.Replay]. Any zero
+// or negative field uses the corresponding DefaultMax* value; exceeding a limit fails the replay
+// with an error.
+func (p *Replayer) SetLimits(limits Limits) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.r.SetLimits(limits)
+}
+
+// Limits returns the resource limits currently enforced by p.
+func (p *Replayer) Limits() Limits {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.r.Limits()
+}
+
+// Retire advances p's retirement epoch by one host flush, crediting charges for resources disposed
+// and upload payloads staged since the call before last (a two-flush delay). This two-flush window
+// approximates but does not prove backend GPU reclamation.
+//
+// [host.Flush] calls Retire automatically on every live Replayer after each flushed frame. Callers
+// that drive frames without [host.Flush] must call Retire explicitly once after each ended or
+// presented host frame; otherwise disposed resources remain charged against [Limits] and
+// subsequent replays eventually fail closed.
+func (p *Replayer) Retire() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.r.Retire()
+}
+
+// ScreenSize parses batch's header and validates its screen size against the local graphics
+// driver's maximum image size and p's remaining live pixel budget (together with p's live and
+// pending-retirement offscreen images, using the target's physical backing size). Callers should
+// call this before allocating a screen image for [Replayer.Replay]. It returns 0, 0, nil when the
+// batch names no screen.
+//
+// Like [LocalInfo], ScreenSize must be called after host.Init (and on desktop OpenGL after
+// host.SetGLContext, on the renderer's thread when host.Options.SingleThread is set); if no frame
+// has run yet, it initializes the graphics driver.
+func (p *Replayer) ScreenSize(batch []byte) (width, height int, err error) {
+	maxImageSize, _, err := render.DriverLimits()
+	if err != nil {
+		return 0, 0, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.syncRetireLocked()
+	return p.r.ScreenSize(batch, maxImageSize)
 }
 
 // Replay runs batch, after every draw the viewer has made so far, and waits for it. screen is the
@@ -150,8 +333,11 @@ func (p *Replayer) ReadPixels(batch []byte, screen *ggfx.Image, id uint32, regio
 	})
 }
 
-// Dispose frees every image and shader of the app's. It is called inside a frame.
+// Dispose frees every image and shader of the app's and releases all limit charges. It is called
+// inside a frame.
 func (p *Replayer) Dispose() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return render.DrawExternally(nil, func(g graphicsdriver.Graphics, _ *atlas.ExternalTarget) error {
 		p.r.Dispose()
 		return nil
@@ -160,16 +346,29 @@ func (p *Replayer) Dispose() error {
 
 // Live returns how many images and shaders of the app's are alive on the viewer's side.
 func (p *Replayer) Live() (images, shaders int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.syncRetireLocked()
 	return p.r.Live()
 }
 
 func (p *Replayer) run(batch []byte, screen *ggfx.Image, f func(graphicsdriver.Graphics, *rd.Target) error) error {
-	w, h, err := ScreenSize(batch)
+	maxImageSize, _, err := render.DriverLimits()
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.syncRetireLocked()
+
+	w, h, err := p.r.ScreenSize(batch, maxImageSize)
 	if err != nil {
 		return err
 	}
 	if w == 0 {
 		return render.DrawExternally(nil, func(g graphicsdriver.Graphics, _ *atlas.ExternalTarget) error {
+			// Consume any frame that finished on the render thread just before this callback.
+			p.syncRetireLocked()
 			return f(g, nil)
 		})
 	}
@@ -188,6 +387,7 @@ func (p *Replayer) run(batch []byte, screen *ggfx.Image, f func(graphicsdriver.G
 		if t.Image == nil || t.Origin != (image.Point{}) {
 			return errors.New("remote: the screen image is not an image of its own")
 		}
+		p.syncRetireLocked()
 		return f(g, &rd.Target{Image: t.Image, Width: w, Height: h, InternalWidth: t.InternalWidth, InternalHeight: t.InternalHeight})
 	})
 }

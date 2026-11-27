@@ -15,6 +15,7 @@
 package atlas
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"math"
@@ -628,8 +629,14 @@ func (i *Image) ReadPixels(graphicsDriver graphicsdriver.Graphics, pixels []byte
 	defer backendsM.Unlock()
 
 	if !inFrame {
-		// Not ready to read pixels. Try this later.
-		return false, nil
+		if graphicsDriver == nil || !inited.Load() {
+			return false, errors.New("atlas: graphics driver is not initialized")
+		}
+		defer func() {
+			for _, b := range theBackends {
+				b.sourceInThisFrame = false
+			}
+		}()
 	}
 
 	// In the tests, BeginFrame might not be called often and then images might not be disposed (#2292).
@@ -734,6 +741,11 @@ func Initialize(graphicsDriver graphicsdriver.Graphics) error {
 	return initialize(graphicsDriver)
 }
 
+// Inited reports whether the graphics driver and atlas sizes have been initialized.
+func Inited() bool {
+	return inited.Load()
+}
+
 // SupportsA8 reports whether the driver makes A8 images. It is false before the driver is
 // initialized.
 func SupportsA8() bool {
@@ -757,6 +769,21 @@ func DisposeSurface(surface graphicsdriver.Surface) {
 	graphicscommand.DisposeSurface(surface)
 }
 
+// EnqueueCallback runs f on the render thread in command order after every atlas operation made
+// so far, deferring until the next BeginFrame when called outside a frame.
+func EnqueueCallback(f func()) {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+
+	if !inFrame {
+		appendDeferred(func() {
+			graphicscommand.EnqueueCallback(f)
+		})
+		return
+	}
+	graphicscommand.EnqueueCallback(f)
+}
+
 // initialize is Initialize with backendsM held.
 func initialize(graphicsDriver graphicsdriver.Graphics) error {
 	if inited.Load() {
@@ -766,7 +793,7 @@ func initialize(graphicsDriver graphicsdriver.Graphics) error {
 		return err
 	}
 	if len(theBackends) != 0 {
-		panic("atlas: all the images must be not on an atlas before the game starts")
+		panic("atlas: all the images must be not on an atlas before initialization")
 	}
 
 	// min*Size and maxSize can already be set for testings.
@@ -850,6 +877,24 @@ func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
 	}
 }
 
+const (
+	// defaultMaxPageSize caps atlas page dimensions so a page stops doubling at 4096x4096
+	// (or the driver maximum if smaller) instead of growing to the full driver limit.
+	defaultMaxPageSize = 4096
+
+	// defaultMaxAtlasImageSize is the largest side of a regular image that may share an atlas
+	// page or be promoted onto a source page. Larger images get their own backend.
+	defaultMaxAtlasImageSize = 1024
+)
+
+func maxPageSize() int {
+	return min(maxSize, defaultMaxPageSize)
+}
+
+func maxAtlasImageSize() int {
+	return min(maxPageSize(), defaultMaxAtlasImageSize)
+}
+
 func (i *Image) canBePutOnAtlas() bool {
 	if minSourceSize == 0 || minDestinationSize == 0 || maxSize == 0 {
 		panic("atlas: min*Size or maxSize must be initialized")
@@ -857,9 +902,14 @@ func (i *Image) canBePutOnAtlas() bool {
 	if i.imageType != ImageTypeRegular {
 		return false
 	}
+	limit := maxAtlasImageSize()
+	if i.width > limit || i.height > limit {
+		return false
+	}
 	// A page keeps its first column and row empty, as the padding of the images at its left and
-	// top edges (see packing.NewPage), so an image and its padding take at most maxSize.
-	return i.width+i.paddingSize() <= maxSize && i.height+i.paddingSize() <= maxSize
+	// top edges (see packing.NewPage), so an image and its padding take at most maxPageSize.
+	pageMax := maxPageSize()
+	return i.width+i.paddingSize() <= pageMax && i.height+i.paddingSize() <= pageMax
 }
 
 func (i *imageImpl) cleanup() {
@@ -917,7 +967,8 @@ func (i *Image) allocate(forbiddenBackends []*backend, asSource bool) {
 		}
 		// Clear the whole texture, not the image alone, so that the texels past the image, which
 		// the filter reads, are empty: Direct3D 12 leaves a new render target undefined.
-		w, h := i.backend.backendImage.InternalSize()
+		w := graphics.UnmanagedInternalImageSize(i.width, maxSize)
+		h := graphics.UnmanagedInternalImageSize(i.height, maxSize)
 		i.backend.clear(image.Rect(0, 0, w, h))
 		theBackends = append(theBackends, i.backend)
 		return
@@ -950,7 +1001,7 @@ loop:
 	}
 
 	// Only a regular image can be put on an atlas, so every image on this page has the same padding.
-	page := packing.NewPage(width, height, maxSize, i.paddingSize())
+	page := packing.NewPage(width, height, maxPageSize(), i.paddingSize())
 	b := &backend{
 		width:        width,
 		height:       height,
@@ -1048,6 +1099,60 @@ func BeginFrame(graphicsDriver graphicsdriver.Graphics) error {
 	compactPages(recent.Now())
 
 	return nil
+}
+
+// DrainForTrim flushes any deferred work and queued commands synchronously before Trim advances
+// the idle clock, so pending draws and any in-flight asynchronous flush record their buffer usage
+// against the pre-idle clock and return their queues to the pool. It uses FlushModeIntermediate so
+// Trim never ends a logical frame or consumes pending surface damage before a subsequent Flush.
+func DrainForTrim(graphicsDriver graphicsdriver.Graphics) error {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+
+	if inFrame || graphicsDriver == nil || !inited.Load() {
+		return nil
+	}
+	flushDeferred()
+	for _, b := range theBackends {
+		b.sourceInThisFrame = false
+	}
+	err := graphicscommand.FlushCommands(graphicsDriver, graphicsdriver.FlushModeIntermediate)
+	graphicscommand.Sync()
+	// Record pending uniform and upload-pool usage at the pre-idle clock before Trim jumps the
+	// clock forward, so the post-jump Trim shrinks them down to their idle limits.
+	graphicscommand.FinalizeIdleUniforms()
+	graphics.AdvanceBytesPoolFrame()
+	return errors.Join(err, graphicscommand.DrainAsyncErr())
+}
+
+// Trim releases idle atlas resources and trims command-queue buffers as if a full idle window
+// had elapsed at time now. Must be called outside a frame, after DrainForTrim and sweepers.
+// It uses FlushModeIntermediate so it never ends a logical frame or consumes pending surface damage.
+func Trim(graphicsDriver graphicsdriver.Graphics, now int64) error {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+
+	shrinkQuadIndices()
+	if inFrame {
+		return nil
+	}
+	if graphicsDriver == nil || !inited.Load() {
+		graphicscommand.Trim()
+		graphics.AdvanceBytesPoolFrame()
+		return nil
+	}
+	flushDeferred()
+	for _, b := range theBackends {
+		b.sourceInThisFrame = false
+	}
+	compactPages(now - recent.Window)
+	compactPages(now)
+	err := graphicscommand.FlushCommands(graphicsDriver, graphicsdriver.FlushModeIntermediate)
+	graphicscommand.Sync()
+	err = errors.Join(err, graphicscommand.DrainAsyncErr())
+	graphicscommand.Trim()
+	graphics.AdvanceBytesPoolFrame()
+	return err
 }
 
 func TotalGPUImageMemoryUsageInBytes() int64 {

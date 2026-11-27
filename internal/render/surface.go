@@ -17,6 +17,7 @@ package render
 import (
 	"errors"
 	"image"
+	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
@@ -27,6 +28,13 @@ type Surface struct {
 	surface graphicsdriver.Surface
 	screen  *Image
 	kept    bool // the frame being drawn starts from the last
+
+	// resizeGen increments whenever the screen image is replaced on a size change; disposedGen
+	// advances on the render thread once the ordered callback queued right after the old screen's
+	// Dispose has run (or been dropped on flush error). While disposedGen < resizeGen, Screen
+	// reports kept = false without consulting KeptSurface.Kept().
+	resizeGen   uint64
+	disposedGen atomic.Uint64
 }
 
 // NewSurface makes a surface for the native target described by desc. In the browser, the first
@@ -58,14 +66,25 @@ func NewSurface(desc graphicsdriver.SurfaceDescriptor) (*Surface, error) {
 // BeginFrame and EndFrame: it clears the image when the graphics driver does not keep it cleared.
 func (s *Surface) Screen(width, height int) *Image {
 	if s.screen != nil && (s.screen.width != width || s.screen.height != height) {
-		s.screen.Deallocate()
+		s.screen.Dispose()
 		s.screen = nil
+		s.resizeGen++
+		gen := s.resizeGen
+		atlas.EnqueueCallback(func() {
+			for cur := s.disposedGen.Load(); gen > cur; cur = s.disposedGen.Load() {
+				if s.disposedGen.CompareAndSwap(cur, gen) {
+					break
+				}
+			}
+		})
 	}
 	s.kept = false
 	if s.screen == nil {
 		s.screen = NewScreenImage(width, height, s.surface)
-	} else if k, ok := s.surface.(graphicsdriver.KeptSurface); ok {
-		s.kept = k.Kept()
+	} else if s.disposedGen.Load() >= s.resizeGen {
+		if k, ok := s.surface.(graphicsdriver.KeptSurface); ok {
+			s.kept = k.Kept()
+		}
 	}
 	// A frame that starts from the last is drawn over it, not afresh.
 	if !s.kept && driver.NeedsClearingScreen() {
@@ -114,7 +133,7 @@ func (s *Surface) Dispose() {
 		return
 	}
 	if s.screen != nil {
-		s.screen.Deallocate()
+		s.screen.Dispose()
 		s.screen = nil
 	}
 	atlas.DisposeSurface(s.surface)

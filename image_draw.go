@@ -23,6 +23,8 @@ import (
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicscommand"
+	"github.com/ironpark/ggfx/internal/pool"
+	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/render"
 )
 
@@ -54,7 +56,7 @@ type DrawImageOptions struct {
 	// DisableMipmaps disables mipmaps.
 	// When Filter is FilterLinear and GeoM shrinks the image, mipmaps are used by default.
 	// Mipmap is useful to render a shrunk image with high quality.
-	// However, mipmaps can be expensive, especially on mobiles.
+	// However, mipmaps add memory and downsampling cost.
 	// When DisableMipmaps is true, mipmap is not used.
 	// When Filter is not FilterLinear, DisableMipmaps is ignored.
 	//
@@ -103,14 +105,12 @@ var _ [4*graphics.VertexFloatCount - unsafe.Sizeof(Vertex{})]struct{}
 // environments like browsers might not work efficiently (#2471).
 //
 // Even when all the above conditions are satisfied, multiple draw commands can
-// be used in really rare cases. Ebitengine images usually share an internal
+// be used in really rare cases. Images usually share an internal
 // automatic texture atlas, but when you consume the atlas, or you create a huge
 // image, those images cannot be on the same texture atlas. In this case, draw
 // commands are separated.
 // Another case is when you use an offscreen as a render source. An offscreen
 // doesn't share the texture atlas with high probability.
-//
-// For more performance tips, see https://ebitengine.org/en/documents/performancetips.html
 func (i *Image) DrawImage(img *Image, options *DrawImageOptions) {
 	i.copyCheck()
 
@@ -148,21 +148,20 @@ func (i *Image) DrawImage(img *Image, options *DrawImageOptions) {
 	sx0, sy0 := img.adjustPosition(bounds.Min.X, bounds.Min.Y)
 	sx1, sy1 := img.adjustPosition(bounds.Max.X, bounds.Max.Y)
 	cr, cg, cb, ca := options.ColorScale.apply(1, 1, 1, 1)
-	vs := i.ensureTmpVertices(4 * graphics.VertexFloatCount)
-	graphics.QuadVerticesFromSrcAndMatrix(vs, float32(sx0), float32(sy0), float32(sx1), float32(sy1), a, b, c, d, tx, ty, cr, cg, cb, ca)
+	var vs [4 * graphics.VertexFloatCount]float32
+	graphics.QuadVerticesFromSrcAndMatrix(vs[:], float32(sx0), float32(sy0), float32(sx1), float32(sy1), a, b, c, d, tx, ty, cr, cg, cb, ca)
 	is := graphics.QuadIndices()
 
 	srcs := [graphics.ShaderSrcImageCount]*render.Image{img.image}
 
 	shader := builtinShader(filter, builtinshader.AddressUnsafe)
-	i.tmpUniforms = i.tmpUniforms[:0]
 
 	dr := i.adjustedBounds()
 	skipMipmap := options.DisableMipmaps
 	if !skipMipmap {
 		skipMipmap = canSkipMipmap(det, filter)
 	}
-	i.image.DrawTriangles(srcs, vs, is, blend, dr, [graphics.ShaderSrcImageCount]image.Rectangle{img.adjustedBounds()}, shader.shader, i.tmpUniforms, skipMipmap)
+	i.image.DrawTriangles(srcs, vs[:], is, blend, dr, [graphics.ShaderSrcImageCount]image.Rectangle{img.adjustedBounds()}, shader.shader, nil, skipMipmap)
 }
 
 // Vertex represents a vertex passed to DrawTriangles.
@@ -240,7 +239,6 @@ const (
 type DrawTrianglesOptions struct {
 
 	// ColorScaleMode is the mode of color scales in vertices.
-	// ColorScaleMode affects the color calculation with vertex colors, but doesn't affect with a color matrix.
 	// The default (zero) value is ColorScaleModeStraightAlpha.
 	ColorScaleMode ColorScaleMode
 
@@ -257,9 +255,9 @@ type DrawTrianglesOptions struct {
 	Address Address
 
 	// DisableMipmaps disables mipmaps.
-	// When Filter is FilterLinear and GeoM shrinks the image, mipmaps are used by default.
+	// When Filter is FilterLinear and the draw shrinks the image, mipmaps are used by default.
 	// Mipmap is useful to render a shrunk image with high quality.
-	// However, mipmaps can be expensive, especially on mobiles.
+	// However, mipmaps add memory and downsampling cost.
 	// When DisableMipmaps is true, mipmap is not used.
 	// When Filter is not FilterLinear, DisableMipmaps is ignored.
 	//
@@ -278,7 +276,7 @@ type Index interface {
 // DrawTriangles draws triangles with the specified vertices and their indices.
 //
 // The indices are uint16 or uint32 values. uint32 indices are used as they are,
-// and uint16 indices are converted to uint32 in a buffer of the image i.
+// and uint16 indices are converted to uint32 in a temporary pooled buffer.
 // For a nil slice, specify the index type explicitly like DrawTriangles[uint16].
 //
 // img is used as a source image. img cannot be nil.
@@ -301,17 +299,34 @@ type Index interface {
 //
 // When the image i is disposed and the given image is not, DrawTriangles does nothing.
 func (i *Image) DrawTriangles[I Index](vertices []Vertex, indices []I, img *Image, options *DrawTrianglesOptions) {
-	i.drawTriangles(vertices, i.indices32(indices), img, options)
+	i.copyCheck()
+
+	if img == nil {
+		panic("ggfx: the given image to DrawTriangles must not be nil")
+	}
+	if img.isDisposed() {
+		panic("ggfx: the given image to DrawTriangles must not be disposed")
+	}
+	if i.isDisposed() {
+		return
+	}
+	if len(indices) == 0 {
+		return
+	}
+
+	s := getDrawScratch()
+	defer putDrawScratch(s)
+	i.drawTriangles(s, vertices, indices32(s, indices), img, options)
 }
 
 // indices32 returns indices as uint32 values. uint32 indices are returned as they are; uint16
-// indices are converted in i's temporary index buffer.
-func (i *Image) indices32[I Index](indices []I) []uint32 {
+// indices are converted in s's temporary index buffer.
+func indices32[I Index](s *drawScratch, indices []I) []uint32 {
 	if is, ok := any(indices).([]uint32); ok {
 		return is
 	}
-	i.tmpIndices = resizeScratch(i.tmpIndices, len(indices))
-	is := i.tmpIndices
+	s.indices = resizeScratch(s.indices, len(indices))
+	is := s.indices
 	if is16, ok := any(indices).([]uint16); ok {
 		graphics.WidenIndices(is, is16)
 		return is
@@ -334,23 +349,7 @@ func checkIndices(indices []uint32, vertexCount int) {
 	}
 }
 
-func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, options *DrawTrianglesOptions) {
-	i.copyCheck()
-
-	if img == nil {
-		panic("ggfx: the given image to DrawTriangles must not be nil")
-	}
-	if img.isDisposed() {
-		panic("ggfx: the given image to DrawTriangles must not be disposed")
-	}
-	if i.isDisposed() {
-		return
-	}
-
-	if len(indices) == 0 {
-		return
-	}
-
+func (i *Image) drawTriangles(s *drawScratch, vertices []Vertex, indices []uint32, img *Image, options *DrawTrianglesOptions) {
 	i.flushPending()
 	img.flushPending()
 
@@ -375,7 +374,7 @@ func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, o
 	address := builtinshader.Address(options.Address)
 	filter := builtinshader.Filter(options.Filter)
 
-	vs := i.ensureTmpVertices(len(vertices) * graphics.VertexFloatCount)
+	vs := s.ensureVertices(len(vertices) * graphics.VertexFloatCount)
 	dx, dy := i.positionOffsetF32()
 	sx, sy := img.positionOffsetF32()
 	var flags graphics.ConvertVerticesFlags
@@ -387,13 +386,12 @@ func (i *Image) drawTriangles(vertices []Vertex, indices []uint32, img *Image, o
 	srcs := [graphics.ShaderSrcImageCount]*render.Image{img.image}
 
 	shader := builtinShader(filter, address)
-	i.tmpUniforms = i.tmpUniforms[:0]
 
 	skipMipmap := options.DisableMipmaps
 	if !skipMipmap {
 		skipMipmap = filter != builtinshader.FilterLinear
 	}
-	i.image.DrawTriangles(srcs, vs, indices, blend, i.adjustedBounds(), [graphics.ShaderSrcImageCount]image.Rectangle{img.adjustedBounds()}, shader.shader, i.tmpUniforms, skipMipmap)
+	i.image.DrawTriangles(srcs, vs, indices, blend, i.adjustedBounds(), [graphics.ShaderSrcImageCount]image.Rectangle{img.adjustedBounds()}, shader.shader, nil, skipMipmap)
 }
 
 // DrawTrianglesShaderOptions represents options for DrawTrianglesShader.
@@ -455,10 +453,6 @@ var _ [len(DrawTrianglesShaderOptions{}.Images) - graphics.ShaderSrcImageCount]s
 //
 // When the image i is disposed and no disposed shader or image is given, DrawTrianglesShader does nothing.
 func (i *Image) DrawTrianglesShader[I Index](vertices []Vertex, indices []I, shader *Shader, options *DrawTrianglesShaderOptions) {
-	i.drawTrianglesShader(vertices, i.indices32(indices), shader, options)
-}
-
-func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader *Shader, options *DrawTrianglesShaderOptions) {
 	i.copyCheck()
 
 	if shader.isDisposed() {
@@ -485,6 +479,12 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 		return
 	}
 
+	s := getDrawScratch()
+	defer putDrawScratch(s)
+	i.drawTrianglesShader(s, vertices, indices32(s, indices), shader, options)
+}
+
+func (i *Image) drawTrianglesShader(s *drawScratch, vertices []Vertex, indices []uint32, shader *Shader, options *DrawTrianglesShaderOptions) {
 	if options == nil {
 		options = &DrawTrianglesShaderOptions{}
 	}
@@ -504,7 +504,7 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 
 	blend := options.Blend.internalBlend()
 
-	vs := i.ensureTmpVertices(len(vertices) * graphics.VertexFloatCount)
+	vs := s.ensureVertices(len(vertices) * graphics.VertexFloatCount)
 	dx, dy := i.positionOffsetF32()
 	sx, sy := negZero, negZero
 	if src := options.Images[0]; src != nil {
@@ -512,7 +512,7 @@ func (i *Image) drawTrianglesShader(vertices []Vertex, indices []uint32, shader 
 	}
 	graphics.ConvertVertices(vs, vertexFloats(vertices), dx, dy, sx, sy, graphics.ConvertVerticesCopyCustom)
 
-	uniforms := i.uniforms(shader, options.UniformBlock, options.Uniforms)
+	uniforms := s.uniformsBlock(shader, options.UniformBlock, options.Uniforms)
 	i.image.DrawTriangles(imgs, vs, indices, blend, i.adjustedBounds(), srcRegions, shader.shader, uniforms, true)
 }
 
@@ -642,33 +642,100 @@ func (i *Image) DrawRectShader(width, height int, shader *Shader, options *DrawR
 		return
 	}
 	cr, cg, cb, ca := options.ColorScale.elements()
-	vs := i.ensureTmpVertices(4 * graphics.VertexFloatCount)
+	var vs [4 * graphics.VertexFloatCount]float32
 
 	// Do not use srcRegions[0].Dx() and srcRegions[0].Dy() as these might be empty.
-	graphics.QuadVerticesFromSrcAndMatrix(vs,
+	graphics.QuadVerticesFromSrcAndMatrix(vs[:],
 		float32(srcRegions[0].Min.X), float32(srcRegions[0].Min.Y),
 		float32(srcRegions[0].Min.X+width), float32(srcRegions[0].Min.Y+height),
 		a, b, c, d, tx, ty, cr, cg, cb, ca)
 	is := graphics.QuadIndices()
 
-	uniforms := i.uniforms(shader, options.UniformBlock, options.Uniforms)
+	var uniforms []uint32
+	if options.UniformBlock != nil {
+		uniforms = options.UniformBlock.block
+	} else {
+		s := getDrawScratch()
+		defer putDrawScratch(s)
+		uniforms = s.uniformsBlock(shader, nil, options.Uniforms)
+	}
 	dr := i.adjustedBounds()
-	i.image.DrawTriangles(imgs, vs, is, blend, dr, srcRegions, shader.shader, uniforms, true)
+	i.image.DrawTriangles(imgs, vs[:], is, blend, dr, srcRegions, shader.shader, uniforms, true)
 }
 
-func (i *Image) ensureTmpVertices(n int) []float32 {
-	i.tmpVertices = resizeScratch(i.tmpVertices, n)
-	return i.tmpVertices
+// drawScratch holds the per-call temporary buffers for drawing, pooled across calls so concurrent
+// draws on the same *Image or cached sub-image never share mutable scratch state and oversized
+// slices from rare large draws shrink once out of the recent window (and are reclaimed by GC when
+// idle via sync.Pool).
+type drawScratch struct {
+	vertices    []float32
+	indices     []uint32
+	uniforms    []uint32
+	quadSources []*render.Image
+	quadRegions []image.Rectangle
+
+	verticesUse recent.Peak
+	indicesUse  recent.Peak
 }
 
-// uniforms returns the user's uniform block for a draw with shader: block's own when it is given,
-// or uniforms laid out in i.tmpUniforms otherwise. checkUniformBlock must have accepted block.
-func (i *Image) uniforms(shader *Shader, block *Uniforms, uniforms map[string]any) []uint32 {
+const (
+	minPooledScratch  = 4096
+	maxPooledVertices = 1 << 22 // 4,194,304 floats (16 MiB)
+	maxPooledIndices  = 1 << 21 // 2,097,152 uint32s (8 MiB)
+	maxPooledUniforms = 4096
+	maxPooledQuads    = 2048
+)
+
+var theDrawScratchPool = pool.Pool[*drawScratch]{
+	New: func() *drawScratch { return new(drawScratch) },
+}
+
+func getDrawScratch() *drawScratch {
+	return theDrawScratchPool.Get()
+}
+
+func putDrawScratch(s *drawScratch) {
+	s.vertices = trimScratchRecent(s.vertices, &s.verticesUse, maxPooledVertices)
+	s.indices = trimScratchRecent(s.indices, &s.indicesUse, maxPooledIndices)
+	s.uniforms = trimScratch(s.uniforms, maxPooledUniforms)
+	clear(s.quadSources)
+	s.quadSources = trimScratch(s.quadSources, maxPooledQuads)
+	s.quadRegions = trimScratch(s.quadRegions, maxPooledQuads)
+	theDrawScratchPool.Put(s)
+}
+
+func trimScratchRecent[T any](s []T, use *recent.Peak, hardLimit int) []T {
+	if cap(s) > hardLimit {
+		return nil
+	}
+	use.ObserveNow(len(s))
+	limit := max(use.Max(), minPooledScratch)
+	if cap(s) > recent.ShrinkFactor*limit {
+		return nil
+	}
+	return s[:0]
+}
+
+func trimScratch[T any](s []T, limit int) []T {
+	if cap(s) > limit {
+		return nil
+	}
+	return s[:0]
+}
+
+func (s *drawScratch) ensureVertices(n int) []float32 {
+	s.vertices = resizeScratch(s.vertices, n)
+	return s.vertices
+}
+
+// uniformsBlock returns the user's uniform block for a draw with shader: block's own when it is
+// given, or uniforms laid out in s.uniforms otherwise. checkUniformBlock must have accepted block.
+func (s *drawScratch) uniformsBlock(shader *Shader, block *Uniforms, uniforms map[string]any) []uint32 {
 	if block != nil {
 		return block.block
 	}
-	i.tmpUniforms = shader.appendUniforms(i.tmpUniforms[:0], uniforms)
-	return i.tmpUniforms
+	s.uniforms = shader.appendUniforms(s.uniforms[:0], uniforms)
+	return s.uniforms
 }
 
 // checkUniformBlock panics if block cannot be drawn with shader. uniforms is the map of the same

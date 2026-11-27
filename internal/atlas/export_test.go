@@ -14,7 +14,11 @@
 
 package atlas
 
-import "github.com/ironpark/ggfx/internal/graphicsdriver"
+import (
+	"slices"
+
+	"github.com/ironpark/ggfx/internal/graphicsdriver"
+)
 
 const (
 	BaseCountToPutOnSourceBackend = baseCountToPutOnSourceBackend
@@ -65,10 +69,39 @@ func (i *Image) IsOnSourceBackendForTesting() bool {
 	return i.isOnSourceBackend()
 }
 
+func (i *Image) IsOnAtlasForTesting() bool {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	return i.isOnAtlas()
+}
+
 func (i *Image) EnsureIsolatedFromSourceForTesting(backends []*backend) {
 	backendsM.Lock()
 	defer backendsM.Unlock()
 	i.ensureIsolatedFromSource(backends)
+}
+
+// AllocateOnNewSourcePageForTesting allocates i on a brand-new source page isolated from all
+// currently live backends.
+func (i *Image) AllocateOnNewSourcePageForTesting() {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	forbidden := slices.Clone(theBackends)
+	i.allocate(forbidden, true)
+}
+
+// AllocateOnBackendOfForTesting allocates i as a source forbidding every live backend except
+// other's, so i extends other's page when it does not fit the current size.
+func (i *Image) AllocateOnBackendOfForTesting(other *Image) {
+	backendsM.Lock()
+	defer backendsM.Unlock()
+	var forbidden []*backend
+	for _, b := range theBackends {
+		if b != other.backend {
+			forbidden = append(forbidden, b)
+		}
+	}
+	i.allocate(forbidden, true)
 }
 
 var FlushDeferredForTesting = flushDeferred

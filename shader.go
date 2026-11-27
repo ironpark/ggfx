@@ -31,6 +31,9 @@ type Shader struct {
 	shader *atlas.Shader
 }
 
+// NewShader compiles a WGSL fragment shader source and returns the resulting Shader.
+//
+// For the shader language and built-in bindings, see docs/shaders.md.
 func NewShader(src []byte) (*Shader, error) {
 	return newShader(src, "")
 }
@@ -45,6 +48,12 @@ func newShader(src []byte, name string) (*Shader, error) {
 	}, nil
 }
 
+// Dispose permanently releases the shader's resources.
+//
+// Unlike [Shader.Deallocate], a disposed shader cannot be used again: drawing with it or calling
+// [Shader.NewUniforms], [Uniforms.Set], [Uniforms.SetSlice], or [Uniforms.SetBool] on a [Uniforms]
+// created from it panics ([Uniforms.Reset] continues to zero its buffer). Calling Dispose more
+// than once is a no-op.
 func (s *Shader) Dispose() {
 	if s.shader == nil {
 		return
@@ -57,9 +66,9 @@ func (s *Shader) isDisposed() bool {
 	return s.shader == nil
 }
 
-// Deallocate deallocates the internal state of the shader.
-// Even after Deallocate is called, the shader is still available.
-// In this case, the shader's internal state is allocated again.
+// Deallocate releases the shader's GPU state while leaving the shader reusable.
+// If the shader is drawn with again later, its GPU state is re-created automatically.
+// To release the shader permanently, use [Shader.Dispose].
 //
 // Usually, you don't have to call Deallocate since the internal state is automatically released by GC.
 // However, if you are sure that the shader is no longer used but not sure how this shader object is referred,

@@ -65,6 +65,69 @@ func PoolForTesting(regions int) (image bool, room int) {
 // MinRetainedElements is the room a reused slice of the queue may always keep.
 const MinRetainedElements = minRetainedElements
 
+// NewCommandQueueManagerForTesting returns a fresh commandQueueManager for testing buffer seeding
+// and growth across multiple queues.
+func NewCommandQueueManagerForTesting() *commandQueueManager {
+	return &commandQueueManager{}
+}
+
+func (c *commandQueueManager) EnqueueDrawTrianglesForTesting(dst *Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, shader *Shader) {
+	c.enqueueDrawTrianglesCommand(dst, [graphics.ShaderSrcImageCount]*Image{}, vertices, indices, blend, dstRegion, [graphics.ShaderSrcImageCount]image.Rectangle{}, shader, nil)
+}
+
+func (c *commandQueueManager) FlushSyncForTesting(driver graphicsdriver.Graphics, mode graphicsdriver.FlushMode) error {
+	prev := c.current
+	if prev != nil {
+		c.observeBuffers(len(prev.vertices), len(prev.indices))
+	}
+	c.current = c.getQueue()
+	c.generation++
+	if prev == nil {
+		return nil
+	}
+	err := prev.flush(driver, mode, debug.SwitchFrameLogger())
+	c.putCommandQueue(prev)
+	return err
+}
+
+// SwitchQueueForTesting mimics an in-flight async flush by recording the current queue's peak,
+// allocating a fresh queue from the manager, and returning the old queue to be finished later.
+func (c *commandQueueManager) SwitchQueueForTesting() *commandQueue {
+	prev := c.current
+	if prev != nil {
+		c.observeBuffers(len(prev.vertices), len(prev.indices))
+	}
+	c.current = c.getQueue()
+	c.generation++
+	return prev
+}
+
+func (c *commandQueueManager) FinishQueueForTesting(q *commandQueue, driver graphicsdriver.Graphics, mode graphicsdriver.FlushMode) error {
+	if q == nil {
+		return nil
+	}
+	err := q.flush(driver, mode, debug.SwitchFrameLogger())
+	c.putCommandQueue(q)
+	return err
+}
+
+func (c *commandQueueManager) CurrentCapsForTesting() (vertices, indices int) {
+	if c.current == nil {
+		return 0, 0
+	}
+	return cap(c.current.vertices), cap(c.current.indices)
+}
+
+func (c *commandQueueManager) PooledCapsForTesting() [][3]int {
+	c.pool.m.Lock()
+	defer c.pool.m.Unlock()
+	out := make([][3]int, len(c.pool.cache))
+	for i, q := range c.pool.cache {
+		out[i] = [3]int{cap(q.vertices), cap(q.indices), cap(q.uint32sBuffer.buf)}
+	}
+	return out
+}
+
 // BufferCapsForTesting reports the room the queue keeps for vertices,
 // indices and uniforms.
 func (q *commandQueue) BufferCapsForTesting() (vertices, indices, uniforms int) {

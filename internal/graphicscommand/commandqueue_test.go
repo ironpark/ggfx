@@ -175,8 +175,130 @@ func TestQueueShrinksAfterALargeFrame(t *testing.T) {
 		frame(1)
 	}
 	const limit = 2 * graphicscommand.MinRetainedElements
+	if v, i, u := q.BufferCapsForTesting(); u > limit {
+		t.Errorf("after 300 small frames: uniform cap = %d, want at most %d", u, limit)
+	} else if v < large*4*graphics.VertexFloatCount || i < large*6 {
+		t.Errorf("after 300 small frames: vertex/index caps = %d, %d; want retained during brief idle", v, i)
+	}
+
+	for range 2 * graphicscommand.BufferPeakWindow {
+		frame(1)
+	}
 	if v, i, u := q.BufferCapsForTesting(); v > limit || i > limit || u > limit {
-		t.Errorf("after small frames: caps = %d, %d, %d; want at most %d", v, i, u, limit)
+		t.Errorf("after long idle: caps = %d, %d, %d; want at most %d", v, i, u, limit)
+	}
+}
+
+// TestQueueManagerStartupAndIdleResumeBoundsAllocations verifies C-P1:
+//   - a second/third queue created during startup or async flush seeds from the manager's peak and
+//     allocates once instead of stepping through append growth;
+//   - a 260-frame idle pause does not drop vertex/index buffers (0 bytes allocated on resume);
+//   - after a long idle that does shrink buffers, 2x explicit growth bounds regrow allocation.
+func TestQueueManagerStartupAndIdleResumeBoundsAllocations(t *testing.T) {
+	mgr := graphicscommand.NewCommandQueueManagerForTesting()
+	var driver drawDriver
+	dst := graphicscommand.NewFakeImageForTesting(16, 16)
+	shader := nearestFilterShader.FakeForTesting()
+
+	// ~1M vertex floats (4 MB) and ~125K indices (0.5 MB) per busy frame.
+	const quadsPerDraw = 64
+	const drawsPerFrame = 320
+	vs := make([]float32, quadsPerDraw*4*graphics.VertexFloatCount)
+	is := make([]uint32, quadsPerDraw*6)
+	dr := image.Rect(0, 0, 16, 16)
+
+	enqueueFrame := func() {
+		for range drawsPerFrame {
+			mgr.EnqueueDrawTrianglesForTesting(dst, vs, is, graphicsdriver.BlendSourceOver, dr, shader)
+		}
+	}
+
+	// Frame 1 on queue 1: warms up manager peak.
+	enqueueFrame()
+	q1 := mgr.SwitchQueueForTesting()
+
+	// Frame 2 on a fresh queue 2 while queue 1 is still in flight: count actual capacity changes
+	// across all 320 draws on the cold queue. Because it seeds from queue 1's peak on the first
+	// draw, each slice must grow at most once.
+	countGrowths := func() (vGrow, iGrow int) {
+		prevV, prevI := mgr.CurrentCapsForTesting()
+		for range drawsPerFrame {
+			mgr.EnqueueDrawTrianglesForTesting(dst, vs, is, graphicsdriver.BlendSourceOver, dr, shader)
+			curV, curI := mgr.CurrentCapsForTesting()
+			if curV != prevV {
+				vGrow++
+				prevV = curV
+			}
+			if curI != prevI {
+				iGrow++
+				prevI = curI
+			}
+		}
+		return vGrow, iGrow
+	}
+	if vGrow, iGrow := countGrowths(); vGrow != 1 || iGrow != 1 {
+		t.Errorf("second cold queue growths = (%d, %d), want (1, 1) (seeded in one allocation)", vGrow, iGrow)
+	}
+	q2 := mgr.SwitchQueueForTesting()
+
+	// Frame 3 on a fresh third queue while queues 1 and 2 are still in flight: also seeded in one shot.
+	if vGrow, iGrow := countGrowths(); vGrow != 1 || iGrow != 1 {
+		t.Errorf("third cold queue growths = (%d, %d), want (1, 1) (seeded in one allocation)", vGrow, iGrow)
+	}
+	if err := mgr.FinishQueueForTesting(q1, &driver, graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.FinishQueueForTesting(q2, &driver, graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.FlushSyncForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+	recent.Advance()
+
+	// 260 idle frames: buffers must stay warm and resume with 0 vertex/index reallocations.
+	for range 260 {
+		mgr.EnqueueDrawTrianglesForTesting(dst, vs[:4*graphics.VertexFloatCount], is[:6], graphicsdriver.BlendSourceOver, dr, shader)
+		if err := mgr.FlushSyncForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
+			t.Fatal(err)
+		}
+		recent.Advance()
+	}
+	vCapBefore, iCapBefore := mgr.CurrentCapsForTesting()
+	if vCapBefore < drawsPerFrame*len(vs) || iCapBefore < drawsPerFrame*len(is) {
+		t.Fatalf("after 260 idle frames: caps = (%d, %d), want >= (%d, %d)", vCapBefore, iCapBefore, drawsPerFrame*len(vs), drawsPerFrame*len(is))
+	}
+	enqueueFrame()
+	vCapAfter, iCapAfter := mgr.CurrentCapsForTesting()
+	if vCapAfter != vCapBefore || iCapAfter != iCapBefore {
+		t.Errorf("busy frame after 260 idle frames regrew buffers: (%d, %d) -> (%d, %d)", vCapBefore, iCapBefore, vCapAfter, iCapAfter)
+	}
+	if err := mgr.FlushSyncForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
+		t.Fatal(err)
+	}
+	recent.Advance()
+
+	// Continued small frames past 2*BufferPeakWindow + recent.Window must shrink the managed
+	// current queue AND sweep every parked queue in the LIFO pool (including the 3rd queue).
+	for range 2*graphicscommand.BufferPeakWindow + recent.Window + 10 {
+		mgr.EnqueueDrawTrianglesForTesting(dst, vs[:4*graphics.VertexFloatCount], is[:6], graphicsdriver.BlendSourceOver, dr, shader)
+		if err := mgr.FlushSyncForTesting(&driver, graphicsdriver.FlushModeEndFrame); err != nil {
+			t.Fatal(err)
+		}
+		recent.Advance()
+	}
+	const limit = 2 * graphicscommand.MinRetainedElements
+	if vc, ic := mgr.CurrentCapsForTesting(); vc > limit || ic > limit {
+		t.Errorf("managed current queue after long idle: caps = (%d, %d), want <= %d", vc, ic, limit)
+	}
+	pooled := mgr.PooledCapsForTesting()
+	if len(pooled) < 2 {
+		t.Fatalf("expected at least 2 pooled queues (3 total queues), got %d", len(pooled))
+	}
+	for idx, caps := range pooled {
+		if caps[0] > limit || caps[1] > limit {
+			t.Errorf("parked pooled queue %d after long idle: caps = (%d, %d, %d), want <= %d", idx, caps[0], caps[1], caps[2], limit)
+		}
 	}
 }
 

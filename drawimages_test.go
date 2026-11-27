@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"math"
 	"testing"
 
 	"github.com/ironpark/ggfx"
@@ -45,16 +46,185 @@ func glyphs(n int) []*ggfx.Image {
 
 func TestDrawImagesPaintsWhatDrawImageDoes(t *testing.T) {
 	for _, filter := range []ggfx.Filter{ggfx.FilterNearest, ggfx.FilterLinear} {
-		testDrawImagesPaintsWhatDrawImageDoes(t, filter)
+		testDrawImagesPaintsWhatDrawImageDoes(t, filter, 1, 1)
 	}
 }
 
-func testDrawImagesPaintsWhatDrawImageDoes(t *testing.T, filter ggfx.Filter) {
+func TestDrawImagesLinearShrinkMatchesDrawImage(t *testing.T) {
+	scales := [][2]float64{
+		{0.9, 0.9},
+		{0.6, 0.6},
+		{0.5, 0.5},
+		{0.49, 0.49},
+		{0.25, 0.25},
+		{0.4, 0.9},
+	}
+	for _, sc := range scales {
+		testDrawImagesPaintsWhatDrawImageDoes(t, ggfx.FilterLinear, sc[0], sc[1])
+	}
+}
+
+// TestMipmapSelectionMatchesIndependentBaseline checks DrawImage and DrawImages against an
+// independent level-0 / level-1 baseline, including cases where destination-pixel snapping
+// reduces edge scale below 0.5 (e.g. a 3x3 source scaled by 0.5 and translated by 0.25),
+// rotation, reflection, and non-uniform scaling.
+func TestMipmapSelectionMatchesIndependentBaseline(t *testing.T) {
+	// 1. 3x3 patterned source: top-left 2x2 is red, right/bottom border is blue.
+	// Level 1 is 1x1 = average of the top-left 2x2 = pure red (no blue).
+	// Level 0 (DisableMipmaps) samples the right/bottom blue border at (1, 1).
+	src3 := ggfx.NewImage(3, 3)
+	defer src3.Deallocate()
+	pix3 := make([]byte, 4*3*3)
+	for y := range 3 {
+		for x := range 3 {
+			off := 4 * (y*3 + x)
+			if x < 2 && y < 2 {
+				pix3[off], pix3[off+1], pix3[off+2], pix3[off+3] = 0xff, 0, 0, 0xff
+			} else {
+				pix3[off], pix3[off+1], pix3[off+2], pix3[off+3] = 0, 0, 0xff, 0xff
+			}
+		}
+	}
+	src3.WritePixels(pix3)
+
+	var geo3 ggfx.GeoM
+	geo3.Scale(0.5, 0.5)
+	geo3.Translate(0.25, 0.25)
+
+	draw3 := func(mode string) color.RGBA {
+		dst := ggfx.NewImage(4, 4)
+		defer dst.Deallocate()
+		op := &ggfx.DrawImageOptions{GeoM: geo3, Filter: ggfx.FilterLinear}
+		switch mode {
+		case "level0":
+			op.DisableMipmaps = true
+			dst.DrawImage(src3, op)
+		case "drawImage":
+			dst.DrawImage(src3, op)
+		case "drawImages":
+			dst.DrawImages([]ggfx.ImageDraw{{Image: src3}}, op)
+		}
+		return dst.At(1, 1).(color.RGBA)
+	}
+	cLevel0 := draw3("level0")
+	cDrawImage := draw3("drawImage")
+	cDrawImages := draw3("drawImages")
+	if cLevel0.B < 0x80 {
+		t.Fatalf("level-0 baseline at (1,1) expected blue from 3x3 border, got %v", cLevel0)
+	}
+	// Level 1 of a 3x3 image is 1x1 pure red (no blue channel at all).
+	if cDrawImage.B != 0 || cDrawImage.R == 0 || cDrawImage.R != cDrawImage.A {
+		t.Errorf("DrawImage 3x3 scale(0.5)+translate(0.25) at (1,1) = %v, want pure red from mip level 1 (level 0 was %v)", cDrawImage, cLevel0)
+	}
+	if cDrawImages != cDrawImage {
+		t.Errorf("DrawImages 3x3 scale(0.5)+translate(0.25) at (1,1) = %v, want %v", cDrawImages, cDrawImage)
+	}
+
+	// 2. 64x64 alternating red/blue checkerboard: level 1 is uniform purple ~(128,0,128,255),
+	// whereas level 0 preserves strong red/blue contrast across samples.
+	const sz = 64
+	checker := ggfx.NewImage(sz, sz)
+	defer checker.Deallocate()
+	pixC := make([]byte, 4*sz*sz)
+	for y := range sz {
+		for x := range sz {
+			off := 4 * (y*sz + x)
+			if (x+y)%2 == 0 {
+				pixC[off], pixC[off+1], pixC[off+2], pixC[off+3] = 0xff, 0, 0, 0xff
+			} else {
+				pixC[off], pixC[off+1], pixC[off+2], pixC[off+3] = 0, 0, 0xff, 0xff
+			}
+		}
+	}
+	checker.WritePixels(pixC)
+
+	// Independent level-1 reference image made by explicit 0.5x linear downsample.
+	level1Ref := ggfx.NewImage(sz/2, sz/2)
+	defer level1Ref.Deallocate()
+	{
+		var op ggfx.DrawImageOptions
+		op.GeoM.Scale(0.5, 0.5)
+		op.Filter = ggfx.FilterLinear
+		op.DisableMipmaps = true
+		level1Ref.DrawImage(checker, &op)
+	}
+
+	makeGeo := func(sx, sy, rot, tx, ty float64) ggfx.GeoM {
+		var g ggfx.GeoM
+		g.Scale(sx, sy)
+		if rot != 0 {
+			g.Rotate(rot)
+		}
+		g.Translate(tx, ty)
+		return g
+	}
+	cases := []struct {
+		name       string
+		geo        ggfx.GeoM
+		wantMipmap bool
+	}{
+		{"scale 0.9", makeGeo(0.9, 0.9, 0, 4, 4), false},
+		{"scale 0.6", makeGeo(0.6, 0.6, 0, 4, 4), false},
+		{"scale 0.49", makeGeo(0.49, 0.49, 0, 4, 4), true},
+		{"rotation 45 at 0.6", makeGeo(0.6, 0.6, math.Pi/4, 48, 4), false},
+		{"rotation 45 at 0.4", makeGeo(0.4, 0.4, math.Pi/4, 48, 4), true},
+		{"reflection at 0.6", makeGeo(-0.6, 0.6, 0, 60, 4), false},
+		{"reflection at 0.4", makeGeo(-0.4, 0.4, 0, 60, 4), true},
+		{"non-uniform 0.4x0.9", makeGeo(0.4, 0.9, 0, 4, 4), false},
+		{"non-uniform 0.4x0.45", makeGeo(0.4, 0.45, 0, 4, 4), true},
+	}
+
+	const dstW, dstH = 96, 96
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			render := func(src *ggfx.Image, geo ggfx.GeoM, disableMip, batched bool) []byte {
+				dst := ggfx.NewImage(dstW, dstH)
+				defer dst.Deallocate()
+				op := &ggfx.DrawImageOptions{GeoM: geo, Filter: ggfx.FilterLinear, DisableMipmaps: disableMip}
+				if batched {
+					dst.DrawImages([]ggfx.ImageDraw{{Image: src}}, op)
+				} else {
+					dst.DrawImage(src, op)
+				}
+				out := make([]byte, 4*dstW*dstH)
+				dst.ReadPixels(out)
+				return out
+			}
+
+			var baseline []byte
+			if tc.wantMipmap {
+				// Independent mip-level-1 baseline: draw the explicit half-res image scaled by 2x
+				// before tc.geo, with mipmaps disabled.
+				var g ggfx.GeoM
+				g.Scale(2, 2)
+				g.Concat(tc.geo)
+				baseline = render(level1Ref, g, true, false)
+			} else {
+				baseline = render(checker, tc.geo, true, false)
+			}
+
+			gotSingle := render(checker, tc.geo, false, false)
+			gotBatch := render(checker, tc.geo, false, true)
+			for p := range baseline {
+				if abs(int(gotSingle[p])-int(baseline[p])) > 2 {
+					t.Fatalf("DrawImage differs from independent baseline at (%d,%d): got %v, want %v",
+						p/4%dstW, p/4/dstW, gotSingle[p&^3:p&^3+4], baseline[p&^3:p&^3+4])
+				}
+				if abs(int(gotBatch[p])-int(baseline[p])) > 2 {
+					t.Fatalf("DrawImages differs from independent baseline at (%d,%d): got %v, want %v",
+						p/4%dstW, p/4/dstW, gotBatch[p&^3:p&^3+4], baseline[p&^3:p&^3+4])
+				}
+			}
+		})
+	}
+}
+
+func testDrawImagesPaintsWhatDrawImageDoes(t *testing.T, filter ggfx.Filter, sx, sy float64) {
 	imgs := glyphs(24)
 	var tint ggfx.ColorScale
 	tint.Scale(0.5, 0.8, 1, 0.75)
 	var geoM ggfx.GeoM
-	geoM.Scale(1, 1)
+	geoM.Scale(sx, sy)
 	geoM.Translate(3.25, 5.5)
 
 	paint := func(batched bool) []byte {

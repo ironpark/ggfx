@@ -21,13 +21,16 @@ import (
 	"sync"
 
 	"github.com/ironpark/ggfx/internal/atlas"
+	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
 
 // quadScratch is what a DrawQuads keeps its lists in.
 type quadScratch struct {
-	locked []*Image
-	imgs   []*atlas.Image
+	locked   []*Image
+	imgs     []*atlas.Image
+	vertices []float32
+	regions  []image.Rectangle
 }
 
 var quadScratches = sync.Pool{New: func() any { return new(quadScratch) }}
@@ -77,20 +80,71 @@ func (i *Image) DrawQuads(srcs []*Image, vertices []float32, blend graphicsdrive
 		s.locked = locked[:0]
 	}()
 
-	i.lastBlend = blend
+	if i.disposed.Load() {
+		return
+	}
 
-	// As in drawTriangles, pending pixel writes go to the GPU first—once per unique image.
+	var anyDisposed bool
 	for _, img := range locked {
-		img.cache.writeBackPixelsIfNeeded(img.img)
+		if img != i && img.disposed.Load() {
+			anyDisposed = true
+			break
+		}
 	}
 
 	imgs := s.imgs[:0]
-	for _, src := range srcs {
-		imgs = append(imgs, src.img)
+	verts := vertices
+	regs := srcRegions
+	if anyDisposed {
+		const quad = 4 * graphics.VertexFloatCount
+		verts = s.vertices[:0]
+		regs = s.regions[:0]
+		for k, src := range srcs {
+			if src.disposed.Load() {
+				continue
+			}
+			imgs = append(imgs, src.img)
+			verts = append(verts, vertices[k*quad:(k+1)*quad]...)
+			regs = append(regs, srcRegions[k])
+		}
+		if len(imgs) == 0 {
+			s.imgs = imgs[:0]
+			s.vertices = verts[:0]
+			s.regions = regs[:0]
+			return
+		}
+	} else {
+		for _, src := range srcs {
+			imgs = append(imgs, src.img)
+		}
 	}
-	i.img.DrawQuads(imgs, vertices, blend, dstRegion, srcRegions, shader)
-	clear(imgs)
-	s.imgs = imgs[:0]
+
+	i.lastBlend = blend
+
+	// As in drawTriangles, pending pixel writes go to the GPU first—once per unique live image.
+	for _, img := range locked {
+		if !img.disposed.Load() {
+			img.cache.writeBackPixelsIfNeeded(img.img)
+		}
+	}
+
+	defer func() {
+		clear(imgs)
+		s.imgs = imgs[:0]
+		if anyDisposed {
+			if cap(verts) > 65536 {
+				s.vertices = nil
+			} else {
+				s.vertices = verts[:0]
+			}
+			if cap(regs) > 2048 {
+				s.regions = nil
+			} else {
+				s.regions = regs[:0]
+			}
+		}
+	}()
+	i.img.DrawQuads(imgs, verts, blend, dstRegion, regs, shader)
 
 	i.cache.reset()
 	i.markLevelsDirty()

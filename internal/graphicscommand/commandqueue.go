@@ -56,6 +56,9 @@ func FlushCommands(graphicsDriver graphicsdriver.Graphics, mode graphicsdriver.F
 
 // commandQueue is a command queue for drawing commands.
 type commandQueue struct {
+	// mgr is the manager that owns this queue, or nil for standalone queues in tests.
+	mgr *commandQueueManager
+
 	// commands is a queue of drawing commands.
 	commands []command
 
@@ -64,11 +67,14 @@ type commandQueue struct {
 	indices  []uint32
 
 	// verticesUse and indicesUse track how many vertices and indices the flushes of recent frames
-	// held, so that the slices give back the room a large flush took.
+	// held for standalone queues without a manager. Managed queues share peaks in mgr.
 	verticesUse recent.Peak
 	indicesUse  recent.Peak
 
 	tmpNumVertexFloats int
+
+	// reportedBufferBytes is this queue's last contribution to the global bufferBytes counter.
+	reportedBufferBytes int64
 
 	// lastDstRegion and lastSrcRegions are the regions of the draw enqueued last, which the last
 	// command holds when it is a draw (see sameRegionsAsLast).
@@ -104,15 +110,56 @@ type commandQueue struct {
 	runFlushFunc func()
 }
 
+// growSlice ensures s has room for add more elements. When growing, it steps geometrically (2x)
+// and seeds at least to seed so new or shrunk queues allocate once instead of stepping through
+// Go's ~1.25x append growth.
+func growSlice[T any](s []T, add, seed int) []T {
+	need := len(s) + add
+	if need <= cap(s) {
+		return s
+	}
+	target := max(need, 2*cap(s), seed, minRetainedElements)
+	return slices.Grow(s, target-len(s))
+}
+
+func (q *commandQueue) vertexSeed() int {
+	if q.mgr != nil {
+		return q.mgr.vertexSeed()
+	}
+	return 0
+}
+
+func (q *commandQueue) indexSeed() int {
+	if q.mgr != nil {
+		return q.mgr.indexSeed()
+	}
+	return 0
+}
+
+func (q *commandQueue) updateBufferBytes() {
+	if q.mgr != &theCommandQueueManager {
+		return
+	}
+	cur := int64(cap(q.vertices))*4 + int64(cap(q.indices))*4
+	if diff := cur - q.reportedBufferBytes; diff != 0 {
+		bufferBytes.Add(diff)
+		q.reportedBufferBytes = cur
+	}
+}
+
 func (q *commandQueue) appendIndices(indices []uint32, offset uint32) {
 	n := len(q.indices)
+	if n+len(indices) > cap(q.indices) {
+		q.indices = growSlice(q.indices, len(indices), q.indexSeed())
+		q.updateBufferBytes()
+	}
 	q.indices = append(q.indices, indices...)
 	graphics.OffsetIndices(q.indices[n:], offset)
 }
 
 // mustUseDifferentVertexBuffer reports whether a different vertex buffer must be used.
 func mustUseDifferentVertexBuffer(nextNumVertexFloats int) bool {
-	return nextNumVertexFloats > maxVertexFloatCount
+	return nextNumVertexFloats < 0 || nextNumVertexFloats > maxVertexFloatCount
 }
 
 // EnqueueDrawTrianglesCommand enqueues a drawing-image command.
@@ -129,6 +176,10 @@ func (q *commandQueue) EnqueueDrawTrianglesCommand(dst *Image, srcs [graphics.Sh
 
 	// Assume that all the image sizes are same.
 	// Assume that the images are packed from the front in the slice srcs.
+	if len(q.vertices)+len(vertices) > cap(q.vertices) {
+		q.vertices = growSlice(q.vertices, len(vertices), q.vertexSeed())
+		q.updateBufferBytes()
+	}
 	q.vertices = append(q.vertices, vertices...)
 	q.appendIndices(indices, uint32(q.tmpNumVertexFloats/graphics.VertexFloatCount))
 	q.tmpNumVertexFloats += len(vertices)
@@ -300,6 +351,8 @@ func (q *commandQueue) runFlush() {
 			return
 		}
 		theCommandQueueManager.storeAsyncErr(err)
+	} else if mode != graphicsdriver.FlushModeIntermediate {
+		completedFrames.Add(1)
 	}
 
 	if !sync {
@@ -320,15 +373,29 @@ func (q *commandQueue) resetCommands(mode graphicsdriver.FlushMode) {
 			// An image's pendingWrite may still point to c, but it is not used once the
 			// queue's generation has passed.
 			q.writePixelsCommandPool.put(c)
+		case *callbackCommand:
+			// Complete any unexecuted callback when a flush fails early and drops the queue so
+			// ordering gates (e.g. Surface resize) cannot stick shut forever.
+			if !c.done {
+				c.done = true
+				c.f()
+			}
 		}
 		q.commands[i] = nil
 	}
 	q.commands = q.commands[:0]
 	q.lastDraw = nil
-	// No command refers to the vertices or indices any more, and the driver has copied them.
-	q.vertices = shrinkToRecentUse(q.vertices, &q.verticesUse)
-	q.indices = shrinkToRecentUse(q.indices, &q.indicesUse)
 	q.tmpNumVertexFloats = 0
+	// No command refers to the vertices or indices any more, and the driver has copied them.
+	if q.mgr != nil {
+		vLimit, iLimit := q.mgr.bufferLimits()
+		q.vertices = shrinkToLimit(q.vertices, vLimit)
+		q.indices = shrinkToLimit(q.indices, iLimit)
+		q.updateBufferBytes()
+	} else {
+		q.vertices = shrinkToRecentUseWindow(q.vertices, &q.verticesUse, BufferPeakWindow)
+		q.indices = shrinkToRecentUseWindow(q.indices, &q.indicesUse, BufferPeakWindow)
+	}
 
 	// Return uploaded bytes on every flush (including intermediate flushes) so headless
 	// ReadPixels loops and external replays do not leak buffers.
@@ -377,7 +444,6 @@ func (q *commandQueue) flush(graphicsDriver graphicsdriver.Graphics, mode graphi
 	flushes.Add(1)
 	commandsRun.Add(int64(len(q.commands)))
 	verticesSent.Add(int64(len(q.vertices) / graphics.VertexFloatCount))
-	bufferBytes.Store(int64(cap(q.vertices)*4 + cap(q.indices)*4))
 
 	cs := q.commands
 	for len(cs) > 0 {
@@ -548,15 +614,157 @@ type commandQueueManager struct {
 	pool    commandQueuePool
 	current *commandQueue
 
+	// peakM guards verticesUse and indicesUse, which track the recent peak across all queues
+	// so new or shrunk queues seed their capacity in one allocation.
+	peakM       sync.Mutex
+	verticesUse recent.Peak
+	indicesUse  recent.Peak
+
 	// generation counts the flushes, so that an image can tell whether a command it enqueued is
 	// still in the current queue.
 	generation uint64
 
 	// asyncErr holds the error reported by an asynchronous flush until the next flush drains it.
 	asyncErr atomic.Pointer[error]
+
+	// lastPoolSweep is the recent.Now tick when idle pooled queues were last trimmed.
+	lastPoolSweep atomic.Int64
 }
 
 var theCommandQueueManager commandQueueManager
+
+func (c *commandQueueManager) getQueue() *commandQueue {
+	q := c.pool.get()
+	q.mgr = c
+	return q
+}
+
+func (c *commandQueueManager) observeBuffers(vertices, indices int) {
+	c.peakM.Lock()
+	c.verticesUse.ObserveNowWindow(vertices, BufferPeakWindow)
+	c.indicesUse.ObserveNowWindow(indices, BufferPeakWindow)
+	c.peakM.Unlock()
+}
+
+func (c *commandQueueManager) bufferLimits() (vLimit, iLimit int) {
+	c.peakM.Lock()
+	now := recent.Now()
+	c.verticesUse.AdvanceToWindow(now, BufferPeakWindow)
+	c.indicesUse.AdvanceToWindow(now, BufferPeakWindow)
+	vLimit = max(c.verticesUse.Max(), minRetainedElements)
+	iLimit = max(c.indicesUse.Max(), minRetainedElements)
+	c.peakM.Unlock()
+	return vLimit, iLimit
+}
+
+func (c *commandQueueManager) vertexSeed() int {
+	c.peakM.Lock()
+	c.verticesUse.AdvanceToWindow(recent.Now(), BufferPeakWindow)
+	peak := c.verticesUse.Max()
+	c.peakM.Unlock()
+	if peak == 0 {
+		return 0
+	}
+	return retainedFor(peak)
+}
+
+func (c *commandQueueManager) indexSeed() int {
+	c.peakM.Lock()
+	c.indicesUse.AdvanceToWindow(recent.Now(), BufferPeakWindow)
+	peak := c.indicesUse.Max()
+	c.peakM.Unlock()
+	if peak == 0 {
+		return 0
+	}
+	return retainedFor(peak)
+}
+
+func (q *commandQueue) trimBuffers(vLimit, iLimit int) {
+	q.vertices = shrinkToLimit(q.vertices, vLimit)
+	q.indices = shrinkToLimit(q.indices, iLimit)
+	q.updateBufferBytes()
+	q.uint32sBuffer.reset()
+}
+
+// Trim shrinks idle command-queue vertex, index, and uniform buffers to their current peaks.
+// Must be called while command-queue enqueueing and flushing are serialized (e.g. under atlas backendsM).
+func Trim() {
+	theCommandQueueManager.trim()
+}
+
+// FinalizeIdleUniforms records and clears pending uniform-buffer usage on every idle queue at the
+// current frame clock, without issuing a driver EndFrame. Must be called under atlas backendsM
+// after Sync (when no queue is in flight) and before Trim advances the idle clock.
+func FinalizeIdleUniforms() {
+	theCommandQueueManager.finalizeIdleUniforms()
+}
+
+// UniformBufferBytes returns the total capacity in bytes of uniform staging buffers across the
+// current and pooled command queues.
+func UniformBufferBytes() int64 {
+	return theCommandQueueManager.uniformBufferBytes()
+}
+
+// DrainAsyncErr returns and clears any error reported by an asynchronous flush.
+func DrainAsyncErr() error {
+	return theCommandQueueManager.drainAsyncErr()
+}
+
+func (c *commandQueueManager) finalizeIdleUniforms() {
+	if c.current != nil && len(c.current.commands) == 0 {
+		c.current.uint32sBuffer.reset()
+	}
+	c.pool.m.Lock()
+	for _, q := range c.pool.cache {
+		q.uint32sBuffer.reset()
+	}
+	c.pool.m.Unlock()
+}
+
+func (c *commandQueueManager) uniformBufferBytes() int64 {
+	var total int64
+	if c.current != nil {
+		total += int64(cap(c.current.uint32sBuffer.buf)) * 4
+	}
+	c.pool.m.Lock()
+	for _, q := range c.pool.cache {
+		total += int64(cap(q.uint32sBuffer.buf)) * 4
+	}
+	c.pool.m.Unlock()
+	return total
+}
+
+func (c *commandQueueManager) trim() {
+	vLimit, iLimit := c.bufferLimits()
+	if c.current != nil && len(c.current.commands) == 0 {
+		c.current.trimBuffers(vLimit, iLimit)
+	}
+	c.pool.m.Lock()
+	for _, q := range c.pool.cache {
+		q.trimBuffers(vLimit, iLimit)
+	}
+	c.pool.m.Unlock()
+	c.lastPoolSweep.Store(recent.Now())
+}
+
+// sweepPoolIfNeeded periodically trims idle queues parked in the LIFO pool so an oversized
+// queue at the bottom of the pool does not retain memory indefinitely during small frames.
+func (c *commandQueueManager) sweepPoolIfNeeded() {
+	now := recent.Now()
+	last := c.lastPoolSweep.Load()
+	if now-last < recent.Window {
+		return
+	}
+	if !c.lastPoolSweep.CompareAndSwap(last, now) {
+		return
+	}
+	vLimit, iLimit := c.bufferLimits()
+	c.pool.m.Lock()
+	for _, q := range c.pool.cache {
+		q.trimBuffers(vLimit, iLimit)
+	}
+	c.pool.m.Unlock()
+}
 
 func (c *commandQueueManager) storeAsyncErr(err error) {
 	if err == nil {
@@ -587,14 +795,14 @@ func (c *commandQueueManager) drainAsyncErr() error {
 // puts it back once it has run.
 func (c *commandQueueManager) newWritePixelsCommand() *writePixelsCommand {
 	if c.current == nil {
-		c.current = c.pool.get()
+		c.current = c.getQueue()
 	}
 	return c.current.writePixelsCommandPool.get()
 }
 
 func (c *commandQueueManager) enqueueCommand(command command) {
 	if c.current == nil {
-		c.current = c.pool.get()
+		c.current = c.getQueue()
 	}
 	c.current.Enqueue(command)
 }
@@ -602,11 +810,12 @@ func (c *commandQueueManager) enqueueCommand(command command) {
 // put can be called from any goroutines.
 func (c *commandQueueManager) putCommandQueue(commandQueue *commandQueue) {
 	c.pool.put(commandQueue)
+	c.sweepPoolIfNeeded()
 }
 
 func (c *commandQueueManager) enqueueDrawTrianglesCommand(dst *Image, srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *Shader, uniforms []uint32) {
 	if c.current == nil {
-		c.current = c.pool.get()
+		c.current = c.getQueue()
 	}
 	c.current.EnqueueDrawTrianglesCommand(dst, srcs, vertices, indices, blend, dstRegion, srcRegions, shader, uniforms)
 }
@@ -616,9 +825,13 @@ func (c *commandQueueManager) flush(graphicsDriver graphicsdriver.Graphics, mode
 		return err
 	}
 
-	// Switch the command queue.
+	// Switch the command queue. Record prev's buffer sizes before switching so the next queue
+	// seeds from the peak even when prev flushes asynchronously.
 	prev := c.current
-	c.current = c.pool.get()
+	if prev != nil {
+		c.observeBuffers(len(prev.vertices), len(prev.indices))
+	}
+	c.current = c.getQueue()
 	c.generation++
 
 	if prev == nil {
@@ -682,21 +895,27 @@ func (b *uint32sBuffer) reset() {
 
 // minRetainedElements is the room a reused slice may always keep. A slice larger than
 // recent.ShrinkFactor times its recent peak gives its room back, down to a quarter more than the
-// peak (see retainedFor): a large slice grows by about a quarter when appended past its room, so
-// a frame as large as the peak again fits in what is kept, and the queues, two of them, hold
-// their vertices for a screenful of glyphs at 1.25 times its size rather than up to 4.
+// peak (see retainedFor).
 const minRetainedElements = 4096
 
-// shrinkToRecentUse records the use of s in use, and returns s emptied. If s has far more room
-// than recent uses needed, the returned slice is a smaller one. Slices of s may still be held
-// elsewhere; they keep the old array alive by themselves.
-func shrinkToRecentUse[T any](s []T, use *recent.Peak) []T {
-	use.ObserveNow(len(s))
-	limit := max(use.Max(), minRetainedElements)
+// BufferPeakWindow is how many ticks the command queue keeps its vertex and index buffer peaks,
+// so a brief idle pause does not drop and regrow tens of megabytes of staging buffers.
+const BufferPeakWindow = 10 * recent.Window
+
+// shrinkToLimit returns s emptied, reallocating smaller if cap(s) exceeds ShrinkFactor*limit.
+func shrinkToLimit[T any](s []T, limit int) []T {
 	if cap(s) > recent.ShrinkFactor*limit {
 		return make([]T, 0, retainedFor(limit))
 	}
 	return s[:0]
+}
+
+// shrinkToRecentUseWindow records the use of s in use with the given window, and returns s emptied.
+// If s has far more room than recent uses needed, the returned slice is a smaller one.
+func shrinkToRecentUseWindow[T any](s []T, use *recent.Peak, window int64) []T {
+	use.ObserveNowWindow(len(s), window)
+	limit := max(use.Max(), minRetainedElements)
+	return shrinkToLimit(s, limit)
 }
 
 // retainedFor is the room a reused slice keeps once shrunk, for a recent peak of limit.
@@ -705,6 +924,16 @@ func retainedFor(limit int) int { return limit + limit/4 }
 // The queue's counts, for DebugInfo: they only grow, but for bufferBytes,
 // the size of the vertex and index buffers kept between flushes.
 var flushes, commandsRun, verticesSent, bufferBytes atomic.Int64
+
+// completedFrames counts final (non-intermediate) flushes whose driver End returned without error
+// on the render thread.
+var completedFrames atomic.Uint64
+
+// CompletedFrames returns the number of final (non-intermediate) flushes whose driver End has
+// completed without error on the render thread.
+func CompletedFrames() uint64 {
+	return completedFrames.Load()
+}
 
 // Counts reports how many flushes and commands have run and vertices been
 // sent since the program started, and the bytes the queue keeps for

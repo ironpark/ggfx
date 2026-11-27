@@ -336,7 +336,9 @@ func (c *disposeImageCommand) String() string {
 
 // Exec executes the disposeImageCommand.
 func (c *disposeImageCommand) Exec(commandQueue *commandQueue, graphicsDriver graphicsdriver.Graphics, indexOffset int) error {
-	c.target.image.Dispose()
+	if c.target.image != nil {
+		c.target.image.Dispose()
+	}
 	return nil
 }
 
@@ -361,6 +363,32 @@ func (c *disposeShaderCommand) Exec(commandQueue *commandQueue, graphicsDriver g
 
 func (c *disposeShaderCommand) NeedsSync() bool {
 	return false
+}
+
+// callbackCommand runs a function on the render thread in command order without forcing a sync.
+type callbackCommand struct {
+	f    func()
+	done bool
+}
+
+func (c *callbackCommand) String() string {
+	return "callback"
+}
+
+func (c *callbackCommand) Exec(commandQueue *commandQueue, graphicsDriver graphicsdriver.Graphics, indexOffset int) error {
+	c.done = true
+	c.f()
+	return nil
+}
+
+func (c *callbackCommand) NeedsSync() bool {
+	return false
+}
+
+// EnqueueCallback schedules f to run on the render thread after every command queued so far,
+// without forcing a synchronous flush.
+func EnqueueCallback(f func()) {
+	theCommandQueueManager.enqueueCommand(&callbackCommand{f: f})
 }
 
 // newImageCommand represents a command to create an empty image with given width and height.
@@ -461,7 +489,7 @@ func MaxImageSize(graphicsDriver graphicsdriver.Graphics) int {
 	return size
 }
 
-// FinishForcedFrame waits for a frame forced while the game loop is blocked to finish.
+// FinishForcedFrame waits for a frame forced while the main thread is blocked to finish.
 // If the graphics driver doesn't have an API to wait, FinishForcedFrame does nothing.
 func FinishForcedFrame(graphicsDriver graphicsdriver.Graphics) error {
 	f, ok := graphicsDriver.(graphicsdriver.ForcedFrameFinisher)

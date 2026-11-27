@@ -82,11 +82,21 @@ type Options struct {
 
 	// SingleThread runs the graphics commands on the goroutine that flushes them, instead of on
 	// a thread of the renderer's own. The browser always runs them so.
+	//
+	// In SingleThread mode every operation that executes graphics commands—including [BeginFrame],
+	// [Flush], [Trim], and [ggfx.Image] pixel reads ([ggfx.Image.At], [ggfx.Image.RGBA64At],
+	// [ggfx.Image.ReadPixels])—must be called on the renderer's thread (on desktop OpenGL, the OS
+	// thread that holds the drawing context).
 	SingleThread bool
 
 	// MainThread runs a function on the OS main thread and returns when it has run. Metal sets
 	// its layer's properties through it while a window is resized by the user. Nil runs the
 	// function on the calling goroutine, which is right when the loop runs on the main thread.
+	//
+	// With a synchronous MainThread callback on macOS, pixel reads ([ggfx.Image.At],
+	// [ggfx.Image.RGBA64At], [ggfx.Image.ReadPixels]) must be made off the main thread while a
+	// live-resize present can be in flight (and, when Metal uses CAMetalLayer, during live resize
+	// or fullscreen transitions).
 	MainThread func(func())
 }
 
@@ -176,8 +186,7 @@ var (
 	frameScreens  []*ggfx.Image
 )
 
-// BeginFrame begins a frame. A read of pixels that missed the last frame runs at BeginFrame.
-// [Frame.End] is called when BeginFrame succeeded.
+// BeginFrame begins a frame. [Frame.End] is called when BeginFrame succeeded.
 func BeginFrame() (Frame, error) {
 	if err := render.BeginFrame(); err != nil {
 		return Frame{}, err
@@ -266,4 +275,15 @@ func Flush(present bool) (FlushResult, error) {
 // a live resize on macOS, to be presented.
 func FinishForcedFrame() error {
 	return render.FinishForcedFrame()
+}
+
+// Trim releases cached resources (command-queue staging buffers, mipmap levels, upload byte pools,
+// atlas pages, and vector stencil caches) as if a long idle had elapsed. A window system with an
+// event-driven loop can call Trim when it stops flushing frames while idle. Trim must be called
+// outside a frame.
+//
+// Any driver error encountered while draining pending work or flushing compaction commands is
+// returned and also recorded for the next [BeginFrame].
+func Trim() error {
+	return render.Trim()
 }

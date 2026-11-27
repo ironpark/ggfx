@@ -91,53 +91,83 @@ func (c *pixelCache) tileRegion(idx image.Point) image.Rectangle {
 	return r.Intersect(image.Rect(0, 0, c.width, c.height))
 }
 
+// ensureTile returns the cached tile at idx, loading it from the GPU and merging any pending dots
+// within it if it is not yet cached.
+func (c *pixelCache) ensureTile(img *atlas.Image, graphicsDriver graphicsdriver.Graphics, idx image.Point) (*tile, error) {
+	if t, ok := c.tiles[idx]; ok {
+		return t, nil
+	}
+	r := c.tileRegion(idx)
+	pix := make([]byte, c.bpp*r.Dx()*r.Dy())
+	if _, err := img.ReadPixels(graphicsDriver, pix, r); err != nil {
+		return nil, err
+	}
+	t := &tile{pixels: pix}
+	// Merge the dots in this tile into the tile and delete them.
+	for pos, clr := range c.dots {
+		if !pos.In(r) {
+			continue
+		}
+		i := c.bpp * ((pos.Y-r.Min.Y)*r.Dx() + (pos.X - r.Min.X))
+		copy(t.pixels[i:i+c.bpp], clr[:c.bpp])
+		t.needsWriteBack = true
+		delete(c.dots, pos)
+	}
+	if c.tiles == nil {
+		c.tiles = map[image.Point]*tile{}
+	}
+	c.tiles[idx] = t
+	return t, nil
+}
+
+// readPixel returns the raw bytes of the pixel at (x, y) without heap-allocating a slice.
+func (c *pixelCache) readPixel(img *atlas.Image, graphicsDriver graphicsdriver.Graphics, x, y int) ([4]byte, error) {
+	pos := image.Point{X: x, Y: y}
+	if clr, ok := c.dots[pos]; ok {
+		return clr, nil
+	}
+
+	idx := c.tileIndex(pos)
+	t, err := c.ensureTile(img, graphicsDriver, idx)
+	if err != nil {
+		return [4]byte{}, err
+	}
+	r := c.tileRegion(idx)
+	off := c.bpp * ((y-r.Min.Y)*r.Dx() + (x - r.Min.X))
+	var clr [4]byte
+	if c.bpp == 1 {
+		clr[0] = t.pixels[off]
+	} else {
+		clr[0] = t.pixels[off]
+		clr[1] = t.pixels[off+1]
+		clr[2] = t.pixels[off+2]
+		clr[3] = t.pixels[off+3]
+	}
+	return clr, nil
+}
+
 // readPixels reads the pixels in region into pixels, loading the tiles intersecting region as needed.
-func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.Graphics, pixels []byte, region image.Rectangle) (bool, error) {
+func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.Graphics, pixels []byte, region image.Rectangle) error {
 	if region.Empty() {
-		return true, nil
+		return nil
 	}
 	if region.Dx() == 1 && region.Dy() == 1 {
 		if clr, ok := c.dots[region.Min]; ok {
 			copy(pixels, clr[:c.bpp])
-			return true, nil
+			return nil
 		}
 	}
 
 	// Do not call writeBackPixelsIfNeeded here. This would slow (image/draw).Draw.
-	// See ebiten.TestImageDrawOver.
+	// See TestImageDrawOver.
 
 	minTile := c.tileIndex(region.Min)
 	maxTile := c.tileIndex(region.Max.Sub(image.Point{X: 1, Y: 1}))
 	for ty := minTile.Y; ty <= maxTile.Y; ty++ {
 		for tx := minTile.X; tx <= maxTile.X; tx++ {
-			idx := image.Point{X: tx, Y: ty}
-			if _, ok := c.tiles[idx]; ok {
-				continue
+			if _, err := c.ensureTile(img, graphicsDriver, image.Point{X: tx, Y: ty}); err != nil {
+				return err
 			}
-			r := c.tileRegion(idx)
-			pix := make([]byte, c.bpp*r.Dx()*r.Dy())
-			ok, err := img.ReadPixels(graphicsDriver, pix, r)
-			if err != nil {
-				return false, err
-			}
-			if !ok {
-				return false, nil
-			}
-			t := &tile{pixels: pix}
-			// Merge the dots in this tile into the tile and delete them.
-			for pos, clr := range c.dots {
-				if !pos.In(r) {
-					continue
-				}
-				i := c.bpp * ((pos.Y-r.Min.Y)*r.Dx() + (pos.X - r.Min.X))
-				copy(t.pixels[i:i+c.bpp], clr[:c.bpp])
-				t.needsWriteBack = true
-				delete(c.dots, pos)
-			}
-			if c.tiles == nil {
-				c.tiles = map[image.Point]*tile{}
-			}
-			c.tiles[idx] = t
 		}
 	}
 
@@ -156,7 +186,38 @@ func (c *pixelCache) readPixels(img *atlas.Image, graphicsDriver graphicsdriver.
 		}
 	}
 
-	return true, nil
+	return nil
+}
+
+// writePixel writes a single pixel to the cache without heap-allocating a slice.
+func (c *pixelCache) writePixel(img *atlas.Image, x, y int, clr [4]byte) {
+	pos := image.Point{X: x, Y: y}
+	idx := c.tileIndex(pos)
+	// If the tile at the position is cached, update this instead of adding an entry to dots.
+	if t, ok := c.tiles[idx]; ok {
+		r := c.tileRegion(idx)
+		i := c.bpp * ((y-r.Min.Y)*r.Dx() + (x - r.Min.X))
+		if c.bpp == 1 {
+			t.pixels[i] = clr[0]
+		} else {
+			t.pixels[i] = clr[0]
+			t.pixels[i+1] = clr[1]
+			t.pixels[i+2] = clr[2]
+			t.pixels[i+3] = clr[3]
+		}
+		t.needsWriteBack = true
+		delete(c.dots, pos)
+		return
+	}
+
+	if c.dots == nil {
+		c.dots = map[image.Point][4]byte{}
+	}
+	c.dots[pos] = clr
+
+	if len(c.dots) >= 10000 {
+		c.writeBackPixelsIfNeeded(img)
+	}
 }
 
 // writePixels updates the cache for a write to region, and writes the pixels to the GPU if necessary.
@@ -164,27 +225,9 @@ func (c *pixelCache) writePixels(img *atlas.Image, pix []byte, region image.Rect
 	// Writing one pixel is a special case.
 	// Do not write pixels in GPU, as (image/draw).Image's functions might call WritePixels with pixels one by one.
 	if region.Dx() == 1 && region.Dy() == 1 {
-		// If the tile at the position is cached, update this instead of adding an entry to dots.
-		if t, ok := c.tiles[c.tileIndex(region.Min)]; ok {
-			r := c.tileRegion(c.tileIndex(region.Min))
-			i := c.bpp * ((region.Min.Y-r.Min.Y)*r.Dx() + (region.Min.X - r.Min.X))
-			copy(t.pixels[i:i+c.bpp], pix)
-			t.needsWriteBack = true
-			delete(c.dots, region.Min)
-			return
-		}
-
-		if c.dots == nil {
-			c.dots = map[image.Point][4]byte{}
-		}
-
 		var clr [4]byte
 		copy(clr[:], pix)
-		c.dots[region.Min] = clr
-
-		if len(c.dots) >= 10000 {
-			c.writeBackPixelsIfNeeded(img)
-		}
+		c.writePixel(img, region.Min.X, region.Min.Y, clr)
 		return
 	}
 

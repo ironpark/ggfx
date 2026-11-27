@@ -18,10 +18,13 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 
 	"github.com/ironpark/ggfx/internal/graphics"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
 )
+
+var _ draw.RGBA64Image = (*Image)(nil)
 
 // Clear resets the pixels of the image into 0.
 //
@@ -74,7 +77,14 @@ func (i *Image) Fill(clr color.Color) {
 // Note that an important logic should not rely on values returned by ReadPixels, since
 // the returned values can include very slight differences between some machines.
 //
-// ReadPixels can't be called outside the main loop (ebiten.Run's updating function) starts.
+// ReadPixels can be called inside or between frames once the graphics driver is initialized
+// (after host.Init, host.SetGLContext on desktop OpenGL, or the first host.NewSurface in a
+// browser, and at least one frame). When host.Options.SingleThread is set, ReadPixels must be
+// called on the renderer's thread, like host.BeginFrame and host.Flush.
+//
+// With a synchronous host.Options.MainThread callback on macOS, make pixel reads off the main
+// thread while a live-resize present can be in flight. When Metal uses CAMetalLayer, also make
+// reads off the main thread during live resize or fullscreen transitions.
 func (i *Image) ReadPixels(pixels []byte) {
 	i.copyCheck()
 	b := i.Bounds()
@@ -115,7 +125,14 @@ func (i *Image) ReadPixels(pixels []byte) {
 // Note that an important logic should not rely on values returned by At, since
 // the returned values can include very slight differences between some machines.
 //
-// At can't be called outside the main loop (ebiten.Run's updating function) starts.
+// At can be called inside or between frames once the graphics driver is initialized
+// (after host.Init, host.SetGLContext on desktop OpenGL, or the first host.NewSurface in a
+// browser, and at least one frame). When host.Options.SingleThread is set, At must be called on
+// the renderer's thread, like host.BeginFrame and host.Flush.
+//
+// With a synchronous host.Options.MainThread callback on macOS, make pixel reads off the main
+// thread while a live-resize present can be in flight. When Metal uses CAMetalLayer, also make
+// reads off the main thread during live resize or fullscreen transitions.
 func (i *Image) At(x, y int) color.Color {
 	r, g, b, a := i.at(x, y)
 	return color.RGBA{R: r, G: g, B: b, A: a}
@@ -131,7 +148,14 @@ func (i *Image) At(x, y int) color.Color {
 // Note that an important logic should not rely on values returned by RGBA64At,
 // since the returned values can include very slight differences between some machines.
 //
-// RGBA64At can't be called outside the main loop (ebiten.Run's updating function) starts.
+// RGBA64At can be called inside or between frames once the graphics driver is initialized
+// (after host.Init, host.SetGLContext on desktop OpenGL, or the first host.NewSurface in a
+// browser, and at least one frame). When host.Options.SingleThread is set, RGBA64At must be called
+// on the renderer's thread, like host.BeginFrame and host.Flush.
+//
+// With a synchronous host.Options.MainThread callback on macOS, make pixel reads off the main
+// thread while a live-resize present can be in flight. When Metal uses CAMetalLayer, also make
+// reads off the main thread during live resize or fullscreen transitions.
 func (i *Image) RGBA64At(x, y int) color.RGBA64 {
 	r, g, b, a := i.at(x, y)
 	return color.RGBA64{R: uint16(r) * 0x101, G: uint16(g) * 0x101, B: uint16(b) * 0x101, A: uint16(a) * 0x101}
@@ -148,13 +172,10 @@ func (i *Image) at(x, y int) (r, g, b, a byte) {
 	i.flushPending()
 
 	x, y = i.adjustPosition(x, y)
+	pix := i.image.ReadPixel(x, y)
 	if i.image.Format() == graphicsdriver.PixelFormatA8 {
-		var pix [1]byte
-		i.image.ReadPixels(pix[:], image.Rect(x, y, x+1, y+1))
 		return pix[0], pix[0], pix[0], pix[0]
 	}
-	var pix [4]byte
-	i.image.ReadPixels(pix[:], image.Rect(x, y, x+1, y+1))
 	return pix[0], pix[1], pix[2], pix[3]
 }
 
@@ -185,17 +206,43 @@ func (i *Image) Set(x, y int, clr color.Color) {
 	if !image.Pt(x, y).In(i.Bounds()) {
 		return
 	}
+	cr, cg, cb, ca := clr.RGBA()
+	i.setPixel(x, y, byte(cr>>8), byte(cg>>8), byte(cb>>8), byte(ca>>8))
+}
+
+// SetRGBA64 sets the color at (x, y).
+//
+// SetRGBA64 implements the standard draw.RGBA64Image's SetRGBA64.
+//
+// If (x, y) is outside the image bounds, or the image is disposed, SetRGBA64 does nothing.
+// An image of [PixelFormatAlpha] keeps the color's alpha.
+func (i *Image) SetRGBA64(x, y int, c color.RGBA64) {
+	i.copyCheck()
+	if i.isDisposed() {
+		return
+	}
+
+	i.flushPending()
+
+	i.updateAccessTime()
+
+	if !image.Pt(x, y).In(i.Bounds()) {
+		return
+	}
+	i.setPixel(x, y, byte(c.R>>8), byte(c.G>>8), byte(c.B>>8), byte(c.A>>8))
+}
+
+func (i *Image) setPixel(x, y int, r, g, b, a byte) {
 	if i.isSubImage() {
 		i = i.original
 	}
 
 	dx, dy := i.adjustPosition(x, y)
-	cr, cg, cb, ca := clr.RGBA()
 	if i.image.Format() == graphicsdriver.PixelFormatA8 {
-		i.image.WritePixels([]byte{byte(ca >> 8)}, image.Rect(dx, dy, dx+1, dy+1))
+		i.image.WritePixel(dx, dy, [4]byte{a})
 		return
 	}
-	i.image.WritePixels([]byte{byte(cr >> 8), byte(cg >> 8), byte(cb >> 8), byte(ca >> 8)}, image.Rect(dx, dy, dx+1, dy+1))
+	i.image.WritePixel(dx, dy, [4]byte{r, g, b, a})
 }
 
 // WritePixels replaces the pixels of the image.

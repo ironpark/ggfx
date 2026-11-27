@@ -31,7 +31,7 @@ var theImagePool = pool.Pool[*Image]{
 // SubImage returns an image representing the portion of the image p visible through r.
 // The returned value shares pixels with the original image.
 //
-// The returned value is always *ebiten.Image.
+// The returned value is always *Image.
 //
 // If the image is disposed, SubImage returns nil.
 //
@@ -148,12 +148,6 @@ func (i *Image) Recycle() {
 	i.image = nil
 	i.original = nil
 	i.bounds = image.Rectangle{}
-	i.tmpVertices = trimScratch(i.tmpVertices, 4096)
-	i.tmpIndices = trimScratch(i.tmpIndices, 4096)
-	i.tmpUniforms = trimScratch(i.tmpUniforms, 1024)
-	clear(i.tmpQuadSources)
-	i.tmpQuadSources = trimScratch(i.tmpQuadSources, 512)
-	i.tmpQuadRegions = trimScratch(i.tmpQuadRegions, 512)
 	clear(i.subImageCache)
 	i.subImageGCLastTick = 0
 	i.atime.Store(0)
@@ -162,11 +156,4 @@ func (i *Image) Recycle() {
 	i.recyclable = false
 
 	theImagePool.Put(i)
-}
-
-func trimScratch[T any](s []T, limit int) []T {
-	if cap(s) > limit {
-		return nil
-	}
-	return s[:0]
 }

@@ -17,6 +17,7 @@ package ggfx
 import (
 	"github.com/ironpark/ggfx/internal/builtinshader"
 	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/render"
 )
 
 // ImageDraw is one image DrawImages draws.
@@ -54,39 +55,28 @@ func (i *Image) DrawImages(draws []ImageDraw, options *DrawImageOptions) {
 	if det == 0 {
 		return
 	}
-	if !options.DisableMipmaps && !canSkipMipmap(det, filter) {
-		op := *options
-		for _, dr := range draws {
-			op.GeoM.Reset()
-			op.GeoM.Translate(dr.X, dr.Y)
-			op.GeoM.Concat(options.GeoM)
-			op.ColorScale = dr.ColorScale
-			i.DrawImage(dr.Image, &op)
-		}
-		return
-	}
+	checkMipmap := !options.DisableMipmaps && !canSkipMipmap(det, filter)
 
 	i.flushPending()
 	i.updateAccessTime()
+
+	s := getDrawScratch()
+	defer putDrawScratch(s)
 
 	// The translation by (X, Y) and then by geoM, as GeoM.Concat computes it.
 	ga, gb, gc, gd := geoM.a_1+1, geoM.b, geoM.c, geoM.d_1+1
 	ox, oy := i.adjustPosition(0, 0)
 	offsetX, offsetY := float64(ox), float64(oy)
 	const quad = 4 * graphics.VertexFloatCount
-	vs := i.ensureTmpVertices(quad * len(draws))
-	srcs := i.tmpQuadSources[:0]
-	regions := i.tmpQuadRegions[:0]
+	vs := s.ensureVertices(quad * len(draws))
+	s.quadSources = s.quadSources[:0]
+	s.quadRegions = s.quadRegions[:0]
 	for k, dr := range draws {
 		img := dr.Image
 		if img == nil {
-			clear(srcs)
-			i.tmpQuadSources = srcs[:0]
 			panic("ggfx: the given image to DrawImages must not be nil")
 		}
 		if img.isDisposed() {
-			clear(srcs)
-			i.tmpQuadSources = srcs[:0]
 			panic("ggfx: the given image to DrawImages must not be disposed")
 		}
 		img.flushPending()
@@ -98,14 +88,23 @@ func (i *Image) DrawImages(draws []ImageDraw, options *DrawImageOptions) {
 		sx0, sy0 := img.adjustPosition(bounds.Min.X, bounds.Min.Y)
 		sx1, sy1 := img.adjustPosition(bounds.Max.X, bounds.Max.Y)
 		cr, cg, cb, ca := dr.ColorScale.apply(1, 1, 1, 1)
-		graphics.QuadVerticesFromSrcAndMatrix(vs[k*quad:], float32(sx0), float32(sy0), float32(sx1), float32(sy1), a, b, c, d, float32(tx), float32(ty), cr, cg, cb, ca)
-		srcs = append(srcs, img.image)
-		regions = append(regions, img.adjustedBounds())
+		qvs := vs[k*quad : (k+1)*quad]
+		graphics.QuadVerticesFromSrcAndMatrix(qvs, float32(sx0), float32(sy0), float32(sx1), float32(sy1), a, b, c, d, float32(tx), float32(ty), cr, cg, cb, ca)
+		if checkMipmap && render.QuadUsesMipmap(qvs) {
+			op := *options
+			for _, dr := range draws {
+				op.GeoM.Reset()
+				op.GeoM.Translate(dr.X, dr.Y)
+				op.GeoM.Concat(options.GeoM)
+				op.ColorScale = dr.ColorScale
+				i.DrawImage(dr.Image, &op)
+			}
+			return
+		}
+		s.quadSources = append(s.quadSources, img.image)
+		s.quadRegions = append(s.quadRegions, img.adjustedBounds())
 	}
 
 	shader := builtinShader(filter, builtinshader.AddressUnsafe)
-	i.image.DrawQuads(srcs, vs, options.Blend.internalBlend(), i.adjustedBounds(), regions, shader.shader)
-	clear(srcs)
-	i.tmpQuadSources = srcs[:0]
-	i.tmpQuadRegions = regions[:0]
+	i.image.DrawQuads(s.quadSources, vs, options.Blend.internalBlend(), i.adjustedBounds(), s.quadRegions, shader.shader)
 }

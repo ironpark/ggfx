@@ -78,6 +78,9 @@ type Image struct {
 
 	// inLevelsRegistry reports whether the image is in theLevelsRegistry.
 	inLevelsRegistry bool
+
+	// disposed reports whether a screen image was permanently replaced or its surface disposed.
+	disposed atomic.Bool
 }
 
 // levelsRegistry holds the images whose mipmaps hold levels, so that the levels not drawn from for a
@@ -182,8 +185,11 @@ func NewScreenImage(width, height int, surface graphicsdriver.Surface) *Image {
 }
 
 // CanBeSource reports whether i can be a rendering source: every image can but a screen whose
-// graphics driver cannot read it.
+// graphics driver cannot read it, or a disposed screen image.
 func (i *Image) CanBeSource() bool {
+	if i.disposed.Load() {
+		return false
+	}
 	return i.imageType != atlas.ImageTypeScreen || i.readable
 }
 
@@ -284,6 +290,23 @@ func (i *Image) Deallocate() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	if i.disposed.Load() {
+		return
+	}
+	i.deallocateLevels()
+	i.img.Deallocate()
+	i.cache.deallocate()
+}
+
+// Dispose permanently deallocates i so that subsequent operations on it are no-ops and never
+// re-allocate its backend. Used when a screen image is replaced on resize or its surface disposed.
+func (i *Image) Dispose() {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if i.disposed.Swap(true) {
+		return
+	}
 	i.deallocateLevels()
 	i.img.Deallocate()
 	i.cache.deallocate()
@@ -301,6 +324,15 @@ func (i *Image) DrawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 
 // drawTriangles must be called with the mutexes of the image and the source images locked.
 func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertices []float32, indices []uint32, blend graphicsdriver.Blend, dstRegion image.Rectangle, srcRegions [graphics.ShaderSrcImageCount]image.Rectangle, shader *atlas.Shader, uniforms []uint32, canSkipMipmap bool) {
+	if i.disposed.Load() {
+		return
+	}
+	for _, src := range srcs {
+		if src != nil && src.disposed.Load() {
+			return
+		}
+	}
+
 	i.lastBlend = blend
 
 	if len(indices) == 0 {
@@ -362,11 +394,26 @@ func (i *Image) drawTriangles(srcs [graphics.ShaderSrcImageCount]*Image, vertice
 	}
 }
 
+// WritePixel replaces the single pixel at (x, y). For an A8 image, pix[0] is the alpha byte.
+func (i *Image) WritePixel(x, y int, pix [4]byte) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if i.disposed.Load() {
+		return
+	}
+	i.cache.writePixel(i.img, x, y, pix)
+	i.markLevelsDirty()
+}
+
 // WritePixels replaces the pixels of region.
 func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	if i.disposed.Load() {
+		return
+	}
 	if l := i.cache.bpp * region.Dx() * region.Dy(); len(pix) != l {
 		panic(fmt.Sprintf("render: len(pix) was %d but must be %d", len(pix), l))
 	}
@@ -374,12 +421,21 @@ func (i *Image) WritePixels(pix []byte, region image.Rectangle) {
 	i.markLevelsDirty()
 }
 
-func (i *Image) ReadPixels(pixels []byte, region image.Rectangle) {
-	// Check the error existence and avoid unnecessary calls.
-	if loadError() != nil {
-		return
+// ReadPixel returns the raw bytes of the single pixel at (x, y). For an A8 image, the alpha byte
+// is in the returned array's element 0.
+func (i *Image) ReadPixel(x, y int) [4]byte {
+	pix, err := readPixel(i, x, y)
+	if err != nil {
+		if panicOnErrorOnReadingPixels {
+			panic(err)
+		}
+		setError(err)
+		return [4]byte{}
 	}
+	return pix
+}
 
+func (i *Image) ReadPixels(pixels []byte, region image.Rectangle) {
 	if err := readPixels(i, pixels, region); err != nil {
 		if panicOnErrorOnReadingPixels {
 			panic(err)
@@ -388,14 +444,24 @@ func (i *Image) ReadPixels(pixels []byte, region image.Rectangle) {
 	}
 }
 
-// readPixels reports whether the pixels were read.
-//
-// The caller must not hold the mutex: a failed read is retried in a frame, and the frame needs the
-// mutex to draw the image.
-func (i *Image) readPixels(pixels []byte, region image.Rectangle) (bool, error) {
+func (i *Image) readPixel(x, y int) ([4]byte, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
+	if i.disposed.Load() {
+		return [4]byte{}, nil
+	}
+	return i.cache.readPixel(i.img, driver, x, y)
+}
+
+func (i *Image) readPixels(pixels []byte, region image.Rectangle) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if i.disposed.Load() {
+		clear(pixels)
+		return nil
+	}
 	return i.cache.readPixels(i.img, driver, pixels, region)
 }
 
@@ -415,6 +481,10 @@ func (i *Image) Fill(r, g, b, a float32, region image.Rectangle) {
 	// skips mipmaps, so drawing from it cannot modify it.
 	i.mu.Lock()
 	defer i.mu.Unlock()
+
+	if i.disposed.Load() {
+		return
+	}
 
 	srcs := [graphics.ShaderSrcImageCount]*Image{whiteImage}
 

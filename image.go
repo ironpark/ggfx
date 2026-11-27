@@ -39,19 +39,6 @@ type Image struct {
 	original *Image
 	bounds   image.Rectangle
 
-	// tmpVertices must not be reused until render.Image.Draw* is called.
-	tmpVertices []float32
-
-	// tmpIndices must not be reused until render.Image.Draw* is called.
-	tmpIndices []uint32
-
-	// tmpUniforms must not be reused until render.Image.Draw* is called.
-	tmpUniforms []uint32
-
-	// tmpQuadSources and tmpQuadRegions are DrawImages' lists of its images and their regions.
-	tmpQuadSources []*render.Image
-	tmpQuadRegions []image.Rectangle
-
 	// subImageCache is a cache for sub-images.
 	// subImageCache is valid only when the image is not a sub-image.
 	subImageCache map[image.Rectangle]*Image
@@ -105,7 +92,7 @@ func (i *Image) isSubImage() bool {
 	return i.original != nil
 }
 
-// adjustPosition converts the position in the *ebiten.Image coordinate to the *render.Image coordinate.
+// adjustPosition converts the position in the *Image coordinate to the *render.Image coordinate.
 func (i *Image) adjustPosition(x, y int) (int, int) {
 	if i.isSubImage() {
 		or := i.original.Bounds()
@@ -120,7 +107,7 @@ func (i *Image) adjustPosition(x, y int) (int, int) {
 	return x, y
 }
 
-// positionOffsetF32 returns the offset that converts a position in the *ebiten.Image coordinate to
+// positionOffsetF32 returns the offset that converts a position in the *Image coordinate to
 // the *render.Image coordinate by addition.
 //
 // The offset is the negated origin, so adding it to x equals x - origin exactly.
@@ -192,7 +179,7 @@ func (i *Image) Deallocate() {
 
 // MaxImageSize returns the device-dependent maximum width and height of an image in pixels.
 //
-// MaxImageSize returns 0 before the game starts.
+// MaxImageSize returns 0 before the graphics driver is initialized.
 func MaxImageSize() int {
 	return atlas.MaxImageSize()
 }
@@ -203,7 +190,7 @@ func MaxImageSize() int {
 // If width or height is more than [MaxImageSize], NewImage panics when the image is used.
 //
 // NewImage should be called only when necessary.
-// For example, you should avoid to call NewImage every Update or Draw call.
+// For example, avoid calling NewImage every frame.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
 // NewImage panics once host.Terminate was called.
@@ -217,7 +204,8 @@ type NewImageOptions struct {
 	// The default (zero) value is false, that means the image is managed.
 	//
 	// An unmanaged image is never on an internal automatic texture atlas.
-	// A regular image is a part of an internal texture atlas, and locating them is done automatically in Ebitengine.
+	// A regular image with both sides at most 1024 px shares an internal texture atlas, located
+	// automatically by ggfx; larger regular images get their own texture.
 	// Unmanaged is useful when you want finer controls over the image for performance and memory reasons.
 	Unmanaged bool
 
@@ -238,7 +226,7 @@ type NewImageOptions struct {
 // If options is nil, the default setting is used.
 //
 // NewImageWithOptions should be called only when necessary.
-// For example, you should avoid to call NewImageWithOptions every Update or Draw call.
+// For example, avoid calling NewImageWithOptions every frame.
 // Reusing the same image by Clear is much more efficient than creating a new image.
 //
 // NewImageWithOptions panics once host.Terminate was called.
@@ -305,7 +293,7 @@ func newImage(bounds image.Rectangle, imageType atlas.ImageType, format PixelFor
 // If source's width or height is more than [MaxImageSize], NewImageFromImage panics when the image is used.
 //
 // NewImageFromImage should be called only when necessary.
-// For example, you should avoid to call NewImageFromImage every Update or Draw call.
+// For example, avoid calling NewImageFromImage every frame.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
 // NewImageFromImage panics once host.Terminate was called.
@@ -321,7 +309,8 @@ type NewImageFromImageOptions struct {
 	// The default (zero) value is false, that means the image is managed.
 	//
 	// An unmanaged image is never on an internal automatic texture atlas.
-	// A regular image is a part of an internal texture atlas, and locating them is done automatically in Ebitengine.
+	// A regular image with both sides at most 1024 px shares an internal texture atlas, located
+	// automatically by ggfx; larger regular images get their own texture.
 	// Unmanaged is useful when you want finer controls over the image for performance and memory reasons.
 	Unmanaged bool
 
@@ -345,7 +334,7 @@ type NewImageFromImageOptions struct {
 // If options is nil, the default setting is used.
 //
 // NewImageFromImageWithOptions should be called only when necessary.
-// For example, you should avoid to call NewImageFromImageWithOptions every Update or Draw call.
+// For example, avoid calling NewImageFromImageWithOptions every frame.
 // Reusing the same image by Clear and WritePixels is much more efficient than creating a new image.
 //
 // NewImageFromImageWithOptions panics once host.Terminate was called.
@@ -366,8 +355,8 @@ func NewImageFromImageWithOptions(source image.Image, options *NewImageFromImage
 		Format:    options.Format,
 	})
 
-	// If the given image is an Ebitengine image, use DrawImage instead of reading pixels from the source.
-	// This works even before the game loop runs.
+	// If the given image is a *ggfx.Image, use DrawImage instead of reading pixels from the source.
+	// This works even before the first frame.
 	if source, ok := source.(*Image); ok {
 		var geoM GeoM
 		if options.PreserveBounds {

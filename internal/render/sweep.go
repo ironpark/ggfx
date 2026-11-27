@@ -27,6 +27,10 @@ var (
 	sweepersM sync.Mutex
 	// sweepers is replaced, never changed in place, so that Flush reads it without a lock.
 	sweepers atomic.Pointer[[]func(now int64)]
+
+	postFlushM sync.Mutex
+	// postFlushHooks run after Flush submits a frame's commands.
+	postFlushHooks atomic.Pointer[[]func()]
 )
 
 func init() {
@@ -55,5 +59,28 @@ func sweep(now int64) {
 	}
 	for _, fn := range *p {
 		fn(now)
+	}
+}
+
+// AddPostFlushHook makes fn run after every successful Flush, outside a frame, with no lock of
+// render or atlas held. fn is for the life of the program.
+func AddPostFlushHook(fn func()) {
+	postFlushM.Lock()
+	defer postFlushM.Unlock()
+	var fns []func()
+	if p := postFlushHooks.Load(); p != nil {
+		fns = append(fns, *p...)
+	}
+	fns = append(fns, fn)
+	postFlushHooks.Store(&fns)
+}
+
+func runPostFlushHooks() {
+	p := postFlushHooks.Load()
+	if p == nil {
+		return
+	}
+	for _, fn := range *p {
+		fn()
 	}
 }

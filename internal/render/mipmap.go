@@ -203,6 +203,33 @@ func mipmapLevelFor(vertices []float32, indices []uint32) int {
 	return level
 }
 
+// mipmapScaleThreshold is the squared linear scale below which a linear-filtered draw uses a
+// mipmap level above 0 (0.25 corresponds to 0.5x linear scale).
+const mipmapScaleThreshold = 0.25
+
+// mipmapLevelFromScale returns the mipmap level for a squared scale d/s before clamping to the
+// source size or maxMipmapLevel.
+func mipmapLevelFromScale(scale float32) int {
+	// Scale can be infinite when the specified scale is extremely big (#1398),
+	// or zero when it is extremely small (#1398).
+	if math.IsInf(float64(scale), 0) || scale == 0 || math.IsNaN(float64(scale)) {
+		return 0
+	}
+
+	var level int
+	for scale < mipmapScaleThreshold {
+		level++
+		scale *= 4
+	}
+	return level
+}
+
+// QuadUsesMipmap reports whether a single quad of four vertices (4 * graphics.VertexFloatCount
+// floats) drawn with linear filtering selects a mipmap level above 0.
+func QuadUsesMipmap(vertices []float32) bool {
+	return mipmapLevelFor(vertices, graphics.QuadIndices()) > 0
+}
+
 // mipmapLevelFromDistance returns an appropriate mipmap level for the given distance.
 func mipmapLevelFromDistance(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float32) int {
 	d := (dx1-dx0)*(dx1-dx0) + (dy1-dy0)*(dy1-dy0)
@@ -210,23 +237,7 @@ func mipmapLevelFromDistance(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float32) int
 	if s == 0 {
 		return 0
 	}
-	scale := d / s
-
-	// Scale can be infinite when the specified scale is extremely big (#1398).
-	if math.IsInf(float64(scale), 0) {
-		return 0
-	}
-
-	// Scale can be zero when the specified scale is extremely small (#1398).
-	if scale == 0 {
-		return 0
-	}
-
-	var level int
-	for scale < 0.25 {
-		level++
-		scale *= 4
-	}
+	level := mipmapLevelFromScale(d / s)
 
 	if level > 0 {
 		// If the image can be scaled into 0 size, adjust the level. (#839)

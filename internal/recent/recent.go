@@ -33,6 +33,12 @@ func Advance() int64 {
 	return now.Add(1)
 }
 
+// AdvanceBy moves the frame clock forward by delta and returns the new time.
+// delta must be positive. Used when trimming idle caches as if many frames had elapsed.
+func AdvanceBy(delta int64) int64 {
+	return now.Add(delta)
+}
+
 const (
 	// Window is how many ticks a Peak covers at least; it covers up to twice as many.
 	Window = 60
@@ -60,26 +66,36 @@ func (p *Peak) Observe(n int) {
 
 // AdvanceTo moves the time to now, which must not be before the last time told.
 func (p *Peak) AdvanceTo(now int64) {
+	p.AdvanceToWindow(now, Window)
+}
+
+// AdvanceToWindow moves the time to now using window as the bucket duration.
+func (p *Peak) AdvanceToWindow(now, window int64) {
 	p.now = now
 	d := now - p.start
-	if d < Window {
+	if d < window {
 		return
 	}
-	if d < 2*Window {
+	if d < 2*window {
 		p.previous = p.current
 	} else {
 		// A whole window passed with nothing observed.
 		p.previous = 0
 	}
 	p.current = 0
-	p.start = now - d%Window
+	p.start = now - d%window
 }
 
 // ObserveNow records n at the frame clock's time: values are recorded as often as they come, and
 // age by frames.
 func (p *Peak) ObserveNow(n int) {
+	p.ObserveNowWindow(n, Window)
+}
+
+// ObserveNowWindow records n at the frame clock's time using window as the bucket duration.
+func (p *Peak) ObserveNowWindow(n int, window int64) {
 	if t := Now(); t > p.now {
-		p.AdvanceTo(t)
+		p.AdvanceToWindow(t, window)
 	}
 	p.Observe(n)
 }

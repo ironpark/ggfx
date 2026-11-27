@@ -80,17 +80,19 @@ func minPageSize(source bool) int {
 
 // initialPageSize returns the size a new page starts at to hold an image of w x h pixels, its
 // padding included: the minimum size, doubled until the image fits. It reports false if the image
-// does not fit a page of maxSize.
+// does not fit a page of maxPageSize.
 func initialPageSize(source bool, w, h int) (width, height int, ok bool) {
-	width, height = minPageSize(source), minPageSize(source)
+	pageMax := maxPageSize()
+	minSize := min(minPageSize(source), pageMax)
+	width, height = minSize, minSize
 	for w > width {
-		if width >= maxSize {
+		if width >= pageMax {
 			return 0, 0, false
 		}
 		width *= 2
 	}
 	for h > height {
-		if height >= maxSize {
+		if height >= pageMax {
 			return 0, 0, false
 		}
 		height *= 2
@@ -107,7 +109,7 @@ func compactPages(now int64) {
 			continue
 		}
 		area := int64(b.width) * int64(b.height)
-		minSize := int64(minPageSize(b.source))
+		minSize := int64(min(minPageSize(b.source), maxPageSize()))
 		if b.usedArea*compactUsageDivisor >= area || area <= minSize*minSize {
 			b.lowSince = 0
 			continue
@@ -152,7 +154,7 @@ func (b *backend) compact() {
 		return
 	}
 	// The new page has the old one's overhang: the padding of the images on it.
-	page := packing.NewPage(width, height, maxSize, b.page.Overhang())
+	page := packing.NewPage(width, height, maxPageSize(), b.page.Overhang())
 	nodes := make([]*packing.Node, len(imgs))
 	for k, i := range imgs {
 		r := i.node.Region()

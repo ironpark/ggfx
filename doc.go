@@ -20,10 +20,12 @@
 // renderer, makes a surface of each window's native view, and draws a frame to the surface's
 // screen and presents it. ggwd (github.com/ironpark/ggwd) is the window system ggui uses.
 //
-// Images can be made and drawn to at any time from any goroutine. Their draws run in a frame, and
-// reading pixels waits for one. host.Init is called on the main thread, the goroutine running main
-// on the OS main thread. The graphics library, the color space and the environment variables
-// that choose them are host's.
+// Images can be made and drawn to at any time from any goroutine. Draws made outside a frame run
+// in the next frame, on a between-frame pixel read, or on host.Trim. Reading pixels works inside
+// or between frames once the graphics driver is initialized (after host.Init, host.SetGLContext on
+// desktop OpenGL, or the first host.NewSurface in a browser, and at least one frame). host.Init is
+// called on the main thread, the goroutine running main on the OS main thread. The graphics
+// library, the color space and the environment variables that choose them are host's.
 //
 // # Build tags
 //

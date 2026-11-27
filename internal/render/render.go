@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"image"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ironpark/ggfx/internal/atlas"
@@ -42,19 +43,16 @@ var (
 	// state is where the renderer is in its life: before Init, running, or terminated.
 	state atomic.Int32
 
+	// lifecycleM serializes teardown (Terminate) against synchronous between-frame reads and Trim
+	// so no admitted read or trim overlaps render-thread shutdown or driver Close.
+	lifecycleM sync.RWMutex
+
 	// stopRenderThread stops the render thread Init started, and renderThreadDone is closed
 	// when it has stopped. Both are nil when the render thread is the caller's.
 	stopRenderThread context.CancelFunc
 	renderThreadDone chan struct{}
 
 	theErr atomic.Pointer[error]
-
-	// funcsInFrameCh carries functions that must run inside a frame, like reading pixels.
-	funcsInFrameCh = make(chan func())
-
-	// terminatedCh is closed when Terminate transitions state to stateTerminated, unblocking
-	// any goroutine waiting in runInFrame.
-	terminatedCh = make(chan struct{})
 
 	// whiteImage is the source a fill draws from.
 	whiteImage *Image
@@ -143,10 +141,12 @@ func setDriver(g graphicsdriver.Graphics) {
 // the commands draw to.
 // Terminate does nothing before Init or when called again.
 func Terminate() {
+	lifecycleM.Lock()
+	defer lifecycleM.Unlock()
+
 	if !state.CompareAndSwap(stateRunning, stateTerminated) {
 		return
 	}
-	close(terminatedCh)
 	graphicscommand.Terminate()
 	if stopRenderThread != nil {
 		stopRenderThread()
@@ -216,7 +216,38 @@ func Occluded() bool {
 // clock, recent.Now, and runs the frame sweepers.
 func Flush(present bool) error {
 	sweep(recent.Advance())
-	return atlas.FlushCommands(driver, present)
+	if err := atlas.FlushCommands(driver, present); err != nil {
+		return err
+	}
+	runPostFlushHooks()
+	return nil
+}
+
+// Trim releases cached resources that age by frame count (mipmap levels, registered frame sweepers
+// such as vector stencil caches, atlas pages, command-queue staging buffers, and upload byte pools)
+// as if a long idle had elapsed. Must be called outside a frame.
+func Trim() error {
+	lifecycleM.RLock()
+	defer lifecycleM.RUnlock()
+
+	if state.Load() != stateRunning {
+		return nil
+	}
+
+	drainErr := atlas.DrainForTrim(driver)
+
+	const minAdvance = 2*graphicscommand.BufferPeakWindow + recent.Window
+	cur := recent.Now()
+	target := ((cur+minAdvance)/recent.Window + 1) * recent.Window
+	now := recent.AdvanceBy(target - cur)
+
+	sweep(now)
+	trimErr := atlas.Trim(driver, now)
+	err := errors.Join(drainErr, trimErr)
+	if err != nil {
+		setError(err)
+	}
+	return err
 }
 
 // loadError returns the error a read of pixels ran into, if any.
@@ -252,6 +283,12 @@ func Tick() int64 {
 	return recent.Now()
 }
 
+// CompletedFrames returns the number of final (non-intermediate) flushes whose driver End has
+// completed without error on the render thread.
+func CompletedFrames() uint64 {
+	return graphicscommand.CompletedFrames()
+}
+
 // drainError returns and clears the error a read of pixels ran into, if any.
 func drainError() error {
 	if err := theErr.Swap(nil); err != nil {
@@ -261,13 +298,12 @@ func drainError() error {
 }
 
 // BeginFrame begins a frame. Screens are drawn between BeginFrame and EndFrame, which is called
-// when BeginFrame succeeded. A read of pixels that missed the last frame runs at BeginFrame, and
-// BeginFrame returns the error a read of pixels ran into, as the read itself cannot.
+// when BeginFrame succeeded. BeginFrame returns the error a read of pixels ran into, as the read
+// itself cannot.
 func BeginFrame() error {
 	if err := atlas.BeginFrame(driver); err != nil {
 		return err
 	}
-	processFuncsInFrame()
 	if err := drainError(); err != nil {
 		return errors.Join(err, atlas.EndFrame(driver))
 	}
@@ -292,73 +328,33 @@ func FinishForcedFrame() error {
 }
 
 func readPixels(img *Image, pixels []byte, region image.Rectangle) error {
+	lifecycleM.RLock()
+	defer lifecycleM.RUnlock()
+
 	if state.Load() != stateRunning {
 		panic("render: ReadPixels cannot be called before Init or after Terminate")
 	}
-
-	ok, err := img.readPixels(pixels, region)
-	if err != nil {
-		return err
+	if loadError() != nil {
+		return nil
 	}
-
-	// ReadPixels failed since this was called in between two frames.
-	// Try this again at the next frame.
-	if !ok {
-		// If this function is called from the same sequence as a frame's event handler,
-		// this causes a dead lock.
-		// This never happens so far, but if handling inputs after EndFrame is implemented,
-		// this might be possible (#1704).
-
-		var err error
-		if !runInFrame(func() {
-			ok, imgErr := img.readPixels(pixels, region)
-			if imgErr != nil {
-				err = imgErr
-				return
-			}
-			if !ok {
-				// This never reaches since this function must be called in a frame.
-				panic("render: ReadPixels unexpectedly failed")
-			}
-		}) {
-			return errors.New("render: terminated while waiting for frame in ReadPixels")
-		}
-		return err
+	if driver == nil || !atlas.Inited() {
+		return errors.New("render: graphics driver is not initialized")
 	}
-
-	return nil
+	return img.readPixels(pixels, region)
 }
 
-// runInFrame runs f inside a frame, on the goroutine running the frame, and waits for it.
-// It returns false if the renderer was terminated before f could complete.
-func runInFrame(f func()) bool {
-	ch := make(chan struct{})
-	wrapped := func() {
-		defer close(ch)
-		f()
-	}
-	select {
-	case funcsInFrameCh <- wrapped:
-	case <-terminatedCh:
-		return false
-	}
-	select {
-	case <-ch:
-		return true
-	case <-terminatedCh:
-		return false
-	}
-}
+func readPixel(img *Image, x, y int) ([4]byte, error) {
+	lifecycleM.RLock()
+	defer lifecycleM.RUnlock()
 
-// processFuncsInFrame runs the functions queued to run inside a frame, like a read of pixels that
-// missed one. It must be called inside a frame.
-func processFuncsInFrame() {
-	for {
-		select {
-		case f := <-funcsInFrameCh:
-			f()
-		default:
-			return
-		}
+	if state.Load() != stateRunning {
+		panic("render: ReadPixels cannot be called before Init or after Terminate")
 	}
+	if loadError() != nil {
+		return [4]byte{}, nil
+	}
+	if driver == nil || !atlas.Inited() {
+		return [4]byte{}, errors.New("render: graphics driver is not initialized")
+	}
+	return img.readPixel(x, y)
 }

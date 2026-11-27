@@ -250,13 +250,13 @@ func (p *Page) free(node *Node) *Node {
 }
 
 var (
-	skipAll      = errors.New("skip all")
-	skipChildren = errors.New("skip children")
+	errSkipAll      = errors.New("skip all")
+	errSkipChildren = errors.New("skip children")
 )
 
 func walk(n *Node, f func(n *Node) error) error {
 	if err := f(n); err != nil {
-		if errors.Is(err, skipChildren) {
+		if errors.Is(err, errSkipChildren) {
 			return nil
 		}
 		return err
@@ -331,11 +331,11 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 	if p.root != nil {
 		_ = walk(p.root, func(n *Node) error {
 			if n.region.Max.X < allocatableWidth && n.region.Max.Y < allocatableHeight {
-				return skipChildren
+				return errSkipChildren
 			}
 			if n.used {
 				edgeAllocated = true
-				return skipAll
+				return errSkipAll
 			}
 			edgeNodes = append(edgeNodes, n)
 			return nil
@@ -433,25 +433,6 @@ func (p *Page) extend(newWidth int, newHeight int) func() {
 	return rollback
 }
 
-func (p *Page) AllocatedRegion() image.Rectangle {
-	var r image.Rectangle
-	if p.root == nil {
-		return r
-	}
-	_ = walk(p.root, func(n *Node) error {
-		if n.region.In(r) {
-			return skipChildren
-		}
-		if n.used {
-			r = r.Union(n.region)
-			return skipChildren
-		}
-		return nil
-	})
-	// A node at the right or the bottom edge can stick out of the page.
-	return r.Intersect(image.Rect(0, 0, p.width, p.height))
-}
-
 // UsedArea is how many pixels the page's allocated nodes cover, and how many are allocated.
 func (p *Page) UsedArea() (area int64, nodes int) {
 	if p.root == nil {
@@ -461,7 +442,7 @@ func (p *Page) UsedArea() (area int64, nodes int) {
 		if n.used {
 			area += int64(n.region.Dx()) * int64(n.region.Dy())
 			nodes++
-			return skipChildren
+			return errSkipChildren
 		}
 		return nil
 	})

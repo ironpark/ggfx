@@ -15,6 +15,7 @@
 package atlas_test
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"runtime"
@@ -24,7 +25,9 @@ import (
 
 	"github.com/ironpark/ggfx/internal/atlas"
 	"github.com/ironpark/ggfx/internal/graphics"
+	"github.com/ironpark/ggfx/internal/graphicscommand"
 	"github.com/ironpark/ggfx/internal/graphicsdriver"
+	"github.com/ironpark/ggfx/internal/recent"
 	"github.com/ironpark/ggfx/internal/render"
 	t "github.com/ironpark/ggfx/internal/testing"
 )
@@ -55,7 +58,7 @@ func quadVertices(sw, sh, x, y int, scalex float32) []float32 {
 	return vs
 }
 
-const bigSize = 2049
+const bigSize = 513
 
 func TestEnsureIsolatedFromSourceBackend(t *testing.T) {
 	// Create img1 and img2 with this size so that the next images are allocated
@@ -312,9 +315,16 @@ func TestReputOnSourceBackend(t *testing.T) {
 }
 
 func TestExtend(t *testing.T) {
+	atlas.SetImageSizeForTesting(256, minDestinationImageSizeForTesting, maxImageSizeForTesting)
+	defer atlas.ResetImageSizeForTesting()
+
 	const w0, h0 = 100, 100
 	img0 := atlas.NewImage(w0, h0, atlas.ImageTypeRegular)
 	defer img0.Deallocate()
+	img0.AllocateOnNewSourcePageForTesting()
+	if bw, bh := img0.BackendSizeForTesting(); bw != 256 || bh != 256 {
+		t.Fatalf("initial isolated source page size = (%d, %d), want (256, 256)", bw, bh)
+	}
 
 	p0 := make([]byte, 4*w0*h0)
 	for i := range w0 * h0 {
@@ -325,9 +335,16 @@ func TestExtend(t *testing.T) {
 	}
 	img0.WritePixels(p0, image.Rect(0, 0, w0, h0))
 
-	const w1, h1 = minSourceImageSizeForTesting + 1, 100
+	const w1, h1 = 257, 100
 	img1 := atlas.NewImage(w1, h1, atlas.ImageTypeRegular)
 	defer img1.Deallocate()
+	img1.AllocateOnBackendOfForTesting(img0)
+	if !img0.SharesBackendForTesting(img1) {
+		t.Fatalf("expected img1 to extend and share img0's backend")
+	}
+	if bw, bh := img0.BackendSizeForTesting(); bw < 512 || bh < 256 {
+		t.Fatalf("extended source page size = (%d, %d), want >= (512, 256)", bw, bh)
+	}
 
 	p1 := make([]byte, 4*w1*h1)
 	for i := range w1 * h1 {
@@ -336,7 +353,6 @@ func TestExtend(t *testing.T) {
 		p1[4*i+2] = byte(i)
 		p1[4*i+3] = byte(i)
 	}
-	// Ensure to allocate
 	img1.WritePixels(p1, image.Rect(0, 0, w1, h1))
 
 	pix0 := make([]byte, 4*w0*h0)
@@ -542,15 +558,73 @@ func TestDeallocateImmediately(t *testing.T) {
 
 // Issue #1028
 func TestExtendWithBigImage(t *testing.T) {
+	atlas.SetImageSizeForTesting(256, minDestinationImageSizeForTesting, maxImageSizeForTesting)
+	defer atlas.ResetImageSizeForTesting()
+
 	img0 := atlas.NewImage(1, 1, atlas.ImageTypeRegular)
 	defer img0.Deallocate()
+	img0.AllocateOnNewSourcePageForTesting()
+	if bw, bh := img0.BackendSizeForTesting(); bw != 256 || bh != 256 {
+		t.Fatalf("initial isolated source page size = (%d, %d), want (256, 256)", bw, bh)
+	}
+	want0 := []byte{0x12, 0x34, 0x56, 0xff}
+	img0.WritePixels(want0, image.Rect(0, 0, 1, 1))
 
-	img0.WritePixels(make([]byte, 4*1*1), image.Rect(0, 0, 1, 1))
-
-	img1 := atlas.NewImage(minSourceImageSizeForTesting+1, minSourceImageSizeForTesting+1, atlas.ImageTypeRegular)
+	img1 := atlas.NewImage(257, 257, atlas.ImageTypeRegular)
 	defer img1.Deallocate()
+	img1.AllocateOnBackendOfForTesting(img0)
+	if !img0.SharesBackendForTesting(img1) {
+		t.Fatalf("expected img1 to extend and share img0's backend")
+	}
+	if bw, bh := img0.BackendSizeForTesting(); bw < 512 || bh < 512 {
+		t.Fatalf("extended source page size = (%d, %d), want >= (512, 512)", bw, bh)
+	}
+	img1.WritePixels(make([]byte, 4*257*257), image.Rect(0, 0, 257, 257))
 
-	img1.WritePixels(make([]byte, 4*(minSourceImageSizeForTesting+1)*(minSourceImageSizeForTesting+1)), image.Rect(0, 0, minSourceImageSizeForTesting+1, minSourceImageSizeForTesting+1))
+	got0 := make([]byte, 4)
+	if ok, err := img0.ReadPixels(render.GraphicsDriver(), got0, image.Rect(0, 0, 1, 1)); err != nil || !ok {
+		t.Fatalf("ReadPixels after extend: ok=%v err=%v", ok, err)
+	}
+	if !bytes.Equal(got0, want0) {
+		t.Errorf("img0 pixel after extend = %v, want %v", got0, want0)
+	}
+}
+
+// TestSmallMaxImageSize verifies that when the driver's max image size is smaller than the default
+// minimum source page size (256), page allocation and compaction clamp the minimum to maxSize.
+func TestSmallMaxImageSize(t *testing.T) {
+	atlas.SetImageSizeForTesting(256, 16, 128)
+	defer atlas.ResetImageSizeForTesting()
+
+	img := atlas.NewImage(64, 64, atlas.ImageTypeRegular)
+	defer img.Deallocate()
+	img.AllocateOnNewSourcePageForTesting()
+
+	bw, bh := img.BackendSizeForTesting()
+	if bw != 128 || bh != 128 {
+		t.Fatalf("backend size with max=128 = (%d, %d), want (128, 128)", bw, bh)
+	}
+
+	want := make([]byte, 4*64*64)
+	for i := 0; i < len(want); i += 4 {
+		want[i], want[i+1], want[i+2], want[i+3] = 0xaa, 0x55, 0x22, 0xff
+	}
+	img.WritePixels(want, image.Rect(0, 0, 64, 64))
+	got := make([]byte, len(want))
+	if ok, err := img.ReadPixels(render.GraphicsDriver(), got, image.Rect(0, 0, 64, 64)); err != nil || !ok {
+		t.Fatalf("ReadPixels: ok=%v err=%v", ok, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("pixels mismatch on 128x128 clamped page")
+	}
+
+	// Compaction must also clamp its minimum size cleanly without panicking or growing past max.
+	now := recent.Now()
+	atlas.CompactPagesForTesting(now)
+	atlas.CompactPagesForTesting(now + recent.Window)
+	if bw, bh := img.BackendSizeForTesting(); bw > 128 || bh > 128 {
+		t.Errorf("backend size after compact = (%d, %d), want <= (128, 128)", bw, bh)
+	}
 }
 
 // Issue #1217
@@ -966,6 +1040,98 @@ func TestImageSizeSameAsBackendSize(t *testing.T) {
 			if got != want {
 				t.Errorf("at (%d, %d): got: %v, want: %v", x, y, got, want)
 			}
+		}
+	}
+}
+
+func TestAtlasPageSizeCapped(t *testing.T) {
+	driverMax := graphicscommand.MaxImageSize(render.GraphicsDriver())
+	if driverMax < 8192 {
+		t.Skipf("driver MaxImageSize = %d < 8192", driverMax)
+	}
+	atlas.SetImageSizeForTesting(256, 16, driverMax)
+	defer atlas.ResetImageSizeForTesting()
+
+	// Allocate enough 1024x1024 images (>16) to exceed a single 4096x4096 page.
+	const n, side = 20, 1024
+	imgs := make([]*atlas.Image, n)
+	pix := make([]byte, 4*side*side)
+	for k := range imgs {
+		img := atlas.NewImage(side, side, atlas.ImageTypeRegular)
+		defer img.Deallocate()
+		img.WritePixels(pix, image.Rect(0, 0, side, side))
+		imgs[k] = img
+		if bw, bh := img.BackendSizeForTesting(); bw > 4096 || bh > 4096 {
+			t.Fatalf("image %d placed on oversized page %dx%d, want <= 4096", k, bw, bh)
+		}
+	}
+	// They must not all share one page since 20 * 1025^2 > 4096^2.
+	allSame := true
+	for _, img := range imgs[1:] {
+		if !img.SharesBackendForTesting(imgs[0]) {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		t.Error("all 20 1024x1024 images shared one page, expected a second page at the 4096 cap")
+	}
+}
+
+func TestLargeImageNotOnAtlasOrPromoted(t *testing.T) {
+	const w, h = 1025, 64
+	src := atlas.NewImage(16, 16, atlas.ImageTypeRegular)
+	defer src.Deallocate()
+	src.WritePixels(make([]byte, 4*16*16), image.Rect(0, 0, 16, 16))
+
+	dst0 := atlas.NewImage(w, h, atlas.ImageTypeRegular)
+	defer dst0.Deallocate()
+	dst1 := atlas.NewImage(w, h, atlas.ImageTypeRegular)
+	defer dst1.Deallocate()
+
+	vs := quadVertices(16, 16, 0, 0, 1)
+	is := graphics.QuadIndices()
+	dr := image.Rect(0, 0, w, h)
+	sr := image.Rect(0, 0, 16, 16)
+	dst0.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader(), nil)
+	dst1.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{src}, vs, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{sr}, atlas.NearestFilterShader(), nil)
+
+	if dst0.IsOnAtlasForTesting() {
+		t.Error("1025x64 destination image was placed on an atlas page")
+	}
+	if dst0.SharesBackendForTesting(dst1) {
+		t.Error("two 1025x64 destination images shared a backend")
+	}
+
+	// Using dst0 as a source many times must not promote it onto a source page.
+	out := atlas.NewImage(w, h, atlas.ImageTypeRegular)
+	defer out.Deallocate()
+	vsLarge := quadVertices(w, h, 0, 0, 1)
+	for range atlas.BaseCountToPutOnSourceBackend * 4 {
+		atlas.PutImagesOnSourceBackendForTesting()
+		out.DrawTriangles([graphics.ShaderSrcImageCount]*atlas.Image{dst0}, vsLarge, is, graphicsdriver.BlendCopy, dr, [graphics.ShaderSrcImageCount]image.Rectangle{dr}, atlas.NearestFilterShader(), nil)
+	}
+	atlas.PutImagesOnSourceBackendForTesting()
+	if dst0.IsOnAtlasForTesting() || dst0.IsOnSourceBackendForTesting() {
+		t.Errorf("1025x64 image promoted to source atlas: onAtlas=%v onSource=%v", dst0.IsOnAtlasForTesting(), dst0.IsOnSourceBackendForTesting())
+	}
+
+	// Verify pixels still round-trip on an image larger than the 4096 page cap (if driver allows).
+	if driverMax := graphicscommand.MaxImageSize(render.GraphicsDriver()); driverMax >= 4096 {
+		atlas.SetImageSizeForTesting(256, 16, driverMax)
+		defer atlas.ResetImageSizeForTesting()
+		bigW := min(driverMax, 5000)
+		big := atlas.NewImage(bigW, 4, atlas.ImageTypeRegular)
+		defer big.Deallocate()
+		pix := make([]byte, 4*bigW*4)
+		pix[0], pix[1], pix[2], pix[3] = 0x11, 0x22, 0x33, 0xff
+		big.WritePixels(pix, image.Rect(0, 0, bigW, 4))
+		got := make([]byte, 4)
+		if _, err := big.ReadPixels(render.GraphicsDriver(), got, image.Rect(0, 0, 1, 1)); err != nil {
+			t.Fatal(err)
+		}
+		if got[0] != 0x11 || got[1] != 0x22 || got[2] != 0x33 || got[3] != 0xff {
+			t.Errorf("large image pixel (0,0) = %v, want [17 34 51 255]", got)
 		}
 	}
 }

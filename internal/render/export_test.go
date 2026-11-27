@@ -32,8 +32,8 @@ func (i *Image) CachedPixelsSizeForTesting() int {
 	return size
 }
 
-// ReadPixelsForTesting reads the pixels of region, and reports whether a frame was there to read
-// them in.
+// ReadPixelsForTesting reads the pixels of region.
 func (i *Image) ReadPixelsForTesting(pixels []byte, region image.Rectangle) (bool, error) {
-	return i.readPixels(pixels, region)
+	err := i.readPixels(pixels, region)
+	return err == nil, err
 }
