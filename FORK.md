@@ -139,9 +139,13 @@ monitor and window APIs. Everything outside that was dropped.
   branches went with it; `internal/ui.Game` no longer exists. The virtual
   keyboard's screen shift lived in the game's letterbox transform and has no
   consumer now: the state is still recorded for a per-window shift to use.
-- The VM guest/host remote rendering backend (`exp/vmhost`,
-  `internal/vmguest`, `internal/vmprotocol`, `internal/graphicsdriver/remote`)
-  and the `RunGameOptions.VMGuestEndpoint` option.
+- Upstream's VM guest/host remote rendering backend (`exp/vmhost`,
+  `internal/vmguest`, `internal/vmprotocol`, and upstream's
+  `internal/graphicsdriver/remote`) and the `RunGameOptions.VMGuestEndpoint`
+  option. A new process-separated remote rendering driver now lives at
+  `internal/graphicsdriver/remote` (with public package `remote`), encoding
+  driver calls into a versioned wire stream for a viewer process to replay
+  without opening a GPU in the app process.
 - The Linux framebuffer backend (`internal/fbdev`).
 - Gamepads: `internal/gamepad`, `internal/gamepaddb`, the gamepad tracker in
   `internal/ui`, `RunOptions.Gamepads`, the `Gamepad*Event` types and the
@@ -186,14 +190,14 @@ again here if it applies. What follows from that so far:
   uniforms are made of — the regions, as far as the shader reads them, and
   the user's block — before it makes them (`sameRegionsAsLast`). What it
   learns of each block gives the block a version
-  (`graphicsdriver.UniformVersions`), which Metal, OpenGL and Direct3D 11
-  keep in place of a copy of the last block they uploaded.
+  (`graphicsdriver.UniformVersions`), which Metal, OpenGL, Direct3D 11 and
+  Direct3D 12 keep in place of a copy of the last block they uploaded.
 - The image dumper's remains went: `atlas.DumpScreenshot`, `atlas.DumpImages`,
   `graphicscommand.Image.Dump` and `internal/png`, the copy of `image/png`
   only they used. Nothing had called them since the dumper's entry points
   were removed.
 - `vector` reaches the unexported parts of `ggfx.Image` through
-  `internal/bridge`, as `host` does, and not through `go:linkname`.
+  `internal/bridge`, as `host` and `remote` do, and not through `go:linkname`.
 - `image.go` is split by what its parts do: `image_draw.go`,
   `image_pixels.go`, `image_sub.go` and `image_usage.go`.
 
@@ -240,7 +244,7 @@ own for what it caches, as ggwd does for the current monitor and `exp/textinput`
 and ggui for its glyph caches. A window system drives it
 through package `host`: `Init`, `Terminate`, `NewSurface`, `BeginFrame`, `Frame.Screen`,
 `Frame.End`, `Flush` and the rest, so that an app drawing with ggfx does not see them. A surface's
-target is typed (`NSView`, `HWND`, `GLWindow`, `Canvas`), and the WebGL driver is created for the
+target is typed (`NSView`, `HWND`, `GLWindow`, `Canvas`, `RemoteTarget`), and the WebGL driver is created for the
 canvas of the first surface, as WebGL draws to the canvas it was created for. The driver's
 particulars are one value, `CurrentDriver()`, and whether a present was occluded comes back from
 `Flush`. The render thread starts at `Init`; pacing frames is the window system's. ggfx's own tests run inside one frame with no window
@@ -281,7 +285,8 @@ WebGL feels.
 ## Draw call cost
 
 The Metal driver calls `objc_msgSend` directly through `purego.SyscallN` for
-the calls made on every draw (`mtl/msgsend_darwin.go`), instead of
+the calls made on every draw (`internal/cocoa/msgsend_darwin.go` and
+`mtl/structarg_darwin_arm64.go`), instead of
 `objc.ID.Send`, which boxes its arguments and dispatches through reflection
 at several allocations per call. On arm64 the struct arguments of
 `setViewport:` and `setScissorRect:` are passed by reference; amd64 passes
@@ -323,18 +328,18 @@ from an RGBA image's alpha there; source-over, copy, clear, lighter and destinat
 
 ## Not done yet
 
-- Alpha-only images are native on Metal only. OpenGL 3.3+/ES 3.0+ (GL_R8 with
-  GL_TEXTURE_SWIZZLE_RGBA) and Direct3D 12 (R8_UNORM with an SRV component mapping) can support
-  them; they report `SupportsPixelFormat(PixelFormatA8)` false for now and get the RGBA fallback,
-  as WebGL and Direct3D 11 always will.
+- Alpha-only images are native on Metal, OpenGL 3.3+/ES 3.0+ (`GL_R8` with
+  a per-channel RRRR swizzle) and Direct3D 12 (`R8_UNORM` with an SRV component
+  mapping). WebGL and Direct3D 11 lack texture swizzle/component mapping and
+  continue to use the RGBA fallback.
 
 - More than one canvas on WebGL (ggwd's `docs/window.md`). Metal and macOS OpenGL
   ran several windows; DirectX 11/12 and OpenGL on Linux and Windows accept
   several surfaces but were cross-compiled only.
 - CI (`.github/workflows/test.yml`) runs the suite with no window on macOS Metal, on macOS
-  OpenGL through Apple's software renderer, and on DirectX 11 and 12 through WARP, so naga's HLSL
-  has been compiled and drawn with; no GPU's DirectX driver nor the debug layer has seen it, and
-  WebGL and Linux OpenGL are built only, the harness having no context for them.
+  OpenGL through Apple's software renderer, on DirectX 11 and 12 through WARP, and on Linux
+  OpenGL (`internal/rendertest`) through Mesa's surfaceless EGL; no GPU's DirectX driver nor the
+  debug layer has seen it, and WebGL is built only, the harness having no context for it.
 - On Apple's software OpenGL renderer the batched vector fill does not match the unbatched one
   pixel for pixel (`TestFillPathBatchingIsExact`, `TestFillPathBatchingWithGeneratedPaths`), with
   antialiasing and without: the soundness argument under "Draw call cost" leans on how a GPU
@@ -347,9 +352,6 @@ from an RGBA image's alpha there; source-over, copy, clear, lighter and destinat
   seen doing it. CI skips `TestImageClip` and `TestFillRects`, whose paths off the destination's
   top are filled through clipped stencil buffers, there; `GGFX_TEST_GL_SOFTWARE=1` makes the tests' CGL
   context use that renderer on a Mac with a GPU.
-- To do: make an OpenGL context for the tests on Linux, with EGL's surfaceless platform
-  (`EGL_MESA_platform_surfaceless`) and Mesa's llvmpipe, in `internal/testing` beside
-  `glcontext_darwin.go`, so that CI runs the drawing tests on Linux OpenGL and OpenGL ES too.
 - `TestImageBlendFactor` makes ten thousand blend pipelines, and the CI runners' virtual Metal GPU
   fails to compile one of them now and then; CI skips it on Metal.
 - Metal's live-resize and fullscreen presentation now hangs on the window state ggwd sets, and

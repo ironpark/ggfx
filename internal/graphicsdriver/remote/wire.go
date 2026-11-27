@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"unsafe"
 )
 
@@ -134,7 +135,9 @@ type Header struct {
 }
 
 // ParseHeader returns the header of batch. It returns a *VersionError for a batch of another
-// version of the format.
+// version of the format. ParseHeader performs wire-format validation only and does not check
+// device MaxImageSize or Replayer resource limits; viewers should call (*Replayer).ScreenSize
+// before allocating a screen target.
 func ParseHeader(batch []byte) (Header, error) {
 	if len(batch) < 6 || string(batch[:4]) != batchMagic {
 		return Header{}, errors.New("remote: not a batch")
@@ -180,11 +183,15 @@ func (e *enc) rect(r image.Rectangle) {
 
 // bytes appends an array.
 func (e *enc) bytes(p []byte) {
-	e.u32(uint32(len(p)))
-	for len(e.b)%4 != 0 {
-		e.b = append(e.b, 0)
-	}
-	e.b = append(e.b, p...)
+	n := len(e.b)
+	pad := (-n) & 3
+	total := 4 + pad + len(p)
+	e.b = slices.Grow(e.b, total)
+	dst := e.b[n : n+total]
+	binary.LittleEndian.PutUint32(dst, uint32(len(p)))
+	clear(dst[4 : 4+pad])
+	copy(dst[4+pad:], p)
+	e.b = e.b[:n+total]
 }
 
 func (e *enc) f32s(v []float32) {

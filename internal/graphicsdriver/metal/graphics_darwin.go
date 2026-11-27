@@ -57,23 +57,23 @@ type Graphics struct {
 	// rceState is the state set on rce. It is zero whenever rce is.
 	rceState rceState
 
-	// frame is the current frame number.
-	// frame is incremented when the screen is presented.
-	frame int64
+	// gen is the current submission generation. It advances on every End so that buffers of
+	// intermediate flushes are reclaimed as soon as their command buffers complete.
+	gen int64
 
-	// inFlight holds, oldest first, the command buffers and the buffers of the frames whose command
-	// buffers may not have completed, so that they are not released or reused before. spareFrames
-	// are records to reuse, so that a frame allocates none.
+	// inFlight holds, oldest first, the command buffers and the buffers of the generations whose
+	// command buffers may not have completed, so that they are not released or reused before.
+	// spareFrames are records to reuse, so that a batch allocates none.
 	inFlight    []*frameResources
 	spareFrames []*frameResources
 
-	// unusedBuffers keeps the buffers of completed frames for later frames to reuse.
+	// unusedBuffers keeps the buffers of completed generations for later batches to reuse.
 	unusedBuffers bufferPool[mtl.Buffer]
 
-	// uploadBuffer is the staging buffer WritePixels copies pixels from in frame uploadFrame, and
-	// uploadOffset where its free space begins.
+	// uploadBuffer is the staging buffer WritePixels and large uniform uploads write into in
+	// generation uploadGen, and uploadOffset where its free space begins.
 	uploadBuffer mtl.Buffer
-	uploadFrame  int64
+	uploadGen    int64
 	uploadOffset uintptr
 
 	lastDst *Image
@@ -82,6 +82,9 @@ type Graphics struct {
 	ib mtl.Buffer
 
 	maxImageSize int
+
+	// nextShaderID assigns each Shader a unique identity within g for encoder uniform caching.
+	nextShaderID uint64
 
 	// vertexStages are the shared vertex functions by texture count.
 	vertexStages map[int]vertexStage
@@ -137,6 +140,27 @@ func NewGraphics(colorSpace color.ColorSpace) (graphicsdriver.Graphics, error) {
 	return g, nil
 }
 
+// drawableState tracks whether the surface's pending drawable (s.drawable or s.chained) started
+// from a valid copy of last, from a full redraw, or from a lost keep.
+type drawableState uint8
+
+const (
+	// drawableFresh means the pending drawable started with a full redraw (Kept() was false),
+	// so when presented it is complete, but it replaced everything relative to any alternating
+	// swap buffer (lastDamage must remain nil).
+	drawableFresh drawableState = iota
+
+	// drawableFromLast means the pending drawable started from a valid copy of last (or full
+	// damage covering last), so when presented it is complete and s.damage describes what
+	// changed since the previous complete frame.
+	drawableFromLast
+
+	// drawableIncomplete means Kept() told the frame it started from last, but startFrom could
+	// not copy last (window hidden or size mismatch). The drawable was cleared and may hold
+	// only partial damage, so it must never be recorded as last.
+	drawableIncomplete
+)
+
 // Surface is a CAMetalLayer, the layer of one NSView.
 type Surface struct {
 	graphics *Graphics
@@ -154,14 +178,28 @@ type Surface struct {
 	// many times per frame.
 	cleared bool
 
-	// A frame can start from the last one presented (see Kept): last is the texture of the
-	// drawable presented last, retained while it is on the screen, which it is until the next
-	// drawable is presented, and so intact for the next frame to copy. keep is what Kept told the
-	// frame being drawn. Kept runs on the goroutine that begins frames, the rest on the rendering
-	// thread, which a flush waits for; mu orders them.
-	mu   sync.Mutex
-	last mtl.Texture
-	keep bool
+	// Invariant:
+	//  1. last and any shown swap buffer eligible for partial-damage copying
+	//     (previous && lastDamage != nil) are complete images of the scene at the current
+	//     screen size, or are absent (last == 0, lastDamage == nil).
+	//  2. Any pending drawable (s.drawable or s.chained) matches the current screen size;
+	//     a resize or screen disposal discards the pending drawable and forgets last.
+	//  3. Partial lastDamage is recorded only when a single logical frame started from last
+	//     and presented without an intervening non-presenting End; if a pending drawable spans
+	//     multiple logical frames, its pendingState is downgraded to drawableFresh so present
+	//     leaves lastDamage == nil and the next acquire copies in full.
+	//
+	// last is the texture of the last complete drawable presented, retained while it is on the
+	// screen, which it is until the next drawable is presented, and so intact for the next frame
+	// to copy. keep is what Kept told the frame being built. pendingState is attached to the
+	// currently pending drawable until it is presented or discarded (never cleared by Kept, so
+	// an incomplete drawable stays marked across Flush(false) if the next frame does not redraw).
+	// Kept runs on the goroutine that begins frames, the rest on the rendering thread, which a
+	// flush waits for; mu orders them.
+	mu           sync.Mutex
+	last         mtl.Texture
+	keep         bool
+	pendingState drawableState
 
 	// damage is what the frame being drawn changes, in pixels, as SetDamage told it, and
 	// damaged whether it did: a frame that does not says nothing of what it changes. lastDamage
@@ -212,14 +250,19 @@ func (s *Surface) Kept() bool {
 
 // startFrom copies the last presented frame into tex, the drawable just acquired, and reports
 // whether it did: when the frame being drawn was told it starts from the last, and that is the
-// same size. It runs on the rendering thread.
+// same size. It runs on the rendering thread and records the drawable's pendingState.
 //
 // previous reports that tex holds the frame before the last presented, so that only what the
 // last changed is copied; a frame that changes all of it copies nothing.
 func (s *Surface) startFrom(tex mtl.Texture, previous bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.keep || s.last == (mtl.Texture{}) {
+	if !s.keep {
+		s.pendingState = drawableFresh
+		return false
+	}
+	if s.last == (mtl.Texture{}) {
+		s.pendingState = drawableIncomplete
 		return false
 	}
 	w, h := tex.Width(), tex.Height()
@@ -227,10 +270,12 @@ func (s *Surface) startFrom(tex mtl.Texture, previous bool) bool {
 		// A frame told it is kept would show what it did not draw over as cleared; that can only
 		// be a resize, which makes a new screen image and is not kept. The next is drawn whole.
 		s.forgetLastLocked()
+		s.pendingState = drawableIncomplete
 		return false
 	}
 	if s.coversLocked(w, h) {
 		// It draws over all of it; what it starts from never shows.
+		s.pendingState = drawableFromLast
 		return true
 	}
 	copies := []image.Rectangle{image.Rect(0, 0, w, h)}
@@ -249,6 +294,7 @@ func (s *Surface) startFrom(tex mtl.Texture, previous bool) bool {
 		bce.CopyFromTexture(s.last, 0, 0, at, mtl.Size{Width: r.Dx(), Height: r.Dy(), Depth: 1}, tex, 0, 0, at)
 	}
 	bce.EndEncoding()
+	s.pendingState = drawableFromLast
 	return true
 }
 
@@ -257,18 +303,68 @@ func (s *Surface) startFrom(tex mtl.Texture, previous bool) bool {
 func (s *Surface) presented(tex mtl.Texture) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	state := s.pendingState
+	s.pendingState = drawableFresh
+	s.keep = false
+	if state == drawableIncomplete {
+		// The drawable was told it started from last but could not copy it, so tex may hold only
+		// partial damage over a cleared buffer. Drop last so the next frame redraws whole.
+		s.forgetLastLocked()
+		s.damage, s.damaged = s.damage[:0], false
+		return
+	}
+	// Only record partial lastDamage if this drawable started from last and last was not
+	// forgotten before presentation; a recovery or fresh frame replaced the whole scene
+	// relative to any alternating swap buffer, so the next frame must copy all of tex.
+	validDiff := state == drawableFromLast && s.last != (mtl.Texture{})
 	tex.Retain()
 	if s.last != (mtl.Texture{}) {
 		s.last.Release()
 	}
 	s.last = tex
 	// What this frame changed is what the next, drawn into the buffer before it, copies.
-	if s.damaged && len(s.damage) > 0 && !s.coversLocked(tex.Width(), tex.Height()) {
+	if validDiff && s.damaged && len(s.damage) > 0 && !s.coversLocked(tex.Width(), tex.Height()) {
 		s.lastDamage = append(s.lastDamage[:0], s.damage...)
 	} else {
 		s.lastDamage = nil
 	}
 	s.damage, s.damaged = s.damage[:0], false
+}
+
+// endFrameWithoutPresent retires damage for any surface that did not present at a final End
+// (FlushModeEndFrame, or FlushModePresent for surfaces that did not acquire a drawable or on
+// the no-pending early return). If a drawable is still pending, subsequent logical frames may
+// draw into it before it is presented, so downgrade drawableFromLast to drawableFresh to force
+// lastDamage = nil on present. Intermediate flushes do not call this.
+func (s *Surface) endFrameWithoutPresent() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if (s.chained || s.drawable != (ca.MetalDrawable{})) && s.pendingState == drawableFromLast {
+		s.pendingState = drawableFresh
+	}
+	s.damage, s.damaged = s.damage[:0], false
+}
+
+// discardPending drops any acquired-but-unpresented drawable or swap-chain slot.
+// Must run on the rendering thread.
+func (s *Surface) discardPending() {
+	if s.graphics != nil && s.graphics.lastDst != nil && s.graphics.lastDst.surface == s {
+		s.graphics.flushRenderCommandEncoderIfNeeded()
+	}
+	if s.chained {
+		if s.view.chain != nil {
+			s.view.chain.discardDrawing()
+		}
+		s.chained = false
+		s.drawableTex = mtl.Texture{}
+		s.cleared = false
+	}
+	if s.drawable != (ca.MetalDrawable{}) {
+		s.drawable.Release()
+		s.drawable = ca.MetalDrawable{}
+		s.drawableTex = mtl.Texture{}
+		s.cleared = false
+	}
 }
 
 func (s *Surface) forgetLastLocked() {
@@ -315,6 +411,18 @@ func (s *Surface) Readable() bool { return true }
 
 func (s *Surface) NewScreenImage(width, height int) (graphicsdriver.Image, error) {
 	g := s.graphics
+	resized := s.view.drawableWidth != width || s.view.drawableHeight != height
+	if resized {
+		s.discardPending()
+	}
+	s.mu.Lock()
+	if resized {
+		s.forgetLastLocked()
+		s.pendingState = drawableFresh
+		s.damage, s.damaged = s.damage[:0], false
+	}
+	s.keep = false
+	s.mu.Unlock()
 	s.view.setDrawableSize(width, height)
 	i := &Image{
 		graphics: g,
@@ -343,13 +451,13 @@ func (s *Surface) SetWindowState(liveResizing, fullscreen, hidden bool) {
 
 func (s *Surface) Dispose() {
 	g := s.graphics
+	s.discardPending()
 	s.mu.Lock()
 	s.forgetLastLocked()
+	s.keep = false
+	s.pendingState = drawableFresh
+	s.damage, s.damaged = s.damage[:0], false
 	s.mu.Unlock()
-	if s.drawable != (ca.MetalDrawable{}) {
-		s.drawable.Release()
-		s.drawable, s.drawableTex = ca.MetalDrawable{}, mtl.Texture{}
-	}
 	s.view.release()
 	g.surfacesMu.Lock()
 	g.surfaces = slices.DeleteFunc(g.surfaces, func(t *Surface) bool { return t == s })
@@ -359,6 +467,14 @@ func (s *Surface) Dispose() {
 // texture returns the drawable's texture for the current frame, acquiring a drawable if needed.
 // It returns a zero texture when no drawable is available.
 func (s *Surface) texture() mtl.Texture {
+	if s.drawableTex != (mtl.Texture{}) &&
+		(s.drawableTex.Width() != s.view.drawableWidth || s.drawableTex.Height() != s.view.drawableHeight) {
+		s.discardPending()
+		s.mu.Lock()
+		s.forgetLastLocked()
+		s.pendingState = drawableFresh
+		s.mu.Unlock()
+	}
 	if c := s.view.chain; c != nil {
 		if !s.chained {
 			s.view.waitForDisplayLinkOutputCallback()
@@ -414,12 +530,19 @@ func (g *Graphics) Begin() error {
 
 func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 	g.flushCommandBufferIfNeeded(mode == graphicsdriver.FlushModePresent)
+	if mode != graphicsdriver.FlushModeIntermediate {
+		for _, s := range g.snapshotSurfaces() {
+			s.endFrameWithoutPresent()
+		}
+	}
 	g.pool.Release()
 	g.pool.ID = 0
-	if mode != graphicsdriver.FlushModeIntermediate {
-		g.frame++
-	}
-	// Reclaim the resources for the past frames here, as a drawable is not always obtained in a frame.
+	g.vb = mtl.Buffer{}
+	g.ib = mtl.Buffer{}
+	g.uploadBuffer = mtl.Buffer{}
+	g.uploadOffset = 0
+	g.gen++
+	// Reclaim the resources for completed generations here, as a drawable is not always obtained.
 	g.gcBuffers()
 	return nil
 }
@@ -435,16 +558,16 @@ func (g *Graphics) SetMainThreadRunner(f func(func())) {
 	}
 }
 
-// frameResources are a frame's command buffers and the buffers its commands use.
+// frameResources are a generation's command buffers and the buffers its commands use.
 type frameResources struct {
-	frame   int64
+	gen     int64
 	cbs     []mtl.CommandBuffer
 	buffers []mtl.Buffer
 }
 
-// currentFrameResources returns the record of the current frame, adding one if needed.
+// currentFrameResources returns the record of the current generation, adding one if needed.
 func (g *Graphics) currentFrameResources() *frameResources {
-	if n := len(g.inFlight); n > 0 && g.inFlight[n-1].frame == g.frame {
+	if n := len(g.inFlight); n > 0 && g.inFlight[n-1].gen == g.gen {
 		return g.inFlight[n-1]
 	}
 	var r *frameResources
@@ -455,7 +578,7 @@ func (g *Graphics) currentFrameResources() *frameResources {
 	} else {
 		r = &frameResources{}
 	}
-	r.frame = g.frame
+	r.gen = g.gen
 	g.inFlight = append(g.inFlight, r)
 	return r
 }
@@ -464,12 +587,12 @@ func (g *Graphics) gcBuffers() {
 	kept := g.inFlight[:0]
 loop:
 	for _, r := range g.inFlight {
-		if r.frame == g.frame {
+		if r.gen == g.gen {
 			kept = append(kept, r)
 			continue
 		}
 
-		// Check if all command buffers for the frame have finished (completed or errored).
+		// Check if all command buffers for the generation have finished (completed or errored).
 		for _, cb := range r.cbs {
 			if cb.Status() < mtl.CommandBufferStatusCompleted {
 				kept = append(kept, r)
@@ -483,7 +606,7 @@ loop:
 		r.cbs = r.cbs[:0]
 
 		for i, b := range r.buffers {
-			g.unusedBuffers.put(b, b.Length(), r.frame)
+			g.unusedBuffers.put(b, b.Length(), r.gen)
 			r.buffers[i] = mtl.Buffer{}
 		}
 		r.buffers = r.buffers[:0]
@@ -492,7 +615,7 @@ loop:
 	clear(g.inFlight[len(kept):])
 	g.inFlight = kept
 
-	g.unusedBuffers.evict(g.frame, mtl.Buffer.Release)
+	g.unusedBuffers.evict(g.gen, mtl.Buffer.Release)
 }
 
 func (g *Graphics) ensureCommandBuffer() {
@@ -542,7 +665,14 @@ func (g *Graphics) availableBuffer(length uintptr) mtl.Buffer {
 
 	newBuf, ok := g.unusedBuffers.get(length)
 	if !ok {
-		newBuf = g.device.NewBufferWithLength(recent.NextPowerOf2(length), bufferResourceOptions(g.device))
+		size := recent.NextPowerOf2(length)
+		if size == 0 {
+			return mtl.Buffer{}
+		}
+		newBuf = g.device.NewBufferWithLength(size, bufferResourceOptions(g.device))
+		if newBuf == (mtl.Buffer{}) {
+			return mtl.Buffer{}
+		}
 	}
 
 	r := g.currentFrameResources()
@@ -785,15 +915,32 @@ type rceState struct {
 	scissorSet     bool
 
 	// The uniform blocks last set, which a draw does not send again: the projection, all the
-	// vertex function reads of the internal block, and the versions of the fragment function's
-	// blocks, 0 when none is set.
+	// vertex function reads of the internal block, and the versions, shader identities and byte
+	// sizes of the fragment function's blocks, 0 when none is set.
 	vertexInternalSet       bool
 	projection              [16]uint32
 	fragmentInternalVersion uint64
+	fragmentInternalShader  uint64
 	userVersion             uint64
+	userShader              uint64
+	userBytes               uintptr
 }
 
 func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs [graphics.ShaderSrcImageCount]*Image, indexOffset int, shader *Shader, uniforms []uint32, versions graphicsdriver.UniformVersions, blend graphicsdriver.Blend) error {
+	var totalIndices int
+	for _, r := range dstRegions {
+		if r.IndexCount < 0 {
+			return fmt.Errorf("metal: negative index count %d", r.IndexCount)
+		}
+		totalIndices += r.IndexCount
+	}
+	if totalIndices > 0 && (g.vb == (mtl.Buffer{}) || g.ib == (mtl.Buffer{})) {
+		return fmt.Errorf("metal: DrawTriangles called with %d indices without vertex/index buffers set", totalIndices)
+	}
+	if totalIndices == 0 {
+		return nil
+	}
+
 	// A screen read as a source takes its texture before an encoder begins: acquiring it can
 	// encode a copy of the last frame (see startFrom). Without a drawable there is nothing to read.
 	var srcTextures [graphics.ShaderSrcImageCount]mtl.Texture
@@ -897,26 +1044,32 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 		st.vertexInternalSet = true
 		st.projection = projection
 	}
-	if shader.desc.FragmentReadsInternalUniforms && st.fragmentInternalVersion != versions.Internal {
+	if shader.desc.FragmentReadsInternalUniforms &&
+		(versions.Internal == 0 || st.fragmentInternalVersion != versions.Internal || st.fragmentInternalShader != shader.id) {
 		g.rce.SetFragmentBytes(unsafe.Pointer(internal), internalSize, graphicsdriver.MetalInternalUniformBufferIndex)
 		st.fragmentInternalVersion = versions.Internal
+		st.fragmentInternalShader = shader.id
 	}
-	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 && st.userVersion != versions.User {
+	if user := uniforms[graphics.PreservedUniformDwordCount:]; len(user) > 0 {
 		nbytes := unsafe.Sizeof(user[0]) * uintptr(len(user))
-		if nbytes <= graphicsdriver.MetalMaxInlineUniformBytes {
-			g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), nbytes, graphicsdriver.MetalUserUniformBufferIndex)
-		} else {
-			buf, offset := g.uploadSpace(alignUploadOffset(nbytes))
-			if buf == (mtl.Buffer{}) {
-				return fmt.Errorf("metal: allocating uniform buffer (%d bytes) failed", nbytes)
+		if versions.User == 0 || st.userVersion != versions.User || st.userBytes != nbytes || st.userShader != shader.id {
+			if nbytes <= graphicsdriver.MetalMaxInlineUniformBytes {
+				g.rce.SetFragmentBytes(unsafe.Pointer(unsafe.SliceData(user)), nbytes, graphicsdriver.MetalUserUniformBufferIndex)
+			} else {
+				buf, offset := g.uploadSpace(nbytes, uniformBufferAlignment)
+				if buf == (mtl.Buffer{}) {
+					return fmt.Errorf("metal: allocating uniform buffer (%d bytes) failed", nbytes)
+				}
+				dst := unsafe.Slice((*byte)(buf.Contents()), offset+nbytes)
+				src := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(user))), nbytes)
+				copy(dst[offset:], src)
+				buf.DidModifyRange(offset, nbytes)
+				g.rce.SetFragmentBuffer(buf, int(offset), graphicsdriver.MetalUserUniformBufferIndex)
 			}
-			dst := unsafe.Slice((*byte)(buf.Contents()), offset+nbytes)
-			src := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(user))), nbytes)
-			copy(dst[offset:], src)
-			buf.DidModifyRange(offset, nbytes)
-			g.rce.SetFragmentBuffer(buf, int(offset), graphicsdriver.MetalUserUniformBufferIndex)
+			st.userVersion = versions.User
+			st.userBytes = nbytes
+			st.userShader = shader.id
 		}
-		st.userVersion = versions.User
 	}
 
 	for i, t := range srcTextures {
@@ -936,6 +1089,9 @@ func (g *Graphics) draw(dst *Image, dstRegions []graphicsdriver.DstRegion, srcs 
 	}
 
 	for _, dstRegion := range dstRegions {
+		if dstRegion.IndexCount == 0 {
+			continue
+		}
 		if !st.scissorSet || st.scissor != dstRegion.Region {
 			g.rce.SetScissorRect(mtl.ScissorRect{
 				X:      dstRegion.Region.Min.X,
@@ -1068,6 +1224,18 @@ func (i *Image) Dispose() {
 		g.flushRenderCommandEncoderIfNeeded()
 		g.lastDst = nil
 	}
+	if i.screen && i.surface != nil {
+		// Disposing a screen image (e.g., on resize, even if the next frame never draws)
+		// retires any pending drawable and invalidates last so Kept() cannot report kept for
+		// the old size.
+		i.surface.discardPending()
+		i.surface.mu.Lock()
+		i.surface.forgetLastLocked()
+		i.surface.keep = false
+		i.surface.pendingState = drawableFresh
+		i.surface.damage, i.surface.damaged = i.surface.damage[:0], false
+		i.surface.mu.Unlock()
+	}
 	for k, t := range g.rceState.textures {
 		if (i.texture != (mtl.Texture{}) && t == i.texture) || (i.sampled != (mtl.Texture{}) && t == i.sampled) {
 			g.rceState.textures[k] = mtl.Texture{}
@@ -1170,7 +1338,10 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	// Writing to the texture with ReplaceRegion instead would sync the pixel data between CPU and
 	// GPU on the existing texture, which is inefficient (#1418). The buffer is not reused until the
 	// frame's command buffers complete.
-	buf, offset := g.uploadSpace(length)
+	buf, offset := g.uploadSpace(length, uploadAlignment)
+	if buf == (mtl.Buffer{}) {
+		return fmt.Errorf("metal: allocating staging buffer (%d bytes) failed", length)
+	}
 	contents := unsafe.Slice((*byte)(buf.Contents()), offset+length)
 	o := offset
 	for _, a := range args {
@@ -1196,32 +1367,47 @@ func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	return nil
 }
 
-// uploadAlignment is the alignment of an upload's offset in the staging buffer, a multiple of
-// every pixel's size.
+// uploadAlignment is the alignment of a pixel upload's offset in the staging buffer, a multiple
+// of every pixel's size.
 const uploadAlignment = 16
 
+// uniformBufferAlignment is the minimum offset alignment for constant-address-space buffers on
+// macOS GPUs (256 bytes on Intel and AMD; Apple Silicon accepts smaller).
+const uniformBufferAlignment = 256
+
+func alignUp(n, align uintptr) uintptr {
+	return (n + align - 1) &^ (align - 1)
+}
+
 func alignUploadOffset(n uintptr) uintptr {
-	return (n + uploadAlignment - 1) &^ (uploadAlignment - 1)
+	return alignUp(n, uploadAlignment)
 }
 
 // minUploadBufferBytes is the least a staging buffer for uploads holds, so that the uploads of a
-// frame share a few buffers.
+// batch share a few buffers.
 const minUploadBufferBytes = 256 << 10
 
-// uploadSpace returns a staging buffer and an offset in it with length bytes free for uploads. The
-// space is the frame's own: the buffer is reused only after the frame's command buffers complete.
-func (g *Graphics) uploadSpace(length uintptr) (mtl.Buffer, uintptr) {
-	if g.uploadBuffer != (mtl.Buffer{}) && g.uploadFrame == g.frame && g.uploadOffset+length <= g.uploadBuffer.Length() {
-		offset := g.uploadOffset
-		g.uploadOffset += length
-		g.ensureCommandBuffer()
-		return g.uploadBuffer, offset
+// uploadSpace returns a staging buffer and an align-aligned offset in it with length bytes free
+// for uploads. The space belongs to the current generation: the buffer is reused only after the
+// generation's command buffers complete.
+func (g *Graphics) uploadSpace(length, align uintptr) (mtl.Buffer, uintptr) {
+	if g.uploadBuffer != (mtl.Buffer{}) && g.uploadGen == g.gen {
+		offset := alignUp(g.uploadOffset, align)
+		if offset >= g.uploadOffset && offset+length >= offset && offset+length <= g.uploadBuffer.Length() {
+			g.uploadOffset = offset + length
+			g.ensureCommandBuffer()
+			return g.uploadBuffer, offset
+		}
 	}
-	// availableBuffer ties the buffer to the current frame.
-	g.uploadBuffer = g.availableBuffer(max(length, minUploadBufferBytes))
-	g.uploadFrame = g.frame
+	// availableBuffer ties the buffer to the current generation.
+	buf := g.availableBuffer(max(length, minUploadBufferBytes))
+	if buf == (mtl.Buffer{}) {
+		return mtl.Buffer{}, 0
+	}
+	g.uploadBuffer = buf
+	g.uploadGen = g.gen
 	g.uploadOffset = length
-	return g.uploadBuffer, 0
+	return buf, 0
 }
 
 // sampledTexture returns the texture shaders sample the image as.

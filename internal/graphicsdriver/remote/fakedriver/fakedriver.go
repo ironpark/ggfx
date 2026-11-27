@@ -37,6 +37,10 @@ type Graphics struct {
 	// Log is every call made, ids and uniform versions numbered in the order they first appear.
 	Log []string
 
+	// DeferReleases, when true, keeps disposed images and shaders counted in Pinned until End
+	// is called, simulating drivers (Metal, D3D12) that retain resources until batch retirement.
+	DeferReleases bool
+
 	next      int
 	images    int
 	shaders   int
@@ -44,6 +48,16 @@ type Graphics struct {
 	indices   int
 	versions  map[uint64]int
 	nextBlock int
+
+	pinnedImages      int
+	pinnedShaders     int
+	pinnedPixels      int64
+	peakPinnedImages  int
+	peakPinnedShaders int
+	peakPinnedPixels  int64
+	deferredImages    int
+	deferredShaders   int
+	deferredPixels    int64
 }
 
 var _ graphicsdriver.Graphics = (*Graphics)(nil)
@@ -56,6 +70,17 @@ func New() *Graphics {
 // Live returns how many images and shaders are alive.
 func (g *Graphics) Live() (images, shaders int) { return g.images, g.shaders }
 
+// Pinned returns how many images, shaders, and backing pixels are currently pinned (including
+// deferred releases when DeferReleases is true).
+func (g *Graphics) Pinned() (images, shaders int, pixels int64) {
+	return g.pinnedImages, g.pinnedShaders, g.pinnedPixels
+}
+
+// PeakPinned returns the maximum pinned images, shaders, and backing pixels observed.
+func (g *Graphics) PeakPinned() (images, shaders int, pixels int64) {
+	return g.peakPinnedImages, g.peakPinnedShaders, g.peakPinnedPixels
+}
+
 func (g *Graphics) logf(format string, args ...any) {
 	g.Log = append(g.Log, fmt.Sprintf(format, args...))
 }
@@ -65,13 +90,24 @@ func hash(b []byte) string {
 	return fmt.Sprintf("%x", s[:6])
 }
 
-func (g *Graphics) Initialize() error                       { return nil }
-func (g *Graphics) ColorSpace() color.ColorSpace            { return color.ColorSpaceSRGB }
-func (g *Graphics) Begin() error                            { return nil }
-func (g *Graphics) End(mode graphicsdriver.FlushMode) error { return nil }
-func (g *Graphics) NeedsClearingScreen() bool               { return false }
-func (g *Graphics) MaxImageSize() int                       { return MaxImageSize }
-func (g *Graphics) FlipsY() bool                            { return false }
+func (g *Graphics) Initialize() error            { return nil }
+func (g *Graphics) ColorSpace() color.ColorSpace { return color.ColorSpaceSRGB }
+func (g *Graphics) Begin() error                 { return nil }
+func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
+	if mode == graphicsdriver.FlushModeIntermediate {
+		return nil
+	}
+	g.pinnedImages -= g.deferredImages
+	g.pinnedShaders -= g.deferredShaders
+	g.pinnedPixels -= g.deferredPixels
+	g.deferredImages = 0
+	g.deferredShaders = 0
+	g.deferredPixels = 0
+	return nil
+}
+func (g *Graphics) NeedsClearingScreen() bool { return false }
+func (g *Graphics) MaxImageSize() int         { return MaxImageSize }
+func (g *Graphics) FlipsY() bool              { return false }
 func (g *Graphics) SupportsPixelFormat(f graphicsdriver.PixelFormat) bool {
 	return f <= graphicsdriver.PixelFormatA8
 }
@@ -127,8 +163,13 @@ func (g *Graphics) newImage(width, height int, format graphicsdriver.PixelFormat
 	}
 	g.next++
 	g.images++
-	i := &Image{g: g, id: g.next, width: width, height: height, format: format,
-		pixels: make([]byte, format.BytesPerPixel()*graphics.InternalImageSize(width)*graphics.InternalImageSize(height))}
+	backing := int64(graphics.InternalImageSize(width)) * int64(graphics.InternalImageSize(height))
+	g.pinnedImages++
+	g.pinnedPixels += backing
+	g.peakPinnedImages = max(g.peakPinnedImages, g.pinnedImages)
+	g.peakPinnedPixels = max(g.peakPinnedPixels, g.pinnedPixels)
+	i := &Image{g: g, id: g.next, width: width, height: height, backingPixels: backing, format: format,
+		pixels: make([]byte, format.BytesPerPixel()*int(backing))}
 	g.logf("NewImage #%d %dx%d %s", i.id, width, height, format)
 	return i
 }
@@ -136,6 +177,8 @@ func (g *Graphics) newImage(width, height int, format graphicsdriver.PixelFormat
 func (g *Graphics) NewShader(desc *graphicsdriver.ShaderDescriptor) (graphicsdriver.Shader, error) {
 	g.next++
 	g.shaders++
+	g.pinnedShaders++
+	g.peakPinnedShaders = max(g.peakPinnedShaders, g.pinnedShaders)
 	s := &Shader{g: g, id: g.next, desc: desc}
 	g.logf("NewShader #%d textures %d uniforms %d", s.id, desc.TextureCount, desc.UniformDwordCount)
 	return s, nil
@@ -210,6 +253,7 @@ type Image struct {
 	g             *Graphics
 	id            int
 	width, height int
+	backingPixels int64
 	format        graphicsdriver.PixelFormat
 	pixels        []byte
 	disposed      bool
@@ -228,6 +272,13 @@ func (i *Image) Dispose() {
 	i.g.alive(i)
 	i.disposed = true
 	i.g.images--
+	if i.g.DeferReleases {
+		i.g.deferredImages++
+		i.g.deferredPixels += i.backingPixels
+	} else {
+		i.g.pinnedImages--
+		i.g.pinnedPixels -= i.backingPixels
+	}
 	i.g.logf("DisposeImage #%d", i.id)
 }
 
@@ -281,5 +332,10 @@ func (s *Shader) Dispose() {
 	}
 	s.disposed = true
 	s.g.shaders--
+	if s.g.DeferReleases {
+		s.g.deferredShaders++
+	} else {
+		s.g.pinnedShaders--
+	}
 	s.g.logf("DisposeShader #%d", s.id)
 }

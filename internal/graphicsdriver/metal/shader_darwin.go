@@ -29,6 +29,7 @@ type shaderRpsKey struct {
 
 type Shader struct {
 	graphics *Graphics
+	id       uint64
 
 	desc *graphicsdriver.ShaderDescriptor
 	lib  mtl.Library
@@ -42,8 +43,10 @@ func newShader(graphics *Graphics, device mtl.Device, desc *graphicsdriver.Shade
 	if desc == nil || desc.Source == nil {
 		return nil, fmt.Errorf("metal: shader descriptor has no source")
 	}
+	graphics.nextShaderID++
 	s := &Shader{
 		graphics: graphics,
+		id:       graphics.nextShaderID,
 		desc:     desc,
 		rpss:     map[shaderRpsKey]mtl.RenderPipelineState{},
 	}

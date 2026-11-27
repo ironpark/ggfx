@@ -105,10 +105,6 @@ type view struct {
 	linkIdleTimer *time.Timer
 }
 
-func (v *view) getMTLDevice() mtl.Device {
-	return v.device
-}
-
 // setWindowState records what the view's window is doing, for the next frame to take. A window
 // just hidden makes the layer let go of its drawables.
 func (v *view) setWindowState(liveResizing, fullscreen, hidden bool) {

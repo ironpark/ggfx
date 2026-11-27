@@ -19,7 +19,7 @@ const (
 	// Metal
 	MetalVertexBufferIndex          = 0
 	MetalInternalUniformBufferIndex = 1 // 288 B, setVertexBytes / setFragmentBytes
-	MetalUserUniformBufferIndex     = 2 // ≤4096 B setFragmentBytes, else 16B-aligned upload buffer
+	MetalUserUniformBufferIndex     = 2 // ≤4096 B setFragmentBytes, else 256B-aligned upload buffer
 	MetalMaxInlineUniformBytes      = 4096
 	// textures: [[texture(i)]] i = 0..3, no samplers (textureLoad only)
 

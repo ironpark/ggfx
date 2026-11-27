@@ -307,6 +307,14 @@ func (c *swapChain) acquire(width, height int) (tex mtl.Texture, previous bool) 
 	return tex, previous
 }
 
+// discardDrawing cancels an acquired-but-unpresented drawing buffer (e.g., on resize or screen
+// disposal before present) so a subsequent acquire takes a fresh buffer at the new size.
+func (c *swapChain) discardDrawing() {
+	c.mu.Lock()
+	c.drawing = -1
+	c.mu.Unlock()
+}
+
 // present shows the buffer the frame drew into once cb, committed, is scheduled, or on the main
 // thread once it is completed when the window is being resized, so that the new contents and the
 // window's new bounds are shown together.

@@ -50,11 +50,14 @@ func TestStructArgsDoNotAllocate(t *testing.T) {
 	}()
 
 	var n int
-	if allocs := testing.AllocsPerRun(100, func() {
+	allocs := testing.AllocsPerRun(100, func() {
 		n = (n + 1) % 64
 		rce.SetViewport(mtl.Viewport{Width: float64(n + 1), Height: 64, ZNear: -1, ZFar: 1})
 		rce.SetScissorRect(mtl.ScissorRect{X: 0, Y: 0, Width: n + 1, Height: 64})
-	}); allocs != 0 {
+	})
+	// Under -race, sync.Pool.Put intentionally drops a quarter of pooled items to catch races,
+	// so the pools in SetViewport, SetScissorRect and cocoa.MsgSend allocate once per call on average.
+	if !raceEnabled && allocs != 0 {
 		t.Errorf("SetViewport and SetScissorRect allocate %v times per call, want 0", allocs)
 	}
 }

@@ -127,10 +127,11 @@ func TestCopyFromBufferDoesNotAllocate(t *testing.T) {
 	}()
 
 	var n int
-	if allocs := testing.AllocsPerRun(100, func() {
+	allocs := testing.AllocsPerRun(100, func() {
 		n = (n + 1) % 64
 		bce.CopyFromBuffer(buf, 0, 4*(n+1), 4*(n+1), mtl.Size{Width: n + 1, Height: 1, Depth: 1}, texture, 0, 0, mtl.Origin{X: 0, Y: n})
-	}); allocs != 0 {
+	})
+	if !raceEnabled && allocs != 0 {
 		t.Errorf("CopyFromBuffer allocates %v times per call, want 0", allocs)
 	}
 }

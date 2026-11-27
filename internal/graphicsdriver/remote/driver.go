@@ -15,6 +15,7 @@
 package remote
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -48,17 +49,20 @@ type Graphics struct {
 	batchUse recent.Peak
 	next     uint32
 
-	// screen is the screen image, and drawn whether it was drawn to since the last present.
+	// screen is the screen image, and drawn is whether it was drawn to since the last present.
 	screen *Image
 	drawn  bool
 
-	// damageM guards the damage, which the app sets on its own goroutine while it draws a frame.
-	// presentDamage is swapped with damage under damageM so End never reads a backing array that
-	// SetDamage is concurrently overwriting.
-	damageM       sync.Mutex
-	damage        []image.Rectangle
-	presentDamage []image.Rectangle
-	damaged       bool
+	// damageM guards the accumulated damage hint for the next final End. Kept and SetDamage run
+	// on the app goroutine while End runs on the render thread. Multiple logical frames can
+	// coalesce into a single final End: multiple SetDamage calls union their rectangles, while
+	// SetDamage(nil) or any Kept screen frame without a SetDamage call widens the batch to full
+	// damage (damageAll). Every final End retires the recorded damage conservatively.
+	damageM     sync.Mutex
+	damage      []image.Rectangle
+	damaged     bool
+	damageAll   bool
+	pendingKept bool
 
 	hasSurface bool
 }
@@ -130,34 +134,48 @@ func (g *Graphics) End(mode graphicsdriver.FlushMode) error {
 		return nil
 	}
 	present := mode == graphicsdriver.FlushModePresent && g.screen != nil && g.drawn
+	// Retire any recorded damage on every final End, even when the batch is header-only and
+	// returns early, so an unpresented frame's hint cannot leak into a later presentation.
+	g.damageM.Lock()
 	if !present && len(g.e.b) == HeaderSize {
+		g.resetDamageLocked()
+		g.damageM.Unlock()
 		return nil
 	}
 	if present {
-		g.damageM.Lock()
-		damage, damaged := g.damage, g.damaged
-		g.damage, g.presentDamage = g.presentDamage[:0], damage
-		g.damaged = false
-		g.damageM.Unlock()
 		g.e.u8(opPresent)
 		g.e.u32(g.screen.id)
-		if !damaged || damage == nil {
+		if g.damageAll || g.pendingKept || !g.damaged {
 			g.e.u32(allDamaged)
 		} else {
-			g.e.u32(uint32(len(damage)))
-			for _, r := range damage {
+			g.e.u32(uint32(len(g.damage)))
+			for _, r := range g.damage {
 				g.e.rect(r)
 			}
 		}
 		g.drawn = false
 	}
+	g.resetDamageLocked()
+	g.damageM.Unlock()
 	g.batchUse.ObserveNow(len(g.e.b))
 	err := g.t.Send(g.batch(), present)
 	g.reset()
 	return err
 }
 
+func (g *Graphics) resetDamageLocked() {
+	if cap(g.damage) > 64 {
+		g.damage = nil
+	} else {
+		g.damage = g.damage[:0]
+	}
+	g.damaged = false
+	g.damageAll = false
+	g.pendingKept = false
+}
+
 func (g *Graphics) SetVertices(vertices []float32, indices []uint32) error {
+	g.e.b = slices.Grow(g.e.b, 1+7+4*len(vertices)+7+4*len(indices))
 	g.e.u8(opSetVertices)
 	g.e.f32s(vertices)
 	g.e.u32s(indices)
@@ -213,26 +231,41 @@ func (g *Graphics) DrawTriangles(dst graphicsdriver.Image, srcs [graphics.Shader
 	if d.screen {
 		g.drawn = true
 	}
-	g.e.u8(opDrawTriangles)
-	g.e.u32(d.id)
+	nRegions := len(dstRegions)
+	const headerLen = 1 + 4 + 4*graphics.ShaderSrcImageCount + 4 + 4
+	fixedLen := headerLen + 20*nRegions + 26
+	g.e.b = slices.Grow(g.e.b, fixedLen+7+4*len(uniforms))
+
+	start := len(g.e.b)
+	b := g.e.b[start : start+fixedLen]
+	b[0] = opDrawTriangles
+	binary.LittleEndian.PutUint32(b[1:], d.id)
+	p := 5
 	for _, s := range srcs {
-		g.e.u32(idOf(s))
+		binary.LittleEndian.PutUint32(b[p:], idOf(s))
+		p += 4
 	}
-	g.e.u32(sh.(*Shader).id)
-	g.e.u32(uint32(len(dstRegions)))
+	binary.LittleEndian.PutUint32(b[p:], sh.(*Shader).id)
+	binary.LittleEndian.PutUint32(b[p+4:], uint32(nRegions))
+	p += 8
 	for _, r := range dstRegions {
-		g.e.rect(r.Region)
-		g.e.u32(uint32(r.IndexCount))
+		binary.LittleEndian.PutUint32(b[p:], uint32(int32(r.Region.Min.X)))
+		binary.LittleEndian.PutUint32(b[p+4:], uint32(int32(r.Region.Min.Y)))
+		binary.LittleEndian.PutUint32(b[p+8:], uint32(int32(r.Region.Max.X)))
+		binary.LittleEndian.PutUint32(b[p+12:], uint32(int32(r.Region.Max.Y)))
+		binary.LittleEndian.PutUint32(b[p+16:], uint32(r.IndexCount))
+		p += 20
 	}
-	g.e.u32(uint32(indexOffset))
-	g.e.u8(uint8(blend.BlendFactorSourceRGB))
-	g.e.u8(uint8(blend.BlendFactorSourceAlpha))
-	g.e.u8(uint8(blend.BlendFactorDestinationRGB))
-	g.e.u8(uint8(blend.BlendFactorDestinationAlpha))
-	g.e.u8(uint8(blend.BlendOperationRGB))
-	g.e.u8(uint8(blend.BlendOperationAlpha))
-	g.e.u64(versions.Internal)
-	g.e.u64(versions.User)
+	binary.LittleEndian.PutUint32(b[p:], uint32(indexOffset))
+	b[p+4] = uint8(blend.BlendFactorSourceRGB)
+	b[p+5] = uint8(blend.BlendFactorSourceAlpha)
+	b[p+6] = uint8(blend.BlendFactorDestinationRGB)
+	b[p+7] = uint8(blend.BlendFactorDestinationAlpha)
+	b[p+8] = uint8(blend.BlendOperationRGB)
+	b[p+9] = uint8(blend.BlendOperationAlpha)
+	binary.LittleEndian.PutUint64(b[p+10:], versions.Internal)
+	binary.LittleEndian.PutUint64(b[p+18:], versions.User)
+	g.e.b = g.e.b[:start+fixedLen]
 	g.e.u32s(uniforms)
 	return nil
 }
@@ -259,16 +292,46 @@ func (s *Surface) Dispose() {
 	s.g.hasSurface = false
 }
 
-// Kept reports true: the viewer's target keeps the last frame.
-func (s *Surface) Kept() bool { return true }
+// Kept reports true: the viewer's target keeps the last frame. Recording a pending Kept frame
+// ensures that if a screen frame omits SetDamage (defaulting to full-screen damage), any other
+// frame coalesced into the same final End cannot narrow the emitted damage below full-screen.
+func (s *Surface) Kept() bool {
+	g := s.g
+	g.damageM.Lock()
+	if g.pendingKept {
+		// A previous Kept frame ended without calling SetDamage, so its changes cover the whole screen.
+		g.damageAll = true
+		g.damage = g.damage[:0]
+		g.damaged = false
+	}
+	g.pendingKept = true
+	g.damageM.Unlock()
+	return true
+}
 
-// SetDamage keeps what the frame being drawn changes, for its Present.
+// SetDamage records what the frame being drawn changes, for its Present. If damage from an
+// earlier frame whose final End has not yet run is still recorded, SetDamage unions the
+// rectangles conservatively; a nil slice marks the whole screen damaged.
 func (s *Surface) SetDamage(rects []image.Rectangle) {
 	g := s.g
 	g.damageM.Lock()
 	defer g.damageM.Unlock()
-	g.damage = append(g.damage[:0], rects...)
-	g.damaged = rects != nil
+	g.pendingKept = false
+	if rects == nil {
+		g.damageAll = true
+		g.damage = g.damage[:0]
+		g.damaged = false
+		return
+	}
+	if g.damageAll {
+		return
+	}
+	if g.damaged {
+		g.damage = append(g.damage, rects...)
+	} else {
+		g.damage = append(g.damage[:0], rects...)
+		g.damaged = true
+	}
 }
 
 // Image is an image of the app's, made on the viewer's side by the replay.
@@ -292,6 +355,11 @@ func (i *Image) Dispose() {
 
 func (i *Image) WritePixels(args []graphicsdriver.PixelsArgs) error {
 	g := i.g
+	total := 1 + 4 + 4
+	for _, a := range args {
+		total += 16 + 7 + len(a.Pixels)
+	}
+	g.e.b = slices.Grow(g.e.b, total)
 	g.e.u8(opWritePixels)
 	g.e.u32(i.id)
 	g.e.u32(uint32(len(args)))
