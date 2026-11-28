@@ -244,7 +244,9 @@ func TestCompactPageNotEarly(t *testing.T) {
 }
 
 func TestConsolidateSparsePages(t *testing.T) {
-	atlas.SetImageSizeForTesting(256, minDestinationImageSizeForTesting, 512)
+	// The maximum size stays as it is: a page remembers the maximum it was made with, and the
+	// pages compaction makes here outlive this test, holding the images that do.
+	atlas.SetImageSizeForTesting(256, minDestinationImageSizeForTesting, maxImageSizeForTesting)
 	defer atlas.ResetImageSizeForTesting()
 
 	for _, format := range []graphicsdriver.PixelFormat{graphicsdriver.PixelFormatRGBA8, graphicsdriver.PixelFormatA8} {
@@ -268,9 +270,15 @@ func TestConsolidateSparsePages(t *testing.T) {
 				}
 				return len(reps)
 			}
-			// Allocate 250x250 images until we span at least 3 distinct pages.
-			for k := 0; k < 400 && pageCount() < 3; k++ {
+			// Three pages of their own, with four 250x250 images on each.
+			const pages, perPage = 3, 4
+			for k := range pages * perPage {
 				img := atlas.NewImageWithFormat(w, h, atlas.ImageTypeRegular, format)
+				if k%perPage == 0 {
+					img.AllocateOnNewSourcePageForTesting()
+				} else {
+					img.AllocateOnBackendOfForTesting(imgs[k-k%perPage])
+				}
 				pix := make([]byte, bpp*w*h)
 				for i := range pix {
 					pix[i] = compactTestPixel(k, i)
@@ -292,9 +300,9 @@ func TestConsolidateSparsePages(t *testing.T) {
 			}
 			beforeMem := atlas.TotalGPUImageMemoryUsageInBytes()
 
-			// Free most images across all pages so surviving images fit onto fewer pages.
+			// Free all but one image of each page, so the images left fit on fewer pages.
 			for k, img := range imgs {
-				if k%8 != 0 {
+				if k%perPage != 0 {
 					img.Deallocate()
 					imgs[k] = nil
 				}
