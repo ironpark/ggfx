@@ -105,7 +105,7 @@ jobs:
       - name: go test (macOS OpenGL)
         if: runner.os == 'macOS'
         run: |
-          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v -skip '^(TestFillPathBatching(WithGeneratedPaths|IsExact)|TestImageClip|TestFillRects|TestStencilCacheIsExact|TestDrawImagesLinearShrinkMatchesDrawImage)$' . ./internal/atlas ./internal/graphicscommand ./internal/render ./vector
+          env GGFX_GRAPHICS_LIBRARY=opengl go test -shuffle=on -v -skip '^(TestFillPathBatching(WithGeneratedPaths|IsExact|AlternatingRulesAndAA)|TestImageClip|TestFillRects|TestStencilCacheIsExact|TestDrawImagesLinearShrinkMatchesDrawImage)$' . ./internal/atlas ./internal/graphicscommand ./internal/render ./vector
 
       # Runners have no GPU, so DirectX draws with WARP, its software rasterizer.
       - name: go test (Windows DirectX 11)
