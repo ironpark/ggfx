@@ -224,6 +224,20 @@ func (p *Page) Alloc(width, height int) *Node {
 	return p.extendAndAlloc(width, height)
 }
 
+// AllocNoExtend allocates a width x height region within the page's current size without
+// extending the page, returning nil if it does not fit.
+func (p *Page) AllocNoExtend(width, height int) *Node {
+	if width <= 0 || height <= 0 {
+		panic("packing: width and height must > 0")
+	}
+	if p.root == nil {
+		w, h := p.allocatableSize()
+		in := p.inset()
+		p.root = newLeaf(image.Rect(in, in, w, h), nil)
+	}
+	return alloc(p.root, width, height)
+}
+
 func (p *Page) Free(node *Node) {
 	p.free(node).updateFreeUp()
 }

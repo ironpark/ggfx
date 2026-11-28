@@ -139,6 +139,10 @@ type backend struct {
 
 	// lowSince is the frame since which the page has been mostly empty, or 0 (see compactPages).
 	lowSince int64
+
+	// sparseSince is the frame since which the page has been under half full among multiple pages
+	// of the same kind, or 0 (see consolidatePages).
+	sparseSince int64
 }
 
 func (b *backend) tryAlloc(width, height int) (*packing.Node, bool) {

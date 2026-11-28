@@ -242,3 +242,77 @@ func TestCompactPageNotEarly(t *testing.T) {
 	}
 	checkCompactTestImage(t, imgs[1], format, 1, w, h)
 }
+
+func TestConsolidateSparsePages(t *testing.T) {
+	atlas.SetImageSizeForTesting(256, minDestinationImageSizeForTesting, 512)
+	defer atlas.ResetImageSizeForTesting()
+
+	for _, format := range []graphicsdriver.PixelFormat{graphicsdriver.PixelFormatRGBA8, graphicsdriver.PixelFormatA8} {
+		t.Run(format.String(), func(t *testing.T) {
+			const w, h = 250, 250
+			bpp := format.BytesPerPixel()
+			var imgs []*atlas.Image
+			pageCount := func() int {
+				var reps []*atlas.Image
+			next:
+				for _, img := range imgs {
+					if img == nil {
+						continue
+					}
+					for _, r := range reps {
+						if img.SharesBackendForTesting(r) {
+							continue next
+						}
+					}
+					reps = append(reps, img)
+				}
+				return len(reps)
+			}
+			// Allocate 250x250 images until we span at least 3 distinct pages.
+			for k := 0; k < 400 && pageCount() < 3; k++ {
+				img := atlas.NewImageWithFormat(w, h, atlas.ImageTypeRegular, format)
+				pix := make([]byte, bpp*w*h)
+				for i := range pix {
+					pix[i] = compactTestPixel(k, i)
+				}
+				img.WritePixels(pix, image.Rect(0, 0, w, h))
+				imgs = append(imgs, img)
+			}
+			defer func() {
+				for _, img := range imgs {
+					if img != nil {
+						img.Deallocate()
+					}
+				}
+			}()
+
+			beforePages := pageCount()
+			if beforePages < 3 {
+				t.Fatalf("expected at least 3 pages before consolidation, got %d", beforePages)
+			}
+			beforeMem := atlas.TotalGPUImageMemoryUsageInBytes()
+
+			// Free most images across all pages so surviving images fit onto fewer pages.
+			for k, img := range imgs {
+				if k%8 != 0 {
+					img.Deallocate()
+					imgs[k] = nil
+				}
+			}
+
+			compactAfterWindow()
+
+			if after := pageCount(); after >= beforePages {
+				t.Fatalf("expected sparse pages to consolidate: before=%d after=%d", beforePages, after)
+			}
+			if afterMem := atlas.TotalGPUImageMemoryUsageInBytes(); afterMem >= beforeMem {
+				t.Fatalf("GPU memory did not drop: before=%d after=%d", beforeMem, afterMem)
+			}
+			for k, img := range imgs {
+				if img != nil {
+					checkCompactTestImage(t, img, format, k, w, h)
+				}
+			}
+		})
+	}
+}
