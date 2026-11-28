@@ -8,6 +8,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # gofmt and go vet read the source and run nothing, so one runner checks every platform's files.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "$files"
+            exit 1
+          fi
+
+      # The DirectX bindings pass COM pointers through uintptr to syscalls, which unsafeptr flags.
+      - name: go vet
+        run: |
+          env GOOS=linux GOARCH=amd64 go vet ./...
+          env GOOS=darwin GOARCH=arm64 go vet ./...
+          env GOOS=windows GOARCH=amd64 go vet -unsafeptr=false ./...
+
   test:
     strategy:
       fail-fast: false
@@ -37,26 +68,6 @@ jobs:
         uses: mlugg/setup-zig@v2
         with:
           version: 0.17.1
-
-      - name: gofmt
-        if: runner.os == 'Linux'
-        run: |
-          files=$(gofmt -l .)
-          if [ -n "$files" ]; then
-            echo "$files"
-            exit 1
-          fi
-
-      - name: go vet
-        if: runner.os != 'Windows'
-        run: |
-          go vet ./...
-
-      # The DirectX bindings pass COM pointers through uintptr to syscalls, which unsafeptr flags.
-      - name: go vet (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          go vet -unsafeptr=false ./...
 
       - name: go build
         run: |
