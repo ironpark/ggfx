@@ -13,8 +13,7 @@
 // limitations under the License.
 
 // Package ggfx is a renderer: images, shaders and vectors through vector, drawn on the GPU and
-// presented on surfaces that a window system owns. Package svg rasterizes SVG documents on the
-// CPU, into an image.RGBA.
+// presented on surfaces that a window system owns.
 //
 // ggfx has no windows. A window system drives it through package host: it initializes the
 // renderer, makes a surface of each window's native view, and draws a frame to the surface's
